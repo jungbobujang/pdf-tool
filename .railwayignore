@@ -1,0 +1,5 @@
+# railway up 으로 올릴 때 뺄 것. (.gitignore보다 우선한다)
+node_modules
+.git
+# 배포 버전 기록은 git에는 없지만 서버에는 올라가야 한다.
+!build-info.json

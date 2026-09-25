@@ -82,6 +82,7 @@ public/app.js        화면 동작
 test/verify.mjs      로직 검증
 test/ui-check.mjs    브라우저 점검 (+ --screens 로 스크린샷)
 docs/screens/        스크린샷
+scripts/write-build-info.mjs  배포 직전 커밋·시각 기록 (npm run deploy)
 ```
 
 사용한 라이브러리(버전 고정):
@@ -94,11 +95,28 @@ docs/screens/        스크린샷
 
 ## 배포 (Railway)
 
-`npm start`(= `node server.js`)로 실행되고 Railway가 주는 `PORT` 환경변수를 씁니다. 따로 설정할 것은 없습니다.
+`npm start`(= `node server.js`)로 실행되고 Railway가 주는 `PORT` 환경변수를 씁니다.
+
+### 배포: `npm run deploy` (Railway CLI 로그인 필요)
+
+```bash
+npm i -g @railway/cli   # 처음 한 번
+railway login           # 처음 한 번
+railway link            # 처음 한 번: 프로젝트와 서비스(pdf-tool) 고르기
+npm run deploy          # build-info.json을 만들고 railway up --detach
+```
+
+- `scripts/write-build-info.mjs`가 현재 커밋 7자리와 시각을 `build-info.json`에 적습니다.
+- 이 파일은 git에는 올리지 않고(`.gitignore`), `.railwayignore`의 `!build-info.json`으로 `railway up`에는 포함됩니다.
+- GitHub `main`에 push하면 Railway가 자동으로도 배포합니다(서비스의 배포 트리거: `main`).
 
 ### 지금 떠 있는 버전 확인
 
-- `GET /version` → `{"commit":"9ccb3f1","builtAt":"…"}`. commit은 Railway가 넣어 주는 `RAILWAY_GIT_COMMIT_SHA`, 없으면 로컬 `git rev-parse`.
-- 화면에도 처음 화면 오른쪽 아래와 사이드바 맨 아래에 `v 커밋` 이 작게 보입니다.
+- `GET /version` → `{"commit":"b272c47","builtAt":"…","source":"build-info"}`
+- commit은 아래 순서로 찾습니다.
+  1. GitHub 자동 배포: `RAILWAY_GIT_COMMIT_SHA`
+  2. `npm run deploy`: `build-info.json`
+  3. 로컬 실행: `git rev-parse`
+- 화면에도 처음 화면 오른쪽 아래와 사이드바 맨 아래에 `v 커밋`이 작게 보입니다.
 - HTML은 `Cache-Control: no-cache`로 보내고, `app.js` · `style.css` · `pdf-core.js`는 `?v=커밋`을 붙여 부릅니다. 새 커밋이 배포되면 주소가 바뀌어 옛 파일이 캐시에 남지 않습니다.
-- 화면의 커밋이 GitHub 최신 커밋과 다르면 Railway가 새 커밋을 배포하지 않은 것입니다. Railway 서비스 설정 › Source에서 저장소 · 브랜치(main) 연결과 자동 배포가 켜져 있는지 확인하세요.
+- 화면의 커밋이 GitHub 최신 커밋과 다르면 새 커밋이 배포되지 않은 것입니다. `npm run deploy`로 직접 배포하거나, Railway 서비스 설정 › Source에서 저장소 · 브랜치 연결과 자동 배포가 켜져 있는지 확인하세요.

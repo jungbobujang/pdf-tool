@@ -9,7 +9,8 @@
     "start": "node server.js",
     "verify": "node test/verify.mjs",
     "test:ui": "node test/ui-check.mjs",
-    "screens": "node test/ui-check.mjs --screens"
+    "screens": "node test/ui-check.mjs --screens",
+    "deploy": "node scripts/write-build-info.mjs && railway up --detach"
   },
   "engines": {
     "node": ">=18"

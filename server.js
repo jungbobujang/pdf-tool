@@ -12,18 +12,32 @@ const PORT = process.env.PORT || 3000;
 const nm = (...p) => path.join(__dirname, 'node_modules', ...p);
 const PUBLIC = path.join(__dirname, 'public');
 
-// 지금 돌고 있는 코드의 커밋. Railway는 RAILWAY_GIT_COMMIT_SHA를 넣어 준다.
-function currentCommit() {
-  const env = process.env.RAILWAY_GIT_COMMIT_SHA || process.env.SOURCE_COMMIT || process.env.GIT_COMMIT;
-  if (env) return env.slice(0, 7);
+// 지금 돌고 있는 코드의 커밋을 찾는다.
+// 1) GitHub 연동 배포: Railway가 넣어 주는 RAILWAY_GIT_COMMIT_SHA
+// 2) `npm run deploy`(railway up) 배포: 배포 직전에 만든 build-info.json
+// 3) 로컬 실행: git rev-parse
+function readBuildInfo() {
   try {
-    return execSync('git rev-parse --short=7 HEAD', { cwd: __dirname, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+    return JSON.parse(fs.readFileSync(path.join(__dirname, 'build-info.json'), 'utf8'));
   } catch {
-    return 'dev';
+    return null;
   }
 }
-const COMMIT = currentCommit();
-const BUILT_AT = new Date().toISOString();
+function currentVersion() {
+  const startedAt = new Date().toISOString();
+  const env = process.env.RAILWAY_GIT_COMMIT_SHA;
+  if (env) return { commit: env.slice(0, 7), builtAt: startedAt, source: 'railway-git' };
+  const info = readBuildInfo();
+  if (info && info.commit) return { commit: String(info.commit).slice(0, 7), builtAt: info.builtAt || startedAt, source: 'build-info' };
+  try {
+    const commit = execSync('git rev-parse --short=7 HEAD', { cwd: __dirname, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+    return { commit, builtAt: startedAt, source: 'git' };
+  } catch {
+    return { commit: 'dev', builtAt: startedAt, source: 'none' };
+  }
+}
+const VERSION = currentVersion();
+const COMMIT = VERSION.commit;
 
 // index.html의 app.js · style.css · pdf-core.js 주소에 ?v=커밋 을 붙인다.
 // 커밋이 바뀌면 주소가 바뀌므로 브라우저나 중간 캐시에 옛 파일이 남지 않는다.
@@ -92,7 +106,7 @@ app.get('/vendor/:file', (req, res) => {
 // 배포된 버전 확인용
 app.get('/version', (req, res) => {
   res.set('Cache-Control', 'no-store');
-  res.json({ commit: COMMIT, builtAt: BUILT_AT });
+  res.json(VERSION);
 });
 
 // HTML은 항상 서버에 새로 확인한다.
