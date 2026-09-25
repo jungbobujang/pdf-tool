@@ -1872,5 +1872,17 @@
   })();
 
   // 검증용으로 상태를 살짝 드러낸다(개인 정보 없음).
+  // 배포된 커밋을 화면 구석에 작게 보여 준다(옛 버전이 떠 있는지 바로 알 수 있게).
+  fetch('/version', { cache: 'no-store' })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((v) => {
+      if (!v || !v.commit) return;
+      document.querySelectorAll('.app-version').forEach((el) => {
+        el.textContent = `v ${v.commit}`;
+        el.title = `배포 시각 ${new Date(v.builtAt).toLocaleString('ko-KR')}`;
+      });
+    })
+    .catch(() => { /* 버전 표시는 없어도 쓰는 데 지장 없다 */ });
+
   window.__pdfWorkshop = { version: 2, ready: true };
 })();

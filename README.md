@@ -95,3 +95,10 @@ docs/screens/        스크린샷
 ## 배포 (Railway)
 
 `npm start`(= `node server.js`)로 실행되고 Railway가 주는 `PORT` 환경변수를 씁니다. 따로 설정할 것은 없습니다.
+
+### 지금 떠 있는 버전 확인
+
+- `GET /version` → `{"commit":"9ccb3f1","builtAt":"…"}`. commit은 Railway가 넣어 주는 `RAILWAY_GIT_COMMIT_SHA`, 없으면 로컬 `git rev-parse`.
+- 화면에도 처음 화면 오른쪽 아래와 사이드바 맨 아래에 `v 커밋` 이 작게 보입니다.
+- HTML은 `Cache-Control: no-cache`로 보내고, `app.js` · `style.css` · `pdf-core.js`는 `?v=커밋`을 붙여 부릅니다. 새 커밋이 배포되면 주소가 바뀌어 옛 파일이 캐시에 남지 않습니다.
+- 화면의 커밋이 GitHub 최신 커밋과 다르면 Railway가 새 커밋을 배포하지 않은 것입니다. Railway 서비스 설정 › Source에서 저장소 · 브랜치(main) 연결과 자동 배포가 켜져 있는지 확인하세요.

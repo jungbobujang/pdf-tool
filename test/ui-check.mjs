@@ -139,6 +139,28 @@ try {
     home.cards.map((c) => `${c.t}(${c.w}×${c.h})`).join(', '));
   check('Pretendard 글꼴 적용', home.font, home.font ? '"Pretendard Variable" 로드됨' : '대체 글꼴 사용 중');
 
+  // 배포 버전 표시
+  const ver = await (await fetch(`${BASE}/version`)).json();
+  check('/version 응답에 commit이 있다', typeof ver.commit === 'string' && /^([0-9a-f]{7}|dev)$/.test(ver.commit) && !Number.isNaN(Date.parse(ver.builtAt)),
+    JSON.stringify(ver));
+  await until(page, () => document.getElementById('home-version').textContent.length > 0);
+  const homeVer = await page.evaluate(() => {
+    const el = document.getElementById('home-version');
+    const r = el.getBoundingClientRect();
+    return { text: el.textContent, w: r.width, h: r.height, right: Math.round(r.right), mainRight: Math.round(document.querySelector('.home-main').getBoundingClientRect().right) };
+  });
+  await page.click('.tool-card[data-open="edit"]');
+  const sideVer = await page.evaluate(() => {
+    const el = document.getElementById('side-version');
+    const r = el.getBoundingClientRect();
+    return { text: el.textContent, visible: r.width > 0 && r.height > 0 && r.bottom <= innerHeight };
+  });
+  await page.click('#logo');
+  const html = await (await fetch(`${BASE}/`)).text();
+  const busted = ['style.css', 'pdf-core.js', 'app.js'].every((a) => html.includes(`${a}?v=${ver.commit}`));
+  check('화면에 v 표시가 보인다 (+ 파일 주소에 ?v=커밋)', homeVer.text === `v ${ver.commit}` && homeVer.w > 0 && homeVer.h > 0 && sideVer.text === `v ${ver.commit}` && sideVer.visible && busted,
+    `처음 화면 "${homeVer.text}", 사이드바 "${sideVer.text}", ?v=${ver.commit} ${busted ? '적용' : '없음'}`);
+
   // ── 2. 카드 → 작업 화면, 로고 → 처음 화면 ──
   const tools = ['edit', 'img2pdf', 'pdf2img', 'lock', 'number'];
   const nav = [];
