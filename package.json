@@ -1,0 +1,22 @@
+{
+  "name": "pdf-tool",
+  "version": "1.0.0",
+  "description": "PDF 작업실 - 브라우저 안에서만 PDF를 처리하는 웹앱",
+  "private": true,
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "verify": "node test/verify.mjs",
+    "test:ui": "node test/ui-check.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@cantoo/pdf-lib": "2.11.1",
+    "express": "4.21.2",
+    "jszip": "3.10.1",
+    "pdfjs-dist": "3.11.174"
+  }
+}
