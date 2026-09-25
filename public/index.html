@@ -2,237 +2,408 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light dark">
   <title>PDF 작업실</title>
-  <meta name="description" content="PDF 편집, 합치기, 자르기, 이미지 변환, 암호, 쪽번호를 브라우저 안에서만 처리합니다.">
+  <meta name="description" content="PDF 합치기, 자르기, 회전, 사진 변환, 암호, 쪽번호를 파일을 올리지 않고 브라우저 안에서 처리합니다.">
+  <link rel="stylesheet" href="/vendor/pretendard/pretendardvariable.min.css">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header class="topbar">
-    <a href="./" class="logo" id="logo" title="처음 화면으로">
-      <span class="logo-mark" aria-hidden="true">P</span>PDF 작업실
-    </a>
-    <p class="privacy"><span class="dot" aria-hidden="true"></span>파일은 이 컴퓨터 밖으로 나가지 않아요</p>
-  </header>
+  <!-- 선 아이콘 모음 -->
+  <svg class="sprite" aria-hidden="true" focusable="false">
+    <defs>
+      <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3 2.5 8 12 13l9.5-5L12 3Z"/><path d="m2.5 12.5 9.5 5 9.5-5"/><path d="m2.5 17 9.5 5 9.5-5"/></symbol>
+      <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="8.5" cy="9.5" r="1.8"/><path d="m21 16-5-5-8.5 9"/></symbol>
+      <symbol id="i-filecheck" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z"/><path d="M14 3v5h5"/><path d="m9 14.5 2 2 4-4"/></symbol>
+      <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4.5" y="10.5" width="15" height="10.5" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/><path d="M12 15v2"/></symbol>
+      <symbol id="i-hash" viewBox="0 0 24 24"><path d="M5 9h15M4 15h15M10 3 8 21M16 3l-2 18"/></symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 4.5 6v5.5c0 4.5 3.2 8.2 7.5 9.5 4.3-1.3 7.5-5 7.5-9.5V6L12 3Z"/><path d="m9 12 2.2 2.2L15.5 10"/></symbol>
+      <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4"/><path d="m6.5 9.5 5.5-5.5 5.5 5.5"/><path d="M4 16v2.5A2.5 2.5 0 0 0 6.5 21h11a2.5 2.5 0 0 0 2.5-2.5V16"/></symbol>
+      <symbol id="i-rotate" viewBox="0 0 24 24"><path d="M20 11.5A8 8 0 1 1 17.7 6"/><path d="M20 4v5h-5"/></symbol>
+      <symbol id="i-swap" viewBox="0 0 24 24"><path d="M4 8h15"/><path d="m15 4 4 4-4 4"/><path d="M20 16H5"/><path d="m9 12-4 4 4 4"/></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+      <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    </defs>
+  </svg>
 
   <div id="toasts" class="toasts" aria-live="assertive"></div>
 
-  <nav class="tabs" role="tablist" aria-label="작업 종류">
-    <button class="tab" role="tab" id="tab-edit" aria-controls="panel-edit" aria-selected="true" data-tab="edit">편집 · 합치기 · 자르기</button>
-    <button class="tab" role="tab" id="tab-img2pdf" aria-controls="panel-img2pdf" aria-selected="false" data-tab="img2pdf" tabindex="-1">이미지 → PDF</button>
-    <button class="tab" role="tab" id="tab-pdf2img" aria-controls="panel-pdf2img" aria-selected="false" data-tab="pdf2img" tabindex="-1">PDF → 이미지</button>
-    <button class="tab" role="tab" id="tab-lock" aria-controls="panel-lock" aria-selected="false" data-tab="lock" tabindex="-1">암호</button>
-    <button class="tab" role="tab" id="tab-number" aria-controls="panel-number" aria-selected="false" data-tab="number" tabindex="-1">쪽번호</button>
-  </nav>
+  <!-- ① 처음 화면 -->
+  <div class="view view-home" id="view-home">
+    <header class="hero">
+      <div class="hero-bar">
+        <a href="./" class="logo" id="logo-home" title="처음 화면으로"><span class="logo-mark" aria-hidden="true"></span>PDF 작업실</a>
+        <p class="safe"><span class="safe-dot" aria-hidden="true"></span>파일은 이 컴퓨터 밖으로 나가지 않아요</p>
+      </div>
+      <div class="hero-text">
+        <h1 class="hero-title" id="home-title">PDF, <em>올리지 않고</em> 바로 고치세요</h1>
+        <p class="hero-sub">합치기 · 자르기 · 회전 · 사진 변환 · 암호 · 쪽번호를 브라우저 안에서 끝내요.</p>
+      </div>
+    </header>
 
-  <main>
-    <!-- 탭1: 편집 · 합치기 · 자르기 -->
-    <section class="panel" id="panel-edit" role="tabpanel" aria-labelledby="tab-edit">
-      <label class="drop" id="edit-drop">
+    <main class="home-main">
+      <input type="file" id="home-input" accept="application/pdf,.pdf,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" multiple hidden>
+      <div class="home-drop" id="home-drop">
+        <span class="home-drop-icon" aria-hidden="true"><svg class="ic"><use href="#i-upload"/></svg></span>
+        <div class="home-drop-text">
+          <strong>PDF나 사진을 여기로 끌어다 놓으세요</strong>
+          <span>PDF를 넣으면 편집 화면이, 사진을 넣으면 사진 → PDF 화면이 열려요. 잠긴 PDF면 암호 칸이 먼저 나와요.</span>
+        </div>
+        <label class="btn primary lg" for="home-input">파일 고르기</label>
+      </div>
+
+      <h2 class="sr-only">도구</h2>
+      <div class="tool-cards" id="tool-cards">
+        <button type="button" class="tool-card" data-open="edit" style="--tc: var(--c1)">
+          <span class="tool-icon"><svg class="ic"><use href="#i-layers"/></svg></span>
+          <strong>편집 · 합치기</strong>
+          <span class="tool-desc">여러 PDF를 펼쳐 순서 바꾸기, 쪽 빼기, 교체</span>
+          <span class="tool-open">열기 →</span>
+        </button>
+        <button type="button" class="tool-card" data-open="img2pdf" style="--tc: var(--c2)">
+          <span class="tool-icon"><svg class="ic"><use href="#i-image"/></svg></span>
+          <strong>사진 → PDF</strong>
+          <span class="tool-desc">휴대폰 사진, 스캔한 활동지를 한 파일로</span>
+          <span class="tool-open">열기 →</span>
+        </button>
+        <button type="button" class="tool-card" data-open="pdf2img" style="--tc: var(--c3)">
+          <span class="tool-icon"><svg class="ic"><use href="#i-filecheck"/></svg></span>
+          <strong>PDF → 사진</strong>
+          <span class="tool-desc">원하는 쪽만 PNG로 꺼내 PPT에 붙이기</span>
+          <span class="tool-open">열기 →</span>
+        </button>
+        <button type="button" class="tool-card" data-open="lock" style="--tc: var(--c4)">
+          <span class="tool-icon"><svg class="ic"><use href="#i-lock"/></svg></span>
+          <strong>암호</strong>
+          <span class="tool-desc">AES-256으로 걸고, 아는 비밀번호로 풀기</span>
+          <span class="tool-open">열기 →</span>
+        </button>
+        <button type="button" class="tool-card" data-open="number" style="--tc: var(--c5)">
+          <span class="tool-icon"><svg class="ic"><use href="#i-hash"/></svg></span>
+          <strong>쪽번호</strong>
+          <span class="tool-desc">합친 자료집에 번호 한 번에 넣기</span>
+          <span class="tool-open">열기 →</span>
+        </button>
+      </div>
+    </main>
+  </div>
+
+  <!-- ② 작업 화면 -->
+  <div class="view view-work" id="view-work" hidden>
+    <aside class="sidebar">
+      <div class="side-head">
+        <a href="./" class="logo" id="logo" title="처음 화면으로"><span class="logo-mark" aria-hidden="true"></span>PDF 작업실</a>
+        <p class="side-hint">← 로고를 누르면 처음 화면</p>
+      </div>
+      <nav class="side-nav" role="tablist" aria-label="도구" aria-orientation="vertical">
+        <button class="tab" role="tab" id="tab-edit" aria-controls="panel-edit" aria-selected="true" data-tab="edit" style="--tc: var(--c1)">
+          <span class="tab-icon"><svg class="ic"><use href="#i-layers"/></svg></span>
+          <span class="tab-text"><span class="tab-name">편집 · 합치기</span><span class="tab-desc">순서 바꾸기 · 빼기 · 교체</span></span>
+        </button>
+        <button class="tab" role="tab" id="tab-img2pdf" aria-controls="panel-img2pdf" aria-selected="false" data-tab="img2pdf" tabindex="-1" style="--tc: var(--c2)">
+          <span class="tab-icon"><svg class="ic"><use href="#i-image"/></svg></span>
+          <span class="tab-text"><span class="tab-name">사진 → PDF</span><span class="tab-desc">사진 여러 장을 한 파일로</span></span>
+        </button>
+        <button class="tab" role="tab" id="tab-pdf2img" aria-controls="panel-pdf2img" aria-selected="false" data-tab="pdf2img" tabindex="-1" style="--tc: var(--c3)">
+          <span class="tab-icon"><svg class="ic"><use href="#i-filecheck"/></svg></span>
+          <span class="tab-text"><span class="tab-name">PDF → 사진</span><span class="tab-desc">원하는 쪽만 PNG로</span></span>
+        </button>
+        <button class="tab" role="tab" id="tab-lock" aria-controls="panel-lock" aria-selected="false" data-tab="lock" tabindex="-1" style="--tc: var(--c4)">
+          <span class="tab-icon"><svg class="ic"><use href="#i-lock"/></svg></span>
+          <span class="tab-text"><span class="tab-name">암호</span><span class="tab-desc">AES-256 걸기 · 풀기</span></span>
+        </button>
+        <button class="tab" role="tab" id="tab-number" aria-controls="panel-number" aria-selected="false" data-tab="number" tabindex="-1" style="--tc: var(--c5)">
+          <span class="tab-icon"><svg class="ic"><use href="#i-hash"/></svg></span>
+          <span class="tab-text"><span class="tab-name">쪽번호</span><span class="tab-desc">번호 한 번에 넣기</span></span>
+        </button>
+      </nav>
+      <p class="side-safe"><svg class="ic" aria-hidden="true"><use href="#i-shield"/></svg>파일은 이 컴퓨터 밖으로 나가지 않아요.</p>
+    </aside>
+
+    <main class="work">
+      <!-- 편집 · 합치기 · 자르기 -->
+      <section class="panel" id="panel-edit" role="tabpanel" aria-labelledby="tab-edit">
+        <header class="tool-head">
+          <h1>편집 · 합치기 · 자르기</h1>
+          <p>여러 PDF를 한 화면에 펼쳐 순서를 바꾸고, 필요 없는 쪽을 빼고, 합쳐서 저장해요.</p>
+        </header>
         <input type="file" id="edit-input" accept="application/pdf,.pdf" multiple hidden>
-        <strong>PDF를 여기에 끌어다 놓거나 눌러서 고르세요</strong>
-        <span>여러 개를 한 번에 넣을 수 있어요. 넣은 순서대로 뒤에 붙어요.</span>
-      </label>
-      <ul class="chips" id="edit-chips" aria-label="추가한 파일"></ul>
-      <p class="hint" id="edit-hint" hidden>카드를 끌어서 순서를 바꾸세요. 카드에 마우스를 올리거나 탭하면 회전·교체·삭제 버튼이 나와요.</p>
-      <div class="grid pages" id="edit-grid" aria-label="쪽 목록"></div>
 
-      <div class="actionbar" id="edit-bar" hidden>
-        <div class="bar-row">
-          <label class="range">
-            <span>범위</span>
-            <input type="text" id="edit-range" placeholder="예: 1-2, 4-7" inputmode="text" autocomplete="off">
-          </label>
-          <button class="btn" id="edit-save-range">범위만 저장</button>
-          <button class="btn" id="edit-split">한 쪽씩 나눠 저장(zip)</button>
-        </div>
-        <div class="bar-row">
-          <div class="seg" role="group" aria-label="빠른 선택">
-            <button class="btn ghost" id="edit-odd">홀수만</button>
-            <button class="btn ghost" id="edit-even">짝수만</button>
-            <button class="btn ghost" id="edit-reverse">역순</button>
+        <div class="empty" id="edit-empty">
+          <div class="drop-card" id="edit-drop">
+            <div class="papers" aria-hidden="true"><i></i><i></i><i></i></div>
+            <strong>PDF를 끌어다 놓으세요</strong>
+            <span>여러 개를 한 번에 넣으면 넣은 순서대로 이어 붙어요.</span>
+            <label class="btn primary" for="edit-input">파일 고르기</label>
           </div>
-          <span class="count" id="edit-count">0쪽 저장 예정</span>
-          <button class="btn primary" id="edit-save">합쳐서 PDF 저장</button>
+          <ol class="steps">
+            <li><b>1</b><strong>PDF 넣기</strong><span>끌어다 놓거나 [파일 고르기]로 여러 개를 넣어요.</span></li>
+            <li><b>2</b><strong>정리하기</strong><span>카드를 끌어 순서를 바꾸고, 회전 · 교체 · 삭제해요.</span></li>
+            <li><b>3</b><strong>저장하기</strong><span>합쳐서, 범위만, 또는 한 쪽씩 나눠 저장해요.</span></li>
+          </ol>
         </div>
-      </div>
-    </section>
 
-    <!-- 탭2: 이미지 → PDF -->
-    <section class="panel" id="panel-img2pdf" role="tabpanel" aria-labelledby="tab-img2pdf" hidden>
-      <label class="drop" id="img-drop">
+        <div class="locks" id="edit-locks"></div>
+        <ul class="chips" id="edit-chips" aria-label="넣은 파일"></ul>
+        <p class="hint" id="edit-hint" hidden>카드를 끌어서 순서를 바꾸세요. 카드에 마우스를 올리거나 탭하면 회전 · 교체 · 삭제 버튼이 나와요.</p>
+        <div class="grid pages" id="edit-grid" aria-label="쪽 목록"></div>
+
+        <div class="savebar" id="edit-bar" hidden>
+          <span class="count" id="edit-count"><b>0</b>쪽 저장 예정</span>
+          <label class="range">
+            <span class="sr-only">범위</span>
+            <input type="text" id="edit-range" placeholder="범위 예: 1-2, 4-7" inputmode="text" autocomplete="off" aria-label="저장할 범위">
+          </label>
+          <button class="btn dark" id="edit-save-range">범위만 저장</button>
+          <button class="btn dark" id="edit-split">나눠 저장</button>
+          <div class="menu-wrap">
+            <button class="btn dark" id="edit-more" aria-haspopup="true" aria-expanded="false" aria-controls="edit-menu">홀수·짝수·역순<svg class="ic sm" aria-hidden="true"><use href="#i-chevron"/></svg></button>
+            <div class="menu" id="edit-menu" role="menu" hidden>
+              <button role="menuitem" id="edit-odd">홀수만 남기기</button>
+              <button role="menuitem" id="edit-even">짝수만 남기기</button>
+              <button role="menuitem" id="edit-reverse">순서 뒤집기</button>
+            </div>
+          </div>
+          <button class="btn primary" id="edit-save">합쳐서 저장</button>
+        </div>
+      </section>
+
+      <!-- 사진 → PDF -->
+      <section class="panel" id="panel-img2pdf" role="tabpanel" aria-labelledby="tab-img2pdf" hidden>
+        <header class="tool-head">
+          <h1>사진 → PDF</h1>
+          <p>휴대폰 사진이나 스캔한 활동지를 순서대로 한 PDF로 묶어요.</p>
+        </header>
         <input type="file" id="img-input" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" multiple hidden>
-        <strong>사진을 끌어다 놓거나 눌러서 고르세요</strong>
-        <span>JPG, PNG, WEBP · 휴대폰 사진의 방향도 맞춰 드려요</span>
-      </label>
-      <div class="options" id="img-options">
-        <fieldset>
-          <legend>용지</legend>
-          <label><input type="radio" name="img-paper" value="a4p" checked> A4 세로</label>
-          <label><input type="radio" name="img-paper" value="a4l"> A4 가로</label>
-          <label><input type="radio" name="img-paper" value="fit"> 이미지 원본 크기</label>
-        </fieldset>
-        <fieldset>
-          <legend>여백</legend>
-          <label><input type="radio" name="img-margin" value="0" checked> 없음</label>
-          <label><input type="radio" name="img-margin" value="28"> 좁게</label>
-          <label><input type="radio" name="img-margin" value="56"> 보통</label>
-        </fieldset>
-      </div>
-      <p class="hint" id="img-hint" hidden>사진을 끌어서 순서를 바꾸세요.</p>
-      <div class="grid images" id="img-grid" aria-label="사진 목록"></div>
-      <div class="actionbar" id="img-bar" hidden>
-        <div class="bar-row">
+
+        <div class="empty" id="img-empty">
+          <div class="drop-card" id="img-drop">
+            <div class="papers" aria-hidden="true"><i></i><i></i><i></i></div>
+            <strong>사진을 끌어다 놓으세요</strong>
+            <span>JPG · PNG · WEBP. 휴대폰 사진은 방향도 맞춰 드려요.</span>
+            <label class="btn primary" for="img-input">파일 고르기</label>
+          </div>
+          <ol class="steps">
+            <li><b>1</b><strong>사진 넣기</strong><span>여러 장을 한 번에 넣을 수 있어요.</span></li>
+            <li><b>2</b><strong>순서 · 용지 고르기</strong><span>사진을 끌어 순서를 바꾸고 용지와 여백을 골라요.</span></li>
+            <li><b>3</b><strong>PDF로 저장</strong><span>사진 한 장이 한 쪽이 돼요.</span></li>
+          </ol>
+        </div>
+
+        <div class="options" id="img-options">
+          <fieldset class="seg">
+            <legend>용지</legend>
+            <label><input type="radio" name="img-paper" value="a4p" checked><span>A4 세로</span></label>
+            <label><input type="radio" name="img-paper" value="a4l"><span>A4 가로</span></label>
+            <label><input type="radio" name="img-paper" value="fit"><span>이미지 원본 크기</span></label>
+          </fieldset>
+          <fieldset class="seg">
+            <legend>여백</legend>
+            <label><input type="radio" name="img-margin" value="0" checked><span>없음</span></label>
+            <label><input type="radio" name="img-margin" value="28"><span>좁게</span></label>
+            <label><input type="radio" name="img-margin" value="56"><span>보통</span></label>
+          </fieldset>
+        </div>
+        <p class="hint" id="img-hint" hidden>사진을 끌어서 순서를 바꾸세요.</p>
+        <div class="grid images" id="img-grid" aria-label="사진 목록"></div>
+        <div class="savebar" id="img-bar" hidden>
           <span class="count" id="img-count">0장</span>
-          <button class="btn ghost" id="img-clear">모두 비우기</button>
+          <label class="btn dark" for="img-input"><svg class="ic sm" aria-hidden="true"><use href="#i-plus"/></svg>사진 더 넣기</label>
+          <button class="btn dark" id="img-clear">모두 비우기</button>
           <button class="btn primary" id="img-save">PDF로 저장</button>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <!-- 탭3: PDF → 이미지 -->
-    <section class="panel" id="panel-pdf2img" role="tabpanel" aria-labelledby="tab-pdf2img" hidden>
-      <label class="drop" id="p2i-drop">
+      <!-- PDF → 사진 -->
+      <section class="panel" id="panel-pdf2img" role="tabpanel" aria-labelledby="tab-pdf2img" hidden>
+        <header class="tool-head">
+          <h1>PDF → 사진</h1>
+          <p>원하는 쪽만 골라 PNG로 저장해요. PPT나 문서에 바로 붙일 수 있어요.</p>
+        </header>
         <input type="file" id="p2i-input" accept="application/pdf,.pdf" hidden>
-        <strong>PDF 하나를 끌어다 놓거나 눌러서 고르세요</strong>
-        <span>고른 쪽만 PNG로 저장해요. 여러 장이면 zip으로 묶어요.</span>
-      </label>
-      <div class="unlock-inline" id="p2i-unlock" hidden></div>
-      <div class="options" id="p2i-options" hidden>
-        <fieldset>
-          <legend>해상도</legend>
-          <label><input type="radio" name="p2i-dpi" value="150" checked> 보통 (150dpi)</label>
-          <label><input type="radio" name="p2i-dpi" value="300"> 선명 (300dpi)</label>
-        </fieldset>
-        <div class="seg">
-          <button class="btn ghost" id="p2i-all">모두 고르기</button>
-          <button class="btn ghost" id="p2i-none">모두 해제</button>
+
+        <div class="empty" id="p2i-empty">
+          <div class="drop-card" id="p2i-drop">
+            <div class="papers" aria-hidden="true"><i></i><i></i><i></i></div>
+            <strong>PDF 하나를 끌어다 놓으세요</strong>
+            <span>쪽마다 미리보기가 나오면 필요한 쪽만 고르면 돼요.</span>
+            <label class="btn primary" for="p2i-input">파일 고르기</label>
+          </div>
+          <ol class="steps">
+            <li><b>1</b><strong>PDF 넣기</strong><span>한 번에 한 파일씩 열어요.</span></li>
+            <li><b>2</b><strong>쪽 고르기</strong><span>카드를 눌러 저장할 쪽만 남겨요.</span></li>
+            <li><b>3</b><strong>PNG로 저장</strong><span>여러 장이면 zip으로 묶어 드려요.</span></li>
+          </ol>
         </div>
-      </div>
-      <div class="grid pages" id="p2i-grid" aria-label="쪽 목록"></div>
-      <div class="actionbar" id="p2i-bar" hidden>
-        <div class="bar-row">
+        <div class="filebar" id="p2i-file" hidden>
+          <span class="filebar-name" id="p2i-name"></span>
+          <label class="btn" for="p2i-input">다른 PDF 고르기</label>
+        </div>
+
+        <div class="notice" id="p2i-unlock" hidden></div>
+        <div class="options" id="p2i-options" hidden>
+          <fieldset class="seg">
+            <legend>해상도</legend>
+            <label><input type="radio" name="p2i-dpi" value="150" checked><span>보통 150dpi</span></label>
+            <label><input type="radio" name="p2i-dpi" value="300"><span>선명 300dpi</span></label>
+          </fieldset>
+          <div class="seg-actions">
+            <button class="btn" id="p2i-all">모두 고르기</button>
+            <button class="btn" id="p2i-none">모두 해제</button>
+          </div>
+        </div>
+        <div class="grid pages" id="p2i-grid" aria-label="쪽 목록"></div>
+        <div class="savebar" id="p2i-bar" hidden>
           <span class="count" id="p2i-count">0쪽 선택</span>
           <button class="btn primary" id="p2i-save">PNG로 저장</button>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <!-- 탭4: 암호 -->
-    <section class="panel" id="panel-lock" role="tabpanel" aria-labelledby="tab-lock" hidden>
-      <div class="two-col">
-        <form class="card" id="unlock-form" novalidate>
-          <h2>암호 풀기</h2>
-          <p class="sub">열기 암호를 알고 있는 PDF에서 암호를 없애요.</p>
-          <label class="drop small" id="unlock-drop">
+      <!-- 암호 -->
+      <section class="panel" id="panel-lock" role="tabpanel" aria-labelledby="tab-lock" hidden>
+        <header class="tool-head">
+          <h1>암호</h1>
+          <p>AES-256으로 암호를 걸거나, 알고 있는 비밀번호로 풀어요.</p>
+        </header>
+        <div class="two-col">
+          <form class="card lock-card" id="unlock-form" novalidate>
+            <span class="card-icon" aria-hidden="true"><svg class="ic"><use href="#i-lock"/></svg></span>
+            <h2>암호 풀기</h2>
+            <p class="sub">열기 암호를 알고 있는 PDF에서 암호를 없애요.</p>
             <input type="file" id="unlock-input" accept="application/pdf,.pdf" hidden>
-            <strong id="unlock-file">PDF 고르기</strong>
-            <span>끌어다 놓아도 돼요</span>
-          </label>
-          <label class="field">
-            <span>비밀번호</span>
-            <input type="password" id="unlock-pw" autocomplete="off">
-          </label>
-          <p class="form-error" id="unlock-error" role="alert" hidden></p>
-          <div class="btn-row">
-            <button class="btn primary" type="submit" id="unlock-save">풀어서 저장</button>
-            <button class="btn" type="button" id="unlock-send">풀고 편집 탭으로 보내기</button>
-          </div>
-        </form>
-
-        <form class="card" id="lock-form" novalidate>
-          <h2>암호 걸기</h2>
-          <p class="sub">AES-256으로 암호화해요.</p>
-          <label class="drop small" id="lock-drop">
-            <input type="file" id="lock-input" accept="application/pdf,.pdf" hidden>
-            <strong id="lock-file">PDF 고르기</strong>
-            <span>끌어다 놓아도 돼요</span>
-          </label>
-          <div class="unlock-inline" id="lock-unlock" hidden></div>
-          <label class="field">
-            <span>열기 암호</span>
-            <input type="password" id="lock-pw" autocomplete="new-password">
-          </label>
-          <label class="field">
-            <span>권한 암호 <small>(비우면 열기 암호와 같게)</small></span>
-            <input type="password" id="lock-owner" autocomplete="new-password">
-          </label>
-          <p class="sub">권한 암호를 따로 정해야 아래 허용 설정이 지켜져요.</p>
-          <fieldset class="checks">
-            <legend>허용할 것</legend>
-            <label><input type="checkbox" id="perm-print" checked> 인쇄</label>
-            <label><input type="checkbox" id="perm-copy"> 내용 복사</label>
-            <label><input type="checkbox" id="perm-edit"> 편집</label>
-          </fieldset>
-          <p class="form-error" id="lock-error" role="alert" hidden></p>
-          <div class="btn-row">
-            <button class="btn primary" type="submit" id="lock-save">암호 걸어서 저장</button>
-          </div>
-        </form>
-      </div>
-    </section>
-
-    <!-- 탭5: 쪽번호 -->
-    <section class="panel" id="panel-number" role="tabpanel" aria-labelledby="tab-number" hidden>
-      <label class="drop" id="num-drop">
-        <input type="file" id="num-input" accept="application/pdf,.pdf" hidden>
-        <strong>PDF 하나를 끌어다 놓거나 눌러서 고르세요</strong>
-        <span>모든 쪽에 번호를 넣어요</span>
-      </label>
-      <div class="unlock-inline" id="num-unlock" hidden></div>
-      <div class="number-layout" id="num-layout" hidden>
-        <div class="options vertical">
-          <fieldset>
-            <legend>위치</legend>
-            <label><input type="radio" name="num-pos" value="bc" checked> 아래 가운데</label>
-            <label><input type="radio" name="num-pos" value="br"> 아래 오른쪽</label>
-            <label><input type="radio" name="num-pos" value="tr"> 위 오른쪽</label>
-          </fieldset>
-          <fieldset>
-            <legend>형식</legend>
-            <label><input type="radio" name="num-fmt" value="n" checked> 3</label>
-            <label><input type="radio" name="num-fmt" value="dash"> - 3 -</label>
-            <label><input type="radio" name="num-fmt" value="total"> 3 / 12</label>
-          </fieldset>
-          <fieldset>
-            <legend>번호</legend>
-            <label class="field inline"><span>시작 번호</span>
-              <input type="number" id="num-start" value="1" min="0" max="99999" step="1" inputmode="numeric">
+            <label class="drop-mini" id="unlock-drop" for="unlock-input">
+              <svg class="ic" aria-hidden="true"><use href="#i-upload"/></svg>
+              <strong id="unlock-file">PDF 고르기</strong>
+              <span>끌어다 놓아도 돼요</span>
             </label>
-            <label><input type="checkbox" id="num-skip"> 첫 쪽 건너뛰기(표지)</label>
-          </fieldset>
-          <p class="sub" id="num-info"></p>
-          <button class="btn primary" id="num-save">번호 넣어서 저장</button>
+            <label class="field">
+              <span>비밀번호</span>
+              <input type="password" id="unlock-pw" autocomplete="off">
+            </label>
+            <p class="form-error" id="unlock-error" role="alert" hidden></p>
+            <div class="btn-row">
+              <button class="btn primary" type="submit" id="unlock-save">풀어서 저장</button>
+              <button class="btn" type="button" id="unlock-send">풀고 편집으로 보내기</button>
+            </div>
+          </form>
+
+          <form class="card lock-card" id="lock-form" novalidate>
+            <span class="card-icon" aria-hidden="true"><svg class="ic"><use href="#i-shield"/></svg></span>
+            <h2>암호 걸기</h2>
+            <p class="sub">AES-256으로 암호화해요.</p>
+            <input type="file" id="lock-input" accept="application/pdf,.pdf" hidden>
+            <label class="drop-mini" id="lock-drop" for="lock-input">
+              <svg class="ic" aria-hidden="true"><use href="#i-upload"/></svg>
+              <strong id="lock-file">PDF 고르기</strong>
+              <span>끌어다 놓아도 돼요</span>
+            </label>
+            <div class="notice" id="lock-unlock" hidden></div>
+            <label class="field">
+              <span>열기 암호</span>
+              <input type="password" id="lock-pw" autocomplete="new-password">
+            </label>
+            <label class="field">
+              <span>권한 암호 <small>(비우면 열기 암호와 같게)</small></span>
+              <input type="password" id="lock-owner" autocomplete="new-password">
+            </label>
+            <p class="sub">권한 암호를 따로 정해야 아래 허용 설정이 지켜져요.</p>
+            <fieldset class="checks">
+              <legend>허용할 것</legend>
+              <label><input type="checkbox" id="perm-print" checked><span>인쇄</span></label>
+              <label><input type="checkbox" id="perm-copy"><span>내용 복사</span></label>
+              <label><input type="checkbox" id="perm-edit"><span>편집</span></label>
+            </fieldset>
+            <p class="form-error" id="lock-error" role="alert" hidden></p>
+            <div class="btn-row">
+              <button class="btn primary" type="submit" id="lock-save">암호 걸어서 저장</button>
+            </div>
+          </form>
         </div>
-        <figure class="preview">
-          <div class="preview-box" id="num-preview">
-            <canvas id="num-canvas"></canvas>
-            <span class="num-mark" id="num-mark"></span>
+      </section>
+
+      <!-- 쪽번호 -->
+      <section class="panel" id="panel-number" role="tabpanel" aria-labelledby="tab-number" hidden>
+        <header class="tool-head">
+          <h1>쪽번호</h1>
+          <p>합친 자료집의 모든 쪽에 번호를 한 번에 넣어요.</p>
+        </header>
+        <input type="file" id="num-input" accept="application/pdf,.pdf" hidden>
+
+        <div class="empty" id="num-empty">
+          <div class="drop-card" id="num-drop">
+            <div class="papers" aria-hidden="true"><i></i><i></i><i></i></div>
+            <strong>PDF 하나를 끌어다 놓으세요</strong>
+            <span>번호가 어디에 어떻게 들어가는지 미리 보여 드려요.</span>
+            <label class="btn primary" for="num-input">파일 고르기</label>
           </div>
-          <figcaption id="num-caption">첫 쪽 미리보기</figcaption>
-        </figure>
-      </div>
-    </section>
-  </main>
+          <ol class="steps">
+            <li><b>1</b><strong>PDF 넣기</strong><span>한 번에 한 파일씩 넣어요.</span></li>
+            <li><b>2</b><strong>위치 · 형식 고르기</strong><span>표지는 건너뛸 수 있어요.</span></li>
+            <li><b>3</b><strong>번호 넣어 저장</strong><span>쪽 수와 내용은 그대로예요.</span></li>
+          </ol>
+        </div>
+        <div class="filebar" id="num-file" hidden>
+          <span class="filebar-name" id="num-name"></span>
+          <label class="btn" for="num-input">다른 PDF 고르기</label>
+        </div>
+
+        <div class="notice" id="num-unlock" hidden></div>
+        <div class="number-layout" id="num-layout" hidden>
+          <div class="card num-options">
+            <fieldset class="seg">
+              <legend>위치</legend>
+              <label><input type="radio" name="num-pos" value="bc" checked><span>아래 가운데</span></label>
+              <label><input type="radio" name="num-pos" value="br"><span>아래 오른쪽</span></label>
+              <label><input type="radio" name="num-pos" value="tr"><span>위 오른쪽</span></label>
+            </fieldset>
+            <fieldset class="seg">
+              <legend>형식</legend>
+              <label><input type="radio" name="num-fmt" value="n" checked><span>3</span></label>
+              <label><input type="radio" name="num-fmt" value="dash"><span>- 3 -</span></label>
+              <label><input type="radio" name="num-fmt" value="total"><span>3 / 12</span></label>
+            </fieldset>
+            <fieldset class="plain">
+              <legend>번호</legend>
+              <label class="field inline"><span>시작 번호</span>
+                <input type="number" id="num-start" value="1" min="0" max="99999" step="1" inputmode="numeric">
+              </label>
+              <label class="check"><input type="checkbox" id="num-skip"><span>첫 쪽 건너뛰기(표지)</span></label>
+            </fieldset>
+            <p class="sub" id="num-info"></p>
+            <button class="btn primary" id="num-save">번호 넣어서 저장</button>
+          </div>
+          <figure class="preview">
+            <div class="preview-box" id="num-preview">
+              <canvas id="num-canvas"></canvas>
+              <span class="num-mark" id="num-mark"></span>
+            </div>
+            <figcaption id="num-caption">첫 쪽 미리보기</figcaption>
+          </figure>
+        </div>
+      </section>
+    </main>
+  </div>
 
   <!-- 쪽 교체 대화상자 -->
   <dialog id="replace-dialog" class="dialog">
     <form method="dialog" id="replace-form">
       <h2>쪽 교체</h2>
       <p class="sub" id="replace-target"></p>
-      <label class="drop small" id="replace-drop">
-        <input type="file" id="replace-input" accept="application/pdf,.pdf" hidden>
-        <strong id="replace-file">바꿔 넣을 PDF 고르기</strong>
-        <span>이미 넣은 파일도 다시 골라도 돼요</span>
+      <input type="file" id="replace-input" accept="application/pdf,.pdf" hidden>
+      <label class="drop-mini" id="replace-drop" for="replace-input">
+        <svg class="ic" aria-hidden="true"><use href="#i-upload"/></svg>
+        <strong id="replace-file">다른 PDF 고르기</strong>
+        <span>이미 넣은 파일은 위 목록에서 고르면 돼요</span>
       </label>
-      <div class="unlock-inline" id="replace-unlock" hidden></div>
+      <div class="notice" id="replace-unlock" hidden></div>
       <label class="field" id="replace-page-field" hidden>
         <span>몇 쪽으로 바꿀까요?</span>
         <select id="replace-page"></select>
       </label>
       <div class="replace-preview" id="replace-preview"></div>
-      <div class="btn-row">
+      <div class="btn-row end">
         <button class="btn" value="cancel" id="replace-cancel">취소</button>
         <button class="btn primary" value="ok" id="replace-ok" disabled>교체</button>
       </div>

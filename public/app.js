@@ -37,6 +37,18 @@
     return el;
   }
 
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  /** 스프라이트의 선 아이콘 */
+  function icon(name, cls = 'ic') {
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('class', cls);
+    svg.setAttribute('aria-hidden', 'true');
+    const use = document.createElementNS(SVG_NS, 'use');
+    use.setAttribute('href', `#i-${name}`);
+    svg.append(use);
+    return svg;
+  }
+
   const baseName = (name) => String(name || '문서').replace(/\.[^.]+$/, '') || '문서';
   const safeName = (s) => String(s).replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim() || '문서';
   function ymd(d = new Date()) {
@@ -73,7 +85,7 @@
       h('div', { class: 'toast-body' },
         h('div', { class: 'toast-title' }, title),
         fix ? h('div', { class: 'toast-fix' }, fix) : null),
-      h('button', { class: 'toast-x', type: 'button', 'aria-label': '알림 닫기', onclick: () => el.remove() }, '✕'));
+      h('button', { class: 'toast-x', type: 'button', 'aria-label': '알림 닫기', onclick: () => el.remove() }, icon('x')));
     toastBox.prepend(el);
     while (toastBox.children.length > 4) toastBox.lastChild.remove();
     const life = ms || (kind === 'error' ? 9000 : 3500);
@@ -123,7 +135,7 @@
     depth: 0,
     show(text) {
       if (this.depth++ === 0) {
-        this.locked = [...document.querySelectorAll('main button, main input, main select, .topbar a, nav button, dialog button')]
+        this.locked = [...document.querySelectorAll('main button, main input, main select, .sidebar button, dialog button')]
           .filter((b) => !b.disabled);
         this.locked.forEach((b) => (b.disabled = true));
         this.el.hidden = false;
@@ -383,6 +395,12 @@
 
   /** 파일 놓는 곳: 누르면 고르기, 끌어다 놓기, 같은 파일 다시 고르기 */
   function wireDrop(zone, input, onFiles) {
+    if (zone.tagName !== 'LABEL') {
+      zone.addEventListener('click', (e) => {
+        if (isBusy() || e.target.closest('label, button, input, a')) return;
+        input.click();
+      });
+    }
     input.addEventListener('change', () => {
       const files = [...input.files];
       input.value = '';
@@ -438,6 +456,22 @@
   // ═══════════════════════════════════════════════════════════
   const tabs = [...document.querySelectorAll('.tab')];
   let activeTab = 'edit';
+  let activeView = 'home';
+
+  /** 처음 화면(home) ↔ 작업 화면(work) */
+  function showView(name) {
+    activeView = name;
+    $('view-home').hidden = name !== 'home';
+    $('view-work').hidden = name !== 'work';
+    window.scrollTo({ top: 0 });
+  }
+
+  /** 작업 화면의 도구를 연다. 도구마다 넣은 파일과 상태는 그대로 남는다. */
+  function openTool(name, focus) {
+    if (activeView !== 'work') showView('work');
+    showTab(name, focus);
+  }
+
   function showTab(name, focus) {
     activeTab = name;
     tabs.forEach((t) => {
@@ -452,8 +486,8 @@
     t.addEventListener('click', () => showTab(t.dataset.tab));
     t.addEventListener('keydown', (e) => {
       let j = null;
-      if (e.key === 'ArrowRight') j = (i + 1) % tabs.length;
-      if (e.key === 'ArrowLeft') j = (i - 1 + tabs.length) % tabs.length;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') j = (i + 1) % tabs.length;
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') j = (i - 1 + tabs.length) % tabs.length;
       if (e.key === 'Home') j = 0;
       if (e.key === 'End') j = tabs.length - 1;
       if (j != null) { e.preventDefault(); showTab(tabs[j].dataset.tab, true); }
@@ -467,7 +501,8 @@
     if (isBusy()) return;
     const files = [...(e.dataTransfer?.files || [])];
     if (!files.length) return;
-    if (activeTab === 'edit') Edit.addFiles(files);
+    if (activeView === 'home') Home.route(files);
+    else if (activeTab === 'edit') Edit.addFiles(files);
     else if (activeTab === 'img2pdf') Img.addFiles(files);
     else if (activeTab === 'pdf2img') P2I.load(files);
     else if (activeTab === 'number') Num.load(files);
@@ -544,9 +579,6 @@
             const src = createSource(f.name, info);
             if (!quiet && !src.locked) appendPages(src);
             added.push(src);
-            if (src.locked) {
-              toast(`"${f.name}"은(는) 암호가 걸려 있어요.`, '파일 칩 안에 비밀번호를 입력하면 편집 대상에 들어가요.', 'info');
-            }
           } catch (e) {
             showError(e, f.name);
           }
@@ -588,29 +620,59 @@
 
     // 칩 목록
     function renderChips() {
-      chips.replaceChildren(...sources.map((src) => {
+      const items = sources.map((src) => {
         const used = pages.filter((p) => p.srcId === src.id).length;
-        const meta = src.locked ? '암호 필요' : used === src.pageCount ? `${src.pageCount}쪽` : `${src.pageCount}쪽 중 ${used}쪽 사용`;
-        const li = h('li', { class: `chip${src.locked ? ' locked' : ''}`, style: `--c:${src.color}` },
+        const meta = src.locked ? '잠김' : used === src.pageCount ? `${src.pageCount}쪽` : `${src.pageCount}쪽 중 ${used}쪽`;
+        return h('li', { class: `chip${src.locked ? ' locked' : ''}`, style: `--c:${src.color}` },
+          h('span', { class: 'chip-dot', 'aria-hidden': 'true' }),
           h('span', { class: 'chip-name', title: src.name }, src.name),
           h('span', { class: 'chip-meta' }, meta),
-          h('button', { class: 'chip-x', type: 'button', 'aria-label': `${src.name} 빼기`, title: '이 파일 빼기', onclick: () => removeSource(src.id) }, '✕'));
-        if (src.locked) {
+          h('button', { class: 'chip-x', type: 'button', 'aria-label': `${src.name} 빼기`, title: '이 파일 빼기', onclick: () => removeSource(src.id) }, icon('x')));
+      });
+      if (sources.length) {
+        items.push(h('li', null, h('label', { class: 'chip add', for: 'edit-input', tabindex: '0',
+          onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('edit-input').click(); } } },
+        icon('plus'), 'PDF 더 넣기')));
+      }
+      chips.replaceChildren(...items);
+      renderLocks();
+    }
+
+    // 잠긴 파일마다 노란 안내줄. [비밀번호 넣기]를 누르면 그 자리에 입력칸이 열린다.
+    function renderLocks() {
+      const box = $('edit-locks');
+      const locked = sources.filter((s) => s.locked);
+      // 입력 중인 칸은 다시 그리지 않는다.
+      [...box.children].forEach((el) => {
+        if (!locked.some((s) => s.id === el.dataset.src)) el.remove();
+      });
+      locked.forEach((src) => {
+        if (box.querySelector(`[data-src="${src.id}"]`)) return;
+        const open = h('button', { class: 'btn', type: 'button' }, '비밀번호 넣기');
+        const note = h('div', { class: 'lock-note', 'data-src': src.id, role: 'group', 'aria-label': `${src.name} 잠김` },
+          icon('lock'),
+          h('p', null, h('b', null, `"${src.name}"`), ' 파일이 잠겨 있어요. 비밀번호를 넣으면 같이 편집할 수 있어요.'),
+          open);
+        open.addEventListener('click', () => {
           const row = passwordRow({ placeholder: '이 파일의 비밀번호', onSubmit: (pw) => unlockSource(src, pw) });
-          li.append(row.el);
-        }
-        return li;
-      }));
+          open.replaceWith(row.el);
+          row.input.focus();
+        });
+        box.append(note);
+      });
     }
 
     function makeCard(p) {
-      const el = h('div', { class: 'card page-card sort-item', tabindex: '0', 'data-key': p.key },
-        h('div', { class: 'thumb' }, h('span', { class: 'loading' }, '불러오는 중…')),
-        h('div', { class: 'page-meta' }, h('span', { class: 'page-no' }), h('span', { class: 'page-src' })),
+      const el = h('div', { class: 'page-card sort-item', tabindex: '0', 'data-key': p.key },
+        h('div', { class: 'paper' },
+          h('div', { class: 'thumb' }, h('span', { class: 'loading' }, '불러오는 중…')),
+          h('span', { class: 'page-no' }),
+          h('button', { type: 'button', class: 'del-band', 'data-act': 'del', tabindex: '-1' }, '삭제 예정 · 되돌리기')),
+        h('div', { class: 'page-src' }),
         h('div', { class: 'card-tools' },
-          h('button', { type: 'button', 'data-act': 'rot', title: '오른쪽으로 90도 회전', 'aria-label': '회전' }, '↻'),
-          h('button', { type: 'button', 'data-act': 'rep', title: '다른 쪽으로 교체', 'aria-label': '교체' }, '⇄'),
-          h('button', { type: 'button', 'data-act': 'del', class: 'del', title: '삭제 (다시 누르면 복구)', 'aria-label': '삭제' }, '✕')));
+          h('button', { type: 'button', 'data-act': 'rot', title: '오른쪽으로 90도 회전', 'aria-label': '회전' }, icon('rotate')),
+          h('button', { type: 'button', 'data-act': 'rep', title: '다른 쪽으로 교체', 'aria-label': '교체' }, icon('swap')),
+          h('button', { type: 'button', 'data-act': 'del', class: 'del', title: '삭제 (다시 누르면 되돌리기)', 'aria-label': '삭제' }, icon('x'))));
       cards.set(p.key, el);
       io.observe(el);
       return el;
@@ -668,31 +730,31 @@
         el.style.setProperty('--c', src.color);
         el.classList.toggle('deleted', p.deleted);
         el.querySelector('.page-no').textContent = p.deleted ? '–' : String(++n);
-        const label = `${src.name.replace(/\.pdf$/i, '')} ${p.index + 1}쪽`;
+        const label = `${src.name.replace(/\.pdf$/i, '')} · ${p.index + 1}쪽`;
         const s = el.querySelector('.page-src');
         s.textContent = label;
         s.title = label;
-        el.querySelector('[data-act="del"]').textContent = p.deleted ? '↺' : '✕';
-        el.querySelector('[data-act="del"]').title = p.deleted ? '복구' : '삭제 (다시 누르면 복구)';
-        el.querySelector('[data-act="del"]').setAttribute('aria-label', p.deleted ? '복구' : '삭제');
+        const del = el.querySelector('.card-tools [data-act="del"]');
+        del.title = p.deleted ? '되돌리기' : '삭제 (다시 누르면 되돌리기)';
+        del.setAttribute('aria-label', p.deleted ? '되돌리기' : '삭제');
         el.setAttribute('aria-label', `${p.deleted ? '삭제 예정' : n + '번'}, ${label}${p.rot ? `, ${p.rot}도 회전` : ''}`);
         if (el.dataset.painted && el.dataset.painted !== `${p.srcId}:${p.index}:${p.rot}`) paintThumb(el);
       });
       const has = pages.length > 0 || sources.length > 0;
       bar.hidden = !has;
       $('edit-hint').hidden = pages.length === 0;
-      $('edit-drop').classList.toggle('compact', has);
+      $('edit-empty').hidden = has;
       updateCount();
     }
 
     function updateCount() {
       const kept = keptPages().length;
-      let text = `${kept}쪽 저장 예정`;
+      let extra = null;
       const r = rangeInput.value.trim();
       if (r && kept) {
-        try { text += ` · 범위 ${Core.parseRange(r, kept).length}쪽`; } catch { text += ' · 범위 확인 필요'; }
+        try { extra = `범위 ${Core.parseRange(r, kept).length}쪽`; } catch { extra = '범위 확인 필요'; }
       }
-      count.textContent = text;
+      count.replaceChildren(...[h('b', null, String(kept)), '쪽 저장 예정', extra && h('small', null, extra)].filter(Boolean));
       const none = kept === 0;
       ['edit-save', 'edit-save-range', 'edit-split', 'edit-odd', 'edit-even', 'edit-reverse'].forEach((id) => {
         if (isBusy()) return;
@@ -768,8 +830,30 @@
         if (isOdd !== odd) { p.deleted = true; dropped++; }
       });
       render();
-      toast(`${odd ? '홀수' : '짝수'} 번호만 남겼어요.`, `${dropped}쪽이 "삭제 예정"이 됐어요. 카드의 ↺를 누르면 되살아나요.`, 'info');
+      toast(`${odd ? '홀수' : '짝수'} 번호만 남겼어요.`, `${dropped}쪽이 "삭제 예정"이 됐어요. 카드의 "되돌리기"를 누르면 되살아나요.`, 'info');
     }
+    const menu = $('edit-menu');
+    const more = $('edit-more');
+    function closeMenu() {
+      menu.hidden = true;
+      more.setAttribute('aria-expanded', 'false');
+    }
+    more.addEventListener('click', () => {
+      const open = menu.hidden;
+      menu.hidden = !open;
+      more.setAttribute('aria-expanded', String(open));
+      if (open) menu.querySelector('button:not(:disabled)')?.focus();
+    });
+    menu.addEventListener('click', (e) => { if (e.target.closest('button')) closeMenu(); });
+    menu.addEventListener('keydown', (e) => {
+      const items = [...menu.querySelectorAll('button:not(:disabled)')];
+      const i = items.indexOf(document.activeElement);
+      if (e.key === 'Escape') { closeMenu(); more.focus(); }
+      if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length]?.focus(); }
+      if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length]?.focus(); }
+    });
+    document.addEventListener('pointerdown', (e) => { if (!e.target.closest('.menu-wrap')) closeMenu(); });
+
     $('edit-odd').addEventListener('click', () => keepParity(true));
     $('edit-even').addEventListener('click', () => keepParity(false));
     $('edit-reverse').addEventListener('click', () => {
@@ -982,7 +1066,7 @@
     function close(apply) {
       if (apply && target && chosen) {
         Edit.replacePage(target, chosen, Number(pageSel.value));
-        toast('쪽을 바꿨어요.', '되돌리려면 다시 ⇄로 원래 쪽을 고르세요.', 'ok');
+        toast('쪽을 바꿨어요.', '되돌리려면 다시 교체 버튼으로 원래 쪽을 고르세요.', 'ok');
       }
       // 고르기만 하고 쓰지 않은 새 파일은 목록에서 뺀다.
       const used = new Set(apply && chosen ? [chosen] : []);
@@ -1074,7 +1158,8 @@
       if (bad.length) {
         toast(`지원하지 않는 형식이에요: ${bad.slice(0, 3).join(', ')}${bad.length > 3 ? ' 외' : ''}`, 'JPG, PNG, WEBP만 넣을 수 있어요.');
       }
-      if (!ok.length) return;
+      if (!ok.length) return 0;
+      const before = items.length;
       await withBusy('사진 읽는 중…', async (progress) => {
         for (let i = 0; i < ok.length; i++) {
           const [f, kind] = ok[i];
@@ -1094,25 +1179,27 @@
         }
       });
       render();
+      return items.length - before;
     }
 
     function render() {
       grid.replaceChildren(...items.map((it, i) =>
-        h('div', { class: 'card page-card img-card sort-item', 'data-id': it.id, tabindex: '0', style: '--c: var(--accent)' },
-          h('div', { class: 'thumb' }, it.thumb),
-          h('div', { class: 'page-meta' },
-            h('span', { class: 'page-no' }, String(i + 1)),
-            h('span', { class: 'page-src', title: it.name }, it.name)),
-          h('button', { class: 'x', type: 'button', title: '빼기', 'aria-label': `${it.name} 빼기`, 'data-id': it.id }, '✕'))));
+        h('div', { class: 'page-card img-card sort-item', 'data-id': it.id, tabindex: '0', style: '--c: var(--c2)' },
+          h('div', { class: 'paper' },
+            h('div', { class: 'thumb' }, it.thumb),
+            h('span', { class: 'page-no' }, String(i + 1))),
+          h('div', { class: 'page-src', title: it.name }, it.name),
+          h('button', { class: 'x-btn', type: 'button', title: '빼기', 'aria-label': `${it.name} 빼기`, 'data-id': it.id }, icon('x')))));
       const has = items.length > 0;
       $('img-bar').hidden = !has;
       $('img-hint').hidden = items.length < 2;
-      $('img-drop').classList.toggle('compact', has);
+      $('img-empty').hidden = has;
+      $('img-options').hidden = !has;
       $('img-count').textContent = `${items.length}장 → ${items.length}쪽 PDF`;
     }
 
     grid.addEventListener('click', (e) => {
-      const b = e.target.closest('button.x');
+      const b = e.target.closest('button.x-btn');
       if (!b || isBusy()) return;
       items = items.filter((x) => x.id !== b.dataset.id);
       render();
@@ -1276,10 +1363,13 @@
       picked = new Set(Array.from({ length: doc.numPages }, (_, i) => i + 1));
       grid.replaceChildren(...Array.from({ length: doc.numPages }, (_, i) => {
         const n = i + 1;
-        const cb = h('input', { type: 'checkbox', checked: true, 'aria-label': `${n}쪽 고르기` });
-        const el = h('label', { class: 'card page-card pick-card picked', 'data-n': String(n) },
-          h('div', { class: 'thumb' }, h('span', { class: 'loading' }, '불러오는 중…')),
-          h('div', { class: 'page-meta' }, cb, h('span', { class: 'page-no' }, `${n}쪽`)));
+        const cb = h('input', { type: 'checkbox', class: 'pick-check', checked: true, 'aria-label': `${n}쪽 고르기` });
+        const el = h('label', { class: 'page-card pick-card picked', 'data-n': String(n), style: '--c: var(--c3)' },
+          h('div', { class: 'paper' },
+            h('div', { class: 'thumb' }, h('span', { class: 'loading' }, '불러오는 중…')),
+            h('span', { class: 'page-no' }, String(n))),
+          h('div', { class: 'page-src' }, `${n}쪽`),
+          cb);
         cb.addEventListener('change', () => {
           if (cb.checked) picked.add(n); else picked.delete(n);
           el.classList.toggle('picked', cb.checked);
@@ -1289,8 +1379,9 @@
         return el;
       }));
       $('p2i-options').hidden = false;
-      $('p2i-drop').classList.add('compact');
-      $('p2i-drop').querySelector('strong').textContent = `${fileName} · 다른 PDF 고르기`;
+      $('p2i-empty').hidden = true;
+      $('p2i-file').hidden = false;
+      $('p2i-name').textContent = `${fileName} · ${doc.numPages}쪽`;
       update();
     }
 
@@ -1389,8 +1480,8 @@
       unlockBox.hidden = true;
       $('p2i-options').hidden = true;
       $('p2i-bar').hidden = true;
-      $('p2i-drop').classList.remove('compact');
-      $('p2i-drop').querySelector('strong').textContent = 'PDF 하나를 끌어다 놓거나 눌러서 고르세요';
+      $('p2i-empty').hidden = false;
+      $('p2i-file').hidden = true;
       document.querySelector('input[name="p2i-dpi"][value="150"]').checked = true;
     }
     return { load, reset };
@@ -1612,8 +1703,9 @@
       file = { name, bytes, pageCount };
       pdf = await openPdfjs(bytes);
       $('num-layout').hidden = false;
-      $('num-drop').classList.add('compact');
-      $('num-drop').querySelector('strong').textContent = `${name} · 다른 PDF 고르기`;
+      $('num-empty').hidden = true;
+      $('num-file').hidden = false;
+      $('num-name').textContent = `${name} · ${pageCount}쪽`;
       await drawPreview();
     }
 
@@ -1680,7 +1772,7 @@
     }
 
     $('panel-number').addEventListener('change', (e) => {
-      if (e.target.closest('.options')) drawPreview().catch(showError);
+      if (e.target.closest('.num-options')) drawPreview().catch(showError);
     });
     $('num-start').addEventListener('input', placeMark);
     window.addEventListener('resize', () => {
@@ -1720,8 +1812,8 @@
       unlockBox.hidden = true;
       mark.hidden = true;
       $('num-layout').hidden = true;
-      $('num-drop').classList.remove('compact');
-      $('num-drop').querySelector('strong').textContent = 'PDF 하나를 끌어다 놓거나 눌러서 고르세요';
+      $('num-empty').hidden = false;
+      $('num-file').hidden = true;
       const ctx = canvas.getContext('2d');
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       if (!keepOptions) {
@@ -1737,9 +1829,7 @@
   // ═══════════════════════════════════════════════════════════
   // 로고: 새로고침 없이 처음 상태로
   // ═══════════════════════════════════════════════════════════
-  $('logo').addEventListener('click', (e) => {
-    e.preventDefault();
-    if (isBusy()) return;
+  function resetAll() {
     Replace.close(false);
     Edit.reset();
     Img.reset();
@@ -1748,9 +1838,39 @@
     Num.reset();
     toastBox.replaceChildren();
     showTab('edit');
-    window.scrollTo({ top: 0 });
-  });
+    showView('home');
+  }
+  document.querySelectorAll('.logo').forEach((logo) => logo.addEventListener('click', (e) => {
+    e.preventDefault();
+    if (isBusy()) return;
+    resetAll();
+  }));
+
+  // ═══════════════════════════════════════════════════════════
+  // 처음 화면: 파일을 넣으면 알맞은 도구로 보낸다
+  // ═══════════════════════════════════════════════════════════
+  const Home = (() => {
+    async function route(files) {
+      const pdfs = files.filter(isPdfFile);
+      const imgs = files.filter((f) => !isPdfFile(f));
+      if (pdfs.length) {
+        openTool('edit');
+        await Edit.addFiles(pdfs);
+        if (imgs.length) {
+          const n = await Img.addFiles(imgs);
+          if (n) toast(`사진 ${n}장은 사진 → PDF에 넣어 뒀어요.`, '왼쪽 "사진 → PDF"를 누르면 이어서 할 수 있어요.', 'info');
+        }
+      } else {
+        openTool('img2pdf');
+        await Img.addFiles(imgs);
+      }
+    }
+    wireDrop($('home-drop'), $('home-input'), route);
+    document.querySelectorAll('.tool-card').forEach((card) =>
+      card.addEventListener('click', () => openTool(card.dataset.open, true)));
+    return { route };
+  })();
 
   // 검증용으로 상태를 살짝 드러낸다(개인 정보 없음).
-  window.__pdfWorkshop = { version: 1, ready: true };
+  window.__pdfWorkshop = { version: 2, ready: true };
 })();

@@ -45,6 +45,14 @@ app.use((req, res, next) => {
 app.use('/vendor/cmaps', express.static(nm('pdfjs-dist', 'cmaps'), { maxAge: '1d' }));
 app.use('/vendor/standard_fonts', express.static(nm('pdfjs-dist', 'standard_fonts'), { maxAge: '1d' }));
 
+// 글꼴 Pretendard (1.3.9에는 variable용 .min.css가 없어 같은 내용의 .css를 그 이름으로 제공)
+app.get('/vendor/pretendard/pretendardvariable.min.css', (req, res) => {
+  res.set('Cache-Control', 'public, max-age=86400');
+  res.type('text/css');
+  res.sendFile(nm('pretendard', 'dist', 'web', 'variable', 'pretendardvariable.css'));
+});
+app.use('/vendor/pretendard/woff2', express.static(nm('pretendard', 'dist', 'web', 'variable', 'woff2'), { maxAge: '7d' }));
+
 app.get('/vendor/:file', (req, res) => {
   const file = VENDOR[req.params.file];
   if (!file) return res.status(404).send('Not found');
