@@ -366,7 +366,7 @@
           <span class="count" id="img-count">0장</span>
           <label class="btn dark" for="img-input"><svg class="ic sm" aria-hidden="true"><use href="#i-plus"/></svg>사진 더 넣기</label>
           <button class="btn dark" id="img-clear">모두 비우기</button>
-          <button class="btn primary" id="img-save">PDF로 저장</button>
+          <button class="btn primary" id="img-save" title="PDF로 바로 저장 (Ctrl+S)"><svg class="ic sm" aria-hidden="true"><use href="#i-save"/></svg>바로 저장</button>
         </div>
       </section>
 
@@ -630,15 +630,15 @@
             <button type="button" class="guide-fold" id="guide-fold" aria-controls="edit-guide" aria-expanded="true">접기</button>
           </div>
           <div class="guide-sec" data-guide="edit">
-          <figure class="demo" id="demo-move">
+          <figure class="demo" id="demo-move" data-demo="edit-move">
             <div class="demo-stage" aria-hidden="true"></div>
             <figcaption><strong>여러 쪽을 한꺼번에 옮기기</strong>Ctrl을 누른 채 쪽을 하나씩 클릭한 뒤, 고른 쪽 하나를 끌면 함께 움직여요.</figcaption>
           </figure>
-          <figure class="demo" id="demo-range">
+          <figure class="demo" id="demo-range" data-demo="edit-range">
             <div class="demo-stage" aria-hidden="true"></div>
             <figcaption><strong>이어진 쪽을 범위로 고르기</strong>첫 쪽을 클릭하고 Shift를 누른 채 마지막 쪽을 클릭하면 그 사이가 모두 선택돼요.</figcaption>
           </figure>
-          <figure class="demo" id="demo-rotate">
+          <figure class="demo" id="demo-rotate" data-demo="edit-rotate">
             <div class="demo-stage" aria-hidden="true"></div>
             <figcaption><strong>돌리기는 90°씩</strong>↻는 오른쪽, ↺는 왼쪽으로 90°씩 돌아가요. 두 번 누르면 거꾸로(180°) 돼요.</figcaption>
           </figure>
@@ -659,20 +659,83 @@
           <p class="guide-note"><b>저장</b> [바로 저장](<kbd>Ctrl</kbd>+<kbd>S</kbd>)은 묻지 않고 합쳐 저장하고, [설정하고 저장…](<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>)은 쪽번호 · 워터마크 · 도장 · 암호 · 용량 목표를 고른 뒤 저장해요.</p>
           </div>
           <div class="guide-sec" data-guide="img2pdf" hidden>
-            <ol class="guide-steps"><li><b>1</b>사진을 여러 장 끌어다 놓아요. 휴대폰 사진 방향은 알아서 맞춰요.</li><li><b>2</b>사진을 끌어 순서를 바꾸고 용지와 여백을 골라요.</li><li><b>3</b>[PDF로 저장]을 누르면 사진 한 장이 한 쪽이 돼요. 너무 크면 "용량 줄이기"로 보내요.</li></ol>
+            <figure class="demo" data-demo="img-drop">
+              <div class="demo-stage" aria-hidden="true"></div>
+              <figcaption><strong>사진을 한꺼번에 끌어다 놓기</strong>탐색기에서 사진 여러 장을 한 번에 골라(<kbd>Ctrl</kbd>+<kbd>A</kbd>) 점선 칸에 놓으면 돼요. 아이폰 사진(HEIC)도 그대로 넣어요.</figcaption>
+            </figure>
+            <figure class="demo" data-demo="img-order">
+              <div class="demo-stage" aria-hidden="true"></div>
+              <figcaption><strong>순서 바꾸고 용지 고르기</strong>사진 카드를 끌어 순서를 바꾸고, 위의 [A4 세로] · [A4 가로] · [이미지 원본 크기] 중에서 골라요. 여백도 [없음] · [좁게] · [보통] 중에서 골라요.</figcaption>
+            </figure>
+            <h3 class="guide-h">순서</h3>
+            <ol class="guide-steps"><li><b aria-hidden="true">1</b><span>사진 넣기 — 점선 칸에 끌어다 놓거나 [파일 고르기]</span></li><li><b aria-hidden="true">2</b><span>순서 · 용지 · 여백 고르기</span></li><li><b aria-hidden="true">3</b><span>[바로 저장]</span></li></ol>
+            <div class="faq"><h3 class="guide-h">자주 막히는 곳</h3><dl><div class="faq-item"><dt>사진이 옆으로 누워요?</dt><dd>휴대폰이 기록한 방향을 자동으로 맞춰요. 그래도 누워 있으면 카드의 ↻를 눌러 돌리세요.</dd></div><div class="faq-item"><dt>파일이 너무 커요?</dt><dd>저장 후 "용량 줄이기"에 넣으면 돼요.</dd></div></dl></div>
           </div>
           <div class="guide-sec" data-guide="pdf2img" hidden>
-            <ol class="guide-steps"><li><b>1</b>PDF를 넣고 카드를 눌러 필요한 쪽만 남겨요.</li><li><b>2</b>아래 막대에서 형식(PNG · JPG · WEBP)과 선명도를 골라요. 예상 용량이 바로 보여요.</li><li><b>3</b>한 쪽만 골랐다면 [복사]를 누르고 PPT나 한글에서 <kbd>Ctrl</kbd>+<kbd>V</kbd> 하세요.</li></ol>
+            <figure class="demo" data-demo="p2i-pick">
+              <div class="demo-stage" aria-hidden="true"></div>
+              <figcaption><strong>원하는 쪽만 골라 저장</strong>쪽 카드를 눌러 체크를 켜고 끈 뒤 [바로 저장]. 여러 쪽이면 zip 파일 하나로 묶여요.</figcaption>
+            </figure>
+            <figure class="demo" data-demo="p2i-copy">
+              <div class="demo-stage" aria-hidden="true"></div>
+              <figcaption><strong>한 쪽을 PPT에 바로 붙이기</strong>한 쪽만 체크하고 [복사]를 누른 뒤, PPT나 한글에서 <kbd>Ctrl</kbd>+<kbd>V</kbd> 하면 그림으로 붙어요.</figcaption>
+            </figure>
+            <h3 class="guide-h">순서</h3>
+            <ol class="guide-steps"><li><b aria-hidden="true">1</b><span>PDF 넣기</span></li><li><b aria-hidden="true">2</b><span>필요한 쪽 체크([모두 고르기] · [모두 해제])</span></li><li><b aria-hidden="true">3</b><span>형식 · 선명도 고르고 [바로 저장] 또는 [복사]</span></li></ol>
+            <div class="faq"><h3 class="guide-h">자주 막히는 곳</h3><dl><div class="faq-item"><dt>PNG, JPG 뭘 고르죠?</dt><dd>모르면 PNG. 파일을 작게 하고 싶으면 JPG.</dd></div><div class="faq-item"><dt>zip은 어떻게 열죠?</dt><dd>다운로드 폴더에서 zip을 두 번 클릭하면 안의 사진이 보여요.</dd></div></dl></div>
           </div>
           <div class="guide-sec" data-guide="decorate" hidden>
-            <ol class="guide-steps"><li><b>1</b>PDF 하나를 넣어요.</li><li><b>2</b>쪽번호 · 워터마크 · 서명과 도장을 켜면 오른쪽 미리보기에 바로 겹쳐 보여요. 도장은 끌어서 옮기고 모서리로 크기를 바꿔요.</li><li><b>3</b>[바로 저장]을 눌러요. 암호나 용량 목표까지 정하려면 [설정하고 저장…].</li></ol>
+            <figure class="demo" data-demo="dec-switch">
+              <div class="demo-stage" aria-hidden="true"></div>
+              <figcaption><strong>스위치를 켜면 바로 미리보기</strong>쪽번호 · 워터마크 줄 오른쪽의 스위치를 켜면 오른쪽 종이에 바로 겹쳐 보여요.</figcaption>
+            </figure>
+            <figure class="demo" data-demo="dec-stamp">
+              <div class="demo-stage" aria-hidden="true"></div>
+              <figcaption><strong>도장 · 서명은 끌어서 놓기</strong>서명 · 도장 칩을 누르면 미리보기에 나타나요. 끌어서 옮기고, 오른쪽 아래 모서리를 끌면 크기가 바뀌어요.</figcaption>
+            </figure>
+            <h3 class="guide-h">순서</h3>
+            <ol class="guide-steps"><li><b aria-hidden="true">1</b><span>PDF 넣기(여러 개면 한꺼번에)</span></li><li><b aria-hidden="true">2</b><span>쓸 것만 스위치 켜기</span></li><li><b aria-hidden="true">3</b><span>미리보기 확인 후 [바로 저장]</span></li></ol>
+            <div class="faq"><h3 class="guide-h">자주 막히는 곳</h3><dl><div class="faq-item"><dt>도장 뒤에 흰 네모가 남아요?</dt><dd>도장 항목의 "흰 배경 지우기"를 켜세요.</dd></div><div class="faq-item"><dt>암호도 같이 걸고 싶어요?</dt><dd>[설정하고 저장…]을 누르면 한 번에 돼요.</dd></div></dl></div>
           </div>
           <div class="guide-sec" data-guide="compress" hidden>
-            <ol class="guide-steps"><li><b>1</b>PDF나 사진을 넣으면 얼마까지 줄일 수 있는지 먼저 알려 줘요.</li><li><b>2</b>막대를 끌거나 "공문 10MB" 같은 칩을 눌러 목표를 정해요. 키보드 ← → 는 0.5MB씩.</li><li><b>3</b>[줄이기] 뒤에 [비교해 보기]로 화질을 확인하고 저장해요. 글자는 그대로 남아요.</li></ol>
+            <figure class="demo" data-demo="cmp-target">
+              <div class="demo-stage" aria-hidden="true"></div>
+              <figcaption><strong>"얼마 이하로"만 정하면 끝</strong>막대를 끌거나 "공문 10MB" 같은 칩을 누른 뒤 [줄이기]. 글자는 그대로 두고 사진만 줄여요.</figcaption>
+            </figure>
+            <figure class="demo" data-demo="cmp-locked">
+              <div class="demo-stage" aria-hidden="true"></div>
+              <figcaption><strong>안 줄어드는 파일도 있어요</strong>글자만 있는 문서는 줄일 사진이 없어 막대가 흐리게 잠겨요. 얼마까지 줄일 수 있는지 알려 줘요.</figcaption>
+            </figure>
+            <h3 class="guide-h">순서</h3>
+            <ol class="guide-steps"><li><b aria-hidden="true">1</b><span>PDF나 사진 넣기</span></li><li><b aria-hidden="true">2</b><span>막대를 끌거나 칩을 눌러 목표 정하기</span></li><li><b aria-hidden="true">3</b><span>[줄이기] → [비교해 보기]로 확인 → [바로 저장]</span></li></ol>
+            <div class="faq"><h3 class="guide-h">자주 막히는 곳</h3><dl><div class="faq-item"><dt>화질이 나빠질까요?</dt><dd>목표 안에서 최대한 선명하게 맞춰요. [비교해 보기]로 확인할 수 있어요.</dd></div><div class="faq-item"><dt>얼마로 정해야 하죠?</dt><dd>공문 · 업무포털 첨부는 보통 10MB, 메일은 20MB예요.</dd></div></dl></div>
           </div>
           <div class="guide-sec" data-guide="security" hidden>
-            <ol class="guide-steps"><li><b>1</b>풀기: 알고 있는 비밀번호로 암호를 없애요.</li><li><b>2</b>걸기: 열기 암호와 권한(인쇄 · 복사 · 편집)을 정해 AES-256으로 잠가요.</li><li><b>3</b>제한 보기: 파일에 어떤 제한이 걸렸는지 표로 보여 줘요. 비밀번호 없이 푸는 기능은 없어요.</li></ol>
+            <figure class="demo" data-demo="sec-unlock">
+              <div class="demo-stage" aria-hidden="true"></div>
+              <figcaption><strong>암호 풀기</strong>잠긴 파일을 넣고 비밀번호 칸에 적은 뒤 [풀어서 저장]. 새 파일은 비밀번호 없이 열려요.</figcaption>
+            </figure>
+            <figure class="demo" data-demo="sec-lock">
+              <div class="demo-stage" aria-hidden="true"></div>
+              <figcaption><strong>암호 걸기</strong>열기 암호와 한 번 더를 똑같이 적고, 허용할 것(인쇄 · 내용 복사 · 편집)에 체크한 뒤 [암호 걸어서 저장].</figcaption>
+            </figure>
+            <h3 class="guide-h">순서</h3>
+            <ol class="guide-steps"><li><b aria-hidden="true">1</b><span>PDF 넣기(여러 개면 한꺼번에)</span></li><li><b aria-hidden="true">2</b><span>풀기: 비밀번호 · 걸기: 새 비밀번호와 허용할 것</span></li><li><b aria-hidden="true">3</b><span>[풀어서 저장] 또는 [암호 걸어서 저장]</span></li></ol>
+            <div class="faq"><h3 class="guide-h">자주 막히는 곳</h3><dl><div class="faq-item"><dt>비밀번호가 틀렸대요?</dt><dd>한/영 키와 Caps Lock을 확인하세요.</dd></div><div class="faq-item"><dt>비밀번호를 모르는데 풀 수 있나요?</dt><dd>없어요. 만든 사람에게 물어보세요.</dd></div></dl></div>
           </div>
+          <details class="guide-dl" id="guide-dl" open>
+            <summary><span>저장한 파일은 어디로 가나요?</span></summary>
+            <figure class="demo" data-demo="download">
+              <div class="demo-stage" aria-hidden="true"></div>
+              <figcaption><strong>다운로드 알림에서 찾기</strong><span id="dl-where">저장 버튼을 누르면 화면 위나 아래에 알림이 떠요. 거기서 [폴더 열기]를 누르거나, 탐색기 → 다운로드에서 찾으세요.</span></figcaption>
+            </figure>
+            <h3 class="guide-h">순서</h3>
+            <ol class="guide-steps"><li><b aria-hidden="true">1</b><span>[바로 저장]</span></li><li><b aria-hidden="true">2</b><span>브라우저 알림에서 파일 이름 확인</span></li><li><b aria-hidden="true">3</b><span id="dl-list">안 보이면 <kbd>Ctrl</kbd>+<kbd>J</kbd>(다운로드 목록)</span></li></ol>
+            <div class="faq"><h3 class="guide-h">자주 막히는 곳</h3><dl>
+              <div class="faq-item"><dt>원본이 바뀌나요?</dt><dd>아니요. 항상 새 파일로 저장되고 원본은 그대로예요.</dd></div>
+              <div class="faq-item"><dt>파일이 밖으로 나가나요?</dt><dd>아니요. 인터넷을 꺼도 똑같이 작동해요.</dd></div>
+            </dl></div>
+          </details>
         </div>
        </aside>
      </div>
@@ -867,6 +930,7 @@
   <script src="/vendor/pako.min.js"></script>
   <script src="pdf-core.js"></script>
   <script src="compress.js"></script>
+  <script src="guide-anim.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

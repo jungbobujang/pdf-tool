@@ -41,7 +41,7 @@ const COMMIT = VERSION.commit;
 
 // index.html의 app.js · style.css · pdf-core.js 주소에 ?v=커밋 을 붙인다.
 // 커밋이 바뀌면 주소가 바뀌므로 브라우저나 중간 캐시에 옛 파일이 남지 않는다.
-const ASSETS = ['style.css', 'pdf-core.js', 'compress.js', 'app.js'];
+const ASSETS = ['style.css', 'pdf-core.js', 'compress.js', 'guide-anim.js', 'app.js'];
 function renderIndex() {
   let html = fs.readFileSync(path.join(PUBLIC, 'index.html'), 'utf8');
   for (const a of ASSETS) {

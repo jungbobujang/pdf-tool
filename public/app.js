@@ -3749,13 +3749,30 @@
       return items.length - before;
     }
 
+    /** 돌린 만큼 돌려 그린 미리보기 */
+    function thumbOf(it) {
+      const rot = it.rot || 0;
+      if (!rot) return it.thumb;
+      if (it.thumbRot && it.thumbRot.rot === rot) return it.thumbRot.canvas;
+      const src = it.thumb;
+      const side = rot === 90 || rot === 270;
+      const c = makeCanvas(side ? src.height : src.width, side ? src.width : src.height);
+      const ctx = c.getContext('2d');
+      ctx.translate(c.width / 2, c.height / 2);
+      ctx.rotate((rot * Math.PI) / 180);
+      ctx.drawImage(src, -src.width / 2, -src.height / 2);
+      it.thumbRot = { rot, canvas: c };
+      return c;
+    }
+
     function render() {
       grid.replaceChildren(...items.map((it, i) =>
         h('div', { class: 'page-card img-card sort-item', 'data-id': it.id, tabindex: '0', style: '--c: var(--c2)' },
           h('div', { class: 'paper' },
-            h('div', { class: 'thumb' }, it.thumb),
+            h('div', { class: 'thumb' }, thumbOf(it)),
             h('span', { class: 'page-no' }, String(i + 1))),
           h('div', { class: 'page-src', title: it.name }, it.name),
+          h('button', { class: 'rot-btn', type: 'button', title: '오른쪽으로 90° 돌리기', 'aria-label': `${it.name} 돌리기`, 'data-rot': it.id }, '↻'),
           h('button', { class: 'x-btn', type: 'button', title: '빼기', 'aria-label': `${it.name} 빼기`, 'data-id': it.id }, icon('x')))));
       const has = items.length > 0;
       $('img-bar').hidden = !has;
@@ -3766,6 +3783,16 @@
     }
 
     grid.addEventListener('click', (e) => {
+      const r = e.target.closest('button.rot-btn');
+      if (r && !isBusy()) {
+        const it = items.find((x) => x.id === r.dataset.rot);
+        if (it) {
+          it.rot = ((it.rot || 0) + 90) % 360;
+          render();
+          grid.querySelector(`.rot-btn[data-rot="${it.id}"]`)?.focus();
+        }
+        return;
+      }
       const b = e.target.closest('button.x-btn');
       if (!b || isBusy()) return;
       items = items.filter((x) => x.id !== b.dataset.id);
@@ -3808,13 +3835,17 @@
       const k = Math.min(1, Math.sqrt(MAX_CANVAS_PIXELS / (w * hgt)), MAX_CANVAS_SIDE / w, MAX_CANVAS_SIDE / hgt);
       w = Math.floor(w * k);
       hgt = Math.floor(hgt * k);
-      const c = makeCanvas(w, hgt);
+      const rot = item.rot || 0;
+      const side = rot === 90 || rot === 270;
+      const c = makeCanvas(side ? hgt : w, side ? w : hgt);
       const ctx = c.getContext('2d');
       if (type === 'image/jpeg') {
         ctx.fillStyle = '#fff';
-        ctx.fillRect(0, 0, w, hgt);
+        ctx.fillRect(0, 0, c.width, c.height);
       }
-      ctx.drawImage(bmp, 0, 0, w, hgt);
+      ctx.translate(c.width / 2, c.height / 2);
+      ctx.rotate((rot * Math.PI) / 180);
+      ctx.drawImage(bmp, -w / 2, -hgt / 2, w, hgt);
       bmp.close();
       const bytes = await canvasToBytes(c, type, 0.92);
       c.width = c.height = 0;
@@ -3823,12 +3854,12 @@
 
     async function embed(doc, item) {
       if (item.kind === 'jpeg') {
-        if (item.orient <= 1) {
+        if (item.orient <= 1 && !item.rot) {
           try { return await doc.embedJpg(await readBytes(item.file)); } catch (e) { /* 아래에서 다시 그려서 넣는다 */ }
         }
         return doc.embedJpg(await reencode(item, 'image/jpeg'));
       }
-      if (item.kind === 'png') {
+      if (item.kind === 'png' && !item.rot) {
         try { return await doc.embedPng(await readBytes(item.file)); } catch (e) { /* 아래에서 다시 그려서 넣는다 */ }
       }
       // WEBP 등은 canvas에서 PNG로 바꿔 넣는다.
@@ -3836,7 +3867,7 @@
     }
 
     async function save() {
-      if (!items.length) return toast('사진을 먼저 넣어 주세요.', 'JPG, PNG, WEBP를 넣을 수 있어요.');
+      if (!items.length) return toast('사진을 먼저 넣어 주세요.', 'JPG · PNG · WEBP · 아이폰 HEIC 사진을 넣을 수 있어요.');
       const paper = document.querySelector('input[name="img-paper"]:checked').value;
       const margin = Number(document.querySelector('input[name="img-margin"]:checked').value);
       try {
@@ -3852,7 +3883,8 @@
               const { title, fix } = explain(e, it.name);
               throw new UserError(title, fix);
             }
-            const L = Core.layoutImage(paper, margin, it.w, it.h);
+            const side = it.rot === 90 || it.rot === 270;
+            const L = Core.layoutImage(paper, margin, side ? it.h : it.w, side ? it.w : it.h);
             const page = doc.addPage([L.pageW, L.pageH]);
             page.drawImage(img, { x: L.x, y: L.y, width: L.w, height: L.h });
           }
@@ -5326,7 +5358,9 @@
   })();
 
   // ═══════════════════════════════════════════════════════════
-  // 편집 도구 오른쪽 "이렇게 써요" 패널 (1280px 미만에서는 오른쪽 서랍)
+  // 오른쪽 "이렇게 써요" 패널 (1280px 미만에서는 오른쪽 서랍)
+  //   도구마다 움직이는 예시 · 순서 · 자주 막히는 곳 + 공통 "저장한 파일은 어디로 가나요?"
+  //   움직이는 부품은 guide-anim.js(GuideAnim)에 있다.
   // ═══════════════════════════════════════════════════════════
   const Guide = (() => {
     const aside = $('edit-guide');
@@ -5334,241 +5368,81 @@
     const foldBtn = $('guide-fold');
     const rail = $('guide-rail');
     const backdrop = $('guide-backdrop');
+    const dl = $('guide-dl');
     const wide = matchMedia('(min-width: 1280px)');
     const still = matchMedia('(prefers-reduced-motion: reduce)');
     const KEY = 'pdfws.guideCollapsed';
+    const DL_KEY = 'pdfws.guideDownloadOpen';
 
-    let collapsed = false;
-    try { collapsed = localStorage.getItem(KEY) === '1'; } catch { /* 저장소를 못 써도 동작한다 */ }
+    const load = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+    const store = (k, v) => { try { localStorage.setItem(k, v); } catch { /* 저장소를 못 써도 동작한다 */ } };
+    // 접힘은 도구마다 따로(예전 한 칸짜리 값은 처음 값으로만 쓴다)
+    const legacy = load(KEY) === '1';
+    const isCollapsed = (tool) => { const v = load(`${KEY}.${tool}`); return v == null ? legacy : v === '1'; };
+    const setCollapsed = (tool, on) => store(`${KEY}.${tool}`, on ? '1' : '0');
     let drawer = false;
     let lastFocus = null;
 
-    const saveCollapsed = () => {
-      try { localStorage.setItem(KEY, collapsed ? '1' : '0'); } catch { /* 무시 */ }
-    };
+    // 예시 만들기: 섹션(도구 · download)별로 묶는다
+    const groups = {};
+    aside.querySelectorAll('figure.demo[data-demo]').forEach((fig) => {
+      const sec = fig.closest('.guide-sec');
+      const key = sec ? sec.dataset.guide : 'download';
+      const stage = fig.querySelector('.demo-stage');
+      try {
+        (groups[key] = groups[key] || []).push(GuideAnim.create(stage, fig.dataset.demo));
+      } catch (e) { console.warn(e); }
+    });
 
-    // ── 움직이는 예시: DOM + CSS transition, 단계별 타임라인을 무한 반복 ──
-    const CURSOR = '<svg viewBox="0 0 16 22" aria-hidden="true"><path d="M1.5 1.5v16.2l4.3-4.1 2.9 6.6 2.8-1.2-2.9-6.5h5.9z"/></svg>';
-    function stageParts(stage) {
-      const inner = h('div', { class: 'demo-inner' });
-      const cursor = h('div', { class: 'demo-cursor' });
-      cursor.innerHTML = CURSOR;
-      const ripple = h('div', { class: 'demo-ripple' });
-      stage.replaceChildren(inner);
-      inner.append(ripple, cursor);
-      const at = (el, x, y) => { el.style.transform = `translate(${x}px, ${y}px)`; };
-      return {
-        inner,
-        moveCursor(x, y) { cursor.dataset.x = x; cursor.dataset.y = y; at(cursor, x, y); },
-        click() {
-          at(ripple, Number(cursor.dataset.x) - 14, Number(cursor.dataset.y) - 14);
-          ripple.classList.remove('go');
-          void ripple.offsetWidth; // 애니메이션을 처음부터 다시
-          ripple.classList.add('go');
-        },
-        at,
-      };
-    }
-    function timeline(stage, build) {
-      const d = build(stage);
-      let i = 0;
-      let timer = 0;
-      let playing = false;
-      const instant = (fn) => {
-        stage.classList.add('no-anim');
-        fn();
-        void stage.offsetWidth;
-        stage.classList.remove('no-anim');
-      };
-      function next() {
-        if (!playing) return;
-        if (i >= d.steps.length) { i = 0; instant(d.reset); }
-        const [delay, fn] = d.steps[i];
-        timer = setTimeout(() => { i++; fn(); next(); }, delay);
-      }
-      instant(d.reset);
-      return {
-        play() {
-          if (playing) return;
-          playing = true;
-          next();
-        },
-        pause() {
-          playing = false;
-          clearTimeout(timer);
-        },
-        /** 움직임 줄이기: 마지막 장면만 */
-        showLast() {
-          this.pause();
-          i = 0;
-          instant(() => { d.reset(); d.steps.forEach(([, fn]) => fn()); });
-        },
-        get playing() { return playing; },
-      };
-    }
+    // 저장 위치 안내: 브라우저에 맞는 말로
+    (function whereText() {
+      const ua = navigator.userAgent;
+      const mac = /Macintosh|Mac OS X/.test(ua);
+      let where = '저장 버튼을 누르면 화면 위나 아래에 다운로드 알림이 떠요.';
+      if (/Whale\//.test(ua)) where = '웨일은 저장 버튼을 누르면 화면 오른쪽 위에 다운로드 알림이 떠요.';
+      else if (/Edg\//.test(ua)) where = '엣지는 저장 버튼을 누르면 화면 아래(또는 오른쪽 위)에 다운로드 알림이 떠요.';
+      else if (/Chrome\//.test(ua)) where = '크롬은 저장 버튼을 누르면 화면 오른쪽 위에 다운로드 알림이 떠요.';
+      else if (/Safari\//.test(ua)) where = '사파리는 주소창 오른쪽의 ⬇ 단추에 다운로드가 모여요.';
+      else if (/Firefox\//.test(ua)) where = '파이어폭스는 저장 버튼을 누르면 화면 오른쪽 위에 다운로드 알림이 떠요.';
+      $('dl-where').textContent = `${where} 거기서 [폴더 열기]를 누르거나, ${mac ? 'Finder → 다운로드' : '탐색기 → 다운로드'}에서 찾으세요.`;
+      if (mac) $('dl-list').replaceChildren('안 보이면 ', h('kbd', null, '⌘'), '+', h('kbd', null, 'Option'), '+', h('kbd', null, 'L'), '(다운로드 목록)');
+    })();
 
-    const SLOT = (s) => 12 + s * 46;
-    const PAGE_Y = 58;
-    function minis(inner, n) {
-      return Array.from({ length: n }, (_, k) => {
-        const el = h('div', { class: 'mini' }, h('b', null, String(k + 1)));
-        inner.append(el);
-        return el;
-      });
-    }
-    const center = (slot) => [SLOT(slot) + 15, PAGE_Y + 22];
+    // "저장한 파일은 어디로" 접힘은 모든 도구에서 같이
+    if (load(DL_KEY) === '0') dl.open = false;
+    dl.addEventListener('toggle', () => { store(DL_KEY, dl.open ? '1' : '0'); sync(); });
 
-    // ① 여러 쪽을 한꺼번에 옮기기
-    function demoMove(stage) {
-      const s = stageParts(stage);
-      const ps = minis(s.inner, 5);
-      const key = h('span', { class: 'demo-key' }, 'Ctrl');
-      const status = h('span', { class: 'demo-status' });
-      s.inner.append(key, status);
-      const place = (order, lift = []) => order.forEach((no, slot) => {
-        const el = ps[no - 1];
-        el.classList.toggle('lift', lift.includes(no));
-        s.at(el, SLOT(slot), PAGE_Y - (lift.includes(no) ? 8 : 0));
-      });
-      const reset = () => {
-        ps.forEach((el) => el.classList.remove('sel', 'lift'));
-        place([1, 2, 3, 4, 5]);
-        key.classList.remove('pressed');
-        status.classList.remove('show');
-        s.moveCursor(200, 118);
-      };
-      return {
-        reset,
-        steps: [
-          [500, () => s.moveCursor(...center(1))],
-          [650, () => { s.click(); ps[1].classList.add('sel'); }],
-          [450, () => key.classList.add('pressed')],
-          [400, () => s.moveCursor(...center(3))],
-          [650, () => { s.click(); ps[3].classList.add('sel'); status.textContent = '2쪽 선택됨'; status.classList.add('show'); }],
-          [550, () => { key.classList.remove('pressed'); place([1, 2, 3, 4, 5], [2, 4]); }],
-          [350, () => {
-            // 두 장이 살짝 들린 채 커서를 따라 맨 앞으로
-            s.moveCursor(SLOT(0) + 22, PAGE_Y + 10);
-            s.at(ps[1], SLOT(0) - 4, PAGE_Y - 12);
-            s.at(ps[3], SLOT(0) + 4, PAGE_Y - 6);
-          }],
-          [800, () => { s.click(); place([2, 4, 1, 3, 5]); status.textContent = '순서 2, 4, 1, 3, 5'; }],
-          [2400, () => {}],
-        ],
-      };
-    }
-
-    // ② 이어진 쪽을 범위로 고르기
-    function demoRange(stage) {
-      const s = stageParts(stage);
-      const ps = minis(s.inner, 5);
-      const key = h('span', { class: 'demo-key' }, 'Shift');
-      const del = h('b', { class: 'demo-del' }, '삭제');
-      const count = h('span', null, '4쪽 선택됨 → ');
-      const status = h('span', { class: 'demo-status' }, count, del);
-      s.inner.append(key, status);
-      const reset = () => {
-        ps.forEach((el, k) => { el.classList.remove('sel', 'gone'); s.at(el, SLOT(k), PAGE_Y); });
-        key.classList.remove('pressed');
-        status.classList.remove('show');
-        del.classList.remove('hit');
-        s.moveCursor(200, 118);
-      };
-      return {
-        reset,
-        steps: [
-          [500, () => s.moveCursor(...center(1))],
-          [650, () => { s.click(); ps[1].classList.add('sel'); }],
-          [450, () => key.classList.add('pressed')],
-          [400, () => s.moveCursor(...center(4))],
-          [650, () => s.click()],
-          [120, () => ps[2].classList.add('sel')],
-          [120, () => ps[3].classList.add('sel')],
-          [120, () => { ps[4].classList.add('sel'); status.classList.add('show'); }],
-          [500, () => { key.classList.remove('pressed'); s.moveCursor(del.offsetLeft + status.offsetLeft + 14, status.offsetTop + 12); }],
-          [650, () => { s.click(); del.classList.add('hit'); }],
-          [250, () => ps.slice(1).forEach((el) => el.classList.add('gone'))],
-          [2400, () => {}],
-        ],
-      };
-    }
-
-    // ③ 돌리기는 90°씩
-    function demoRotate(stage) {
-      const s = stageParts(stage);
-      const page = h('div', { class: 'mini big' }, h('b', null, 'A'));
-      const left = h('span', { class: 'demo-btn' }, '↺');
-      const right = h('span', { class: 'demo-btn' }, '↻');
-      const deg = h('span', { class: 'demo-deg' }, '0°');
-      s.inner.append(page, left, right, deg);
-      s.at(page, 42, 26);
-      s.at(left, 138, 36);
-      s.at(right, 186, 36);
-      s.at(deg, 138, 80);
-      let turn = 0; // 누적 각도(부드럽게 돌도록), 보여 주는 숫자는 0/90/180/270
-      const show = () => {
-        page.style.transform = `translate(42px, 26px) rotate(${turn}deg)`;
-        deg.textContent = `${Core.normAngle(turn)}°`;
-      };
-      const press = (btn, dir) => {
-        s.click();
-        btn.classList.remove('press');
-        void btn.offsetWidth;
-        btn.classList.add('press');
-        turn += dir * 90;
-        show();
-      };
-      const reset = () => {
-        turn = 0;
-        show();
-        s.moveCursor(120, 118);
-      };
-      return {
-        reset,
-        steps: [
-          [500, () => s.moveCursor(204, 52)],
-          [650, () => press(right, 1)],
-          [900, () => press(right, 1)],
-          [900, () => s.moveCursor(156, 52)],
-          [650, () => press(left, -1)],
-          [900, () => press(left, -1)],
-          [2200, () => {}],
-        ],
-      };
-    }
-
-    const demos = [
-      timeline(aside.querySelector('#demo-move .demo-stage'), demoMove),
-      timeline(aside.querySelector('#demo-range .demo-stage'), demoRange),
-      timeline(aside.querySelector('#demo-rotate .demo-stage'), demoRotate),
-    ];
-
-    /** 패널이 실제로 보이는가 (접힘 · 서랍 닫힘 · 다른 도구 · 백그라운드 탭이면 아니다) */
+    const collapsed = () => isCollapsed(activeTab);
+    /** 패널이 실제로 보이는가 (접힘 · 서랍 닫힘 · 처음 화면 · 백그라운드 탭이면 아니다) */
     function isShown() {
       if (document.hidden || activeView !== 'work') return false;
-      return wide.matches ? !collapsed : drawer;
+      return wide.matches ? !collapsed() : drawer;
     }
     function sync() {
-      // 지금 도구의 사용법만 보인다. 움직이는 예시는 편집에만 있다.
+      // 지금 도구의 사용법만 보인다
       aside.querySelectorAll('.guide-sec').forEach((sec) => { sec.hidden = sec.dataset.guide !== activeTab; });
       if (still.matches) {
-        demos.forEach((d) => d.showLast());
+        Object.values(groups).flat().forEach((d) => d.showLast());
         return;
       }
-      const on = isShown() && activeTab === 'edit';
-      demos.forEach((d) => (on ? d.play() : d.pause()));
+      const shown = isShown();
+      for (const [key, list] of Object.entries(groups)) {
+        const on = shown && (key === activeTab || (key === 'download' && dl.open));
+        list.forEach((d) => (on ? d.play() : d.pause()));
+      }
     }
 
     function apply() {
       const isWide = wide.matches;
       if (isWide) drawer = false;
-      layout.classList.toggle('guide-collapsed', isWide && collapsed);
-      aside.classList.toggle('collapsed', isWide && collapsed);
+      const c = collapsed();
+      layout.classList.toggle('guide-collapsed', isWide && c);
+      aside.classList.toggle('collapsed', isWide && c);
       aside.classList.toggle('open', !isWide && drawer);
       backdrop.hidden = isWide || !drawer;
       foldBtn.textContent = isWide ? '접기' : '닫기';
-      foldBtn.setAttribute('aria-expanded', String(isWide ? !collapsed : drawer));
-      rail.setAttribute('aria-expanded', String(isWide && !collapsed));
+      foldBtn.setAttribute('aria-expanded', String(isWide ? !c : drawer));
+      rail.setAttribute('aria-expanded', String(isWide && !c));
       document.querySelectorAll('.guide-open').forEach((b) => b.setAttribute('aria-expanded', String(!isWide && drawer)));
       if (!isWide) aside.setAttribute('aria-hidden', String(!drawer)); else aside.removeAttribute('aria-hidden');
       sync();
@@ -5591,15 +5465,13 @@
     backdrop.addEventListener('click', closeDrawer);
     foldBtn.addEventListener('click', () => {
       if (wide.matches) {
-        collapsed = true;
-        saveCollapsed();
+        setCollapsed(activeTab, true);
         apply();
         rail.focus();
       } else closeDrawer();
     });
     rail.addEventListener('click', () => {
-      collapsed = false;
-      saveCollapsed();
+      setCollapsed(activeTab, false);
       apply();
       foldBtn.focus();
     });
@@ -5614,10 +5486,18 @@
     document.addEventListener('visibilitychange', sync);
 
     apply();
-    guideSync = sync;
+    // 도구를 옮기면 그 도구의 접힘 상태로 다시 그린다
+    guideSync = apply;
     return {
       sync,
-      state: () => ({ wide: wide.matches, collapsed, drawer, playing: demos.map((d) => d.playing) }),
+      state: () => ({
+        wide: wide.matches,
+        collapsed: collapsed(),
+        drawer,
+        dlOpen: dl.open,
+        playing: (groups[activeTab] || []).map((d) => d.playing),
+        playingBy: Object.fromEntries(Object.entries(groups).map(([k, v]) => [k, v.map((d) => d.playing)])),
+      }),
     };
   })();
 

@@ -1,6 +1,6 @@
 // 헤드리스 브라우저 점검 (playwright가 있을 때만).
 // 실행: node test/ui-check.mjs            점검만
-//       node test/ui-check.mjs --screens  점검 + docs/screens/ 에 스크린샷 5장 저장
+//       node test/ui-check.mjs --screens  점검 + docs/screens/ 에 스크린샷 저장
 //   playwright를 프로젝트 밖에 설치했다면 PLAYWRIGHT_DIR=그 폴더 로 알려 준다.
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
@@ -1143,7 +1143,7 @@ try {
     await until(x, () => !document.getElementById('edit-sizes').hidden);
     const sizeText = await x.textContent('#edit-sizes-text');
     // 빈 쪽 안내줄 (썸네일 렌더를 재사용해 찾는다)
-    await until(x, () => !document.getElementById('edit-blank').hidden && /빈 쪽으로 보이는 쪽이/.test(document.getElementById('edit-blank-text').textContent), undefined, { timeout: 20000 });
+    await until(x, () => !document.getElementById('edit-blank').hidden && /빈 쪽으로 보이는 쪽이/.test(document.getElementById('edit-blank-text').textContent) && !/찾는 중/.test(document.getElementById('edit-blank-text').textContent), undefined, { timeout: 20000 });
     const blankText = await x.textContent('#edit-blank-text');
     const badges = await x.$$eval('#edit-grid .page-card.blank', (els) => els.length);
     if (SCREENS) {
@@ -1341,6 +1341,222 @@ try {
     await mx.close();
   }
 
+  // ── 11-b. 모든 도구의 "이렇게 써요" 패널 (움직이는 예시 · 저장 위치 안내) ──
+  {
+    const TOOLS = ['edit', 'img2pdf', 'pdf2img', 'decorate', 'compress', 'security'];
+    /** 지금 보이는 예시 무대들의 모습(위치 · 클래스 · 글자)을 문자열로 */
+    const stageSnap = (pg, key) => pg.evaluate((k) => {
+      const figs = k === 'download'
+        ? [...document.querySelectorAll('#guide-dl figure.demo')]
+        : [...document.querySelectorAll(`#edit-guide .guide-sec[data-guide="${k}"] figure.demo`)];
+      return figs.map((f) => f.querySelector('.demo-stage').innerHTML);
+    }, key);
+    const changed = (a, b) => a.length > 0 && a.every((s, i) => s !== b[i]);
+    const gotoTool = async (pg, t) => {
+      await pg.click(`#tab-${t}`);
+      await until(pg, (x) => !document.getElementById(`panel-${x}`).hidden, t);
+    };
+
+    const gctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: 'light' });
+    const g = await gctx.newPage();
+    const gerr = [];
+    watch(g, gerr);
+    await g.goto(`${BASE}/#edit`, { waitUntil: 'networkidle' });
+    await until(g, () => !document.getElementById('view-work').hidden);
+
+    const seen = [];
+    for (const t of TOOLS) {
+      await gotoTool(g, t);
+      const box = await g.evaluate((x) => {
+        const sec = document.querySelector(`#edit-guide .guide-sec[data-guide="${x}"]`);
+        const r = sec.getBoundingClientRect();
+        const figs = [...sec.querySelectorAll('figure.demo')].map((f) => f.querySelector('.demo-stage').getBoundingClientRect());
+        const steps = sec.querySelectorAll('.guide-steps li').length;
+        const faq = sec.querySelectorAll('.faq .faq-item').length;
+        const others = [...document.querySelectorAll('#edit-guide .guide-sec')].filter((s) => s !== sec && s.getBoundingClientRect().height > 0).length;
+        return { w: Math.round(r.width), h: Math.round(r.height), figs: figs.map((f) => Math.round(f.height)), steps, faq, others };
+      }, t);
+      const a = await stageSnap(g, t);
+      await g.waitForTimeout(1600);
+      const b = await stageSnap(g, t);
+      const st = await g.evaluate(() => window.__pdfWorkshop.guide());
+      const othersStopped = Object.entries(st.playingBy).every(([k, v]) => k === t || k === 'download' || v.every((p) => !p));
+      const ok = box.w > 250 && box.h > 200 && box.figs.length >= 2 && box.figs.every((hgt) => hgt >= 100) && box.others === 0 &&
+        (t === 'edit' || (box.steps === 3 && box.faq === 2)) && changed(a, b) && st.playing.every(Boolean) && othersStopped;
+      seen.push(`${t}${ok ? '' : `✗(${JSON.stringify(box)} 변화 ${changed(a, b)})`}`);
+    }
+    check('도구 6곳 모두 사용법 패널이 보이고 예시가 실제로 움직임 (다른 도구 예시는 멈춤)', seen.every((s) => !s.includes('✗')), seen.join(' · '));
+
+    // 공통 "저장한 파일은 어디로 가나요?"
+    const dlBox = await g.evaluate(() => {
+      const d = document.getElementById('guide-dl');
+      const r = d.getBoundingClientRect();
+      return { open: d.open, h: Math.round(r.height), where: document.getElementById('dl-where').textContent };
+    });
+    const d1 = await stageSnap(g, 'download');
+    await g.waitForTimeout(1600);
+    const d2 = await stageSnap(g, 'download');
+    check('공통 "저장한 파일은 어디로 가나요?" 보임 · 움직임 · 크롬 안내 문장', dlBox.open && dlBox.h > 150 && changed(d1, d2) && /크롬/.test(dlBox.where),
+      `높이 ${dlBox.h}px · "${dlBox.where.slice(0, 40)}…"`);
+
+    // 다른 도구로 옮기면 이전 도구 예시가 멈춘다(모습이 더 안 바뀜)
+    await gotoTool(g, 'img2pdf');
+    await g.waitForTimeout(300);
+    await gotoTool(g, 'compress');
+    const p1 = await stageSnap(g, 'img2pdf');
+    await g.waitForTimeout(1500);
+    const p2 = await stageSnap(g, 'img2pdf');
+    const swSt = await g.evaluate(() => window.__pdfWorkshop.guide());
+    check('도구를 옮기면 이전 도구 예시는 멈춤', p1.join() === p2.join() && swSt.playingBy.img2pdf.every((p) => !p) && swSt.playing.every(Boolean),
+      `사진→PDF 재생 ${swSt.playingBy.img2pdf.join('/')}, 용량 줄이기 재생 ${swSt.playing.join('/')}`);
+
+    // 접기는 도구마다 · 새로고침해도 유지 / 저장 위치 안내 접힘은 모든 도구 공통
+    await gotoTool(g, 'pdf2img');
+    await g.click('#guide-dl > summary');
+    await g.click('#guide-fold');
+    await g.reload({ waitUntil: 'networkidle' });
+    await until(g, () => !document.getElementById('view-work').hidden);
+    await gotoTool(g, 'pdf2img');
+    const fold1 = await g.evaluate(() => window.__pdfWorkshop.guide());
+    await gotoTool(g, 'security');
+    const fold2 = await g.evaluate(() => window.__pdfWorkshop.guide());
+    await gotoTool(g, 'pdf2img');
+    await g.click('#guide-rail');
+    await g.click('#guide-dl > summary');
+    const fold3 = await g.evaluate(() => window.__pdfWorkshop.guide());
+    check('접기 상태가 도구별로 저장 · "어디로 가나요" 접힘은 모든 도구 공통',
+      fold1.collapsed && fold1.playing.every((p) => !p) && !fold1.dlOpen && !fold2.collapsed && !fold2.dlOpen && fold2.playingBy.download.every((p) => !p) &&
+      !fold3.collapsed && fold3.dlOpen && fold3.playing.every(Boolean),
+      `새로고침 후 PDF→사진 접힘=${fold1.collapsed}, 보안 접힘=${fold2.collapsed}, 안내 열림=${fold2.dlOpen}`);
+
+    // 백그라운드 탭이면 멈춤
+    await g.evaluate(() => {
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    const bg = await g.evaluate(() => window.__pdfWorkshop.guide());
+    await g.evaluate(() => {
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    const fg = await g.evaluate(() => window.__pdfWorkshop.guide());
+    check('백그라운드 탭에서는 예시가 멈춤', bg.playing.every((p) => !p) && fg.playing.every(Boolean), `숨김 ${bg.playing.join('/')} → 다시 ${fg.playing.join('/')}`);
+
+    // 1600px 이상: 패널 360px, 빈 화면 카드는 가운데 최대 1100px
+    await g.setViewportSize({ width: 1920, height: 1000 });
+    await gotoTool(g, 'img2pdf');
+    const wideBox = await g.evaluate(() => {
+      const gd = document.getElementById('edit-guide').getBoundingClientRect();
+      const e = document.querySelector('#panel-img2pdf .empty').getBoundingClientRect();
+      const col = document.querySelector('#panel-img2pdf .empty').parentElement.getBoundingClientRect();
+      return { gw: Math.round(gd.width), ew: Math.round(e.width), center: Math.abs((e.left + e.right) / 2 - (col.left + col.right) / 2) };
+    });
+    check('1920px: 사용법 패널 360px · 빈 화면 카드 최대 1100px 가운데', wideBox.gw === 360 && wideBox.ew <= 1100 && wideBox.center <= 2,
+      `패널 ${wideBox.gw}px · 카드 ${wideBox.ew}px · 가운데 차이 ${Math.round(wideBox.center)}px`);
+    check('사용법 패널 흐름 콘솔 에러 0개', gerr.length === 0, gerr.length ? gerr.join(' | ').slice(0, 300) : '0개');
+
+    // 접근성: 예시 무대는 화면 읽기에서 숨김, 설명은 글자로
+    const a11y = await g.evaluate(() => {
+      const stages = [...document.querySelectorAll('#edit-guide .demo-stage')];
+      const caps = [...document.querySelectorAll('#edit-guide figure.demo figcaption')];
+      return { n: stages.length, hidden: stages.every((s) => s.getAttribute('aria-hidden') === 'true'), caps: caps.length, capText: caps.every((c) => c.textContent.trim().length > 10) };
+    });
+    check('예시 무대는 aria-hidden, 설명은 글자로 읽힘', a11y.hidden && a11y.caps === a11y.n && a11y.capText, `무대 ${a11y.n}개 · 설명 ${a11y.caps}개`);
+    await gctx.close();
+
+    // 움직임 줄이기: 마지막 장면만 멈춰서
+    const rctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: 'light', reducedMotion: 'reduce' });
+    const r = await rctx.newPage();
+    const rerr = [];
+    watch(r, rerr);
+    await r.goto(`${BASE}/#edit`, { waitUntil: 'networkidle' });
+    await until(r, () => !document.getElementById('view-work').hidden);
+    const still = [];
+    for (const t of TOOLS) {
+      await gotoTool(r, t);
+      const a = await stageSnap(r, t);
+      await r.waitForTimeout(900);
+      const b = await stageSnap(r, t);
+      const st = await r.evaluate(() => window.__pdfWorkshop.guide());
+      const filled = a.every((s) => s.length > 200);
+      still.push(`${t}${a.join() === b.join() && filled && st.playing.every((p) => !p) ? '' : '✗'}`);
+    }
+    check('움직임 줄이기 설정: 예시가 마지막 장면으로 멈춤', still.every((s) => !s.includes('✗')) && rerr.length === 0, still.join(' · '));
+    await rctx.close();
+
+    // 1000px: 모든 도구에서 "사용법" 서랍
+    const dctx = await browser.newContext({ viewport: { width: 1000, height: 800 }, colorScheme: 'light' });
+    const dp = await dctx.newPage();
+    const derr = [];
+    watch(dp, derr);
+    await dp.goto(`${BASE}/#edit`, { waitUntil: 'networkidle' });
+    await until(dp, () => !document.getElementById('view-work').hidden);
+    const drawers = [];
+    for (const t of TOOLS.slice(1)) {
+      await gotoTool(dp, t);
+      const before = await dp.evaluate(() => window.__pdfWorkshop.guide());
+      await dp.click(`#panel-${t} .guide-open`);
+      await dp.waitForTimeout(300);
+      const open = await dp.evaluate((x) => {
+        const g2 = document.getElementById('edit-guide').getBoundingClientRect();
+        const sec = document.querySelector(`#edit-guide .guide-sec[data-guide="${x}"]`).getBoundingClientRect();
+        return { w: Math.round(g2.width), right: Math.round(g2.right), sec: Math.round(sec.height), st: window.__pdfWorkshop.guide() };
+      }, t);
+      await dp.keyboard.press('Escape');
+      const after = await dp.evaluate(() => window.__pdfWorkshop.guide());
+      const ok = before.playing.every((p) => !p) && open.w >= 300 && open.right === 1000 && open.sec > 200 && open.st.drawer && open.st.playing.every(Boolean) && !after.drawer;
+      drawers.push(`${t}${ok ? '' : '✗'}`);
+    }
+    check('1000px: 모든 도구에서 [사용법] → 서랍으로 열림 · Esc로 닫힘', drawers.every((s) => !s.includes('✗')) && derr.length === 0, drawers.join(' · '));
+    await dctx.close();
+
+    // 400px: 도구마다 가로 스크롤 없음 (서랍 열어도)
+    const sctx = await browser.newContext({ viewport: { width: 400, height: 860 }, isMobile: true, hasTouch: true, colorScheme: 'light', deviceScaleFactor: 2 });
+    const sp = await sctx.newPage();
+    const serr = [];
+    watch(sp, serr);
+    await sp.goto(`${BASE}/#edit`, { waitUntil: 'networkidle' });
+    await until(sp, () => !document.getElementById('view-work').hidden);
+    const sws = [];
+    for (const t of TOOLS) {
+      await gotoTool(sp, t);
+      const s1 = await sp.evaluate(() => document.documentElement.scrollWidth);
+      await sp.click(`#panel-${t} .guide-open`);
+      await sp.waitForTimeout(300);
+      const s2 = await sp.evaluate(() => ({ sw: document.documentElement.scrollWidth, gw: Math.round(document.getElementById('edit-guide').getBoundingClientRect().width) }));
+      await sp.keyboard.press('Escape');
+      sws.push({ t, s1, ...s2 });
+    }
+    check('400px: 도구 6곳 가로 스크롤 없음 (사용법 서랍 열어도)', sws.every((x) => x.s1 <= 400 && x.sw <= 400 && x.gw <= 400) && serr.length === 0,
+      sws.map((x) => `${x.t} ${x.s1}/${x.sw}`).join(' · '));
+    await sctx.close();
+
+    // 자동 접근성 검사(axe-core): 심각(critical) 0개
+    const axePath = require.resolve('axe-core/axe.min.js');
+    const actx = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: 'light', bypassCSP: true });
+    const ap = await actx.newPage();
+    await ap.goto(BASE, { waitUntil: 'networkidle' });
+    await ap.addScriptTag({ path: axePath });
+    const axeRun = () => ap.evaluate(async () => {
+      const res = await window.axe.run(document, { resultTypes: ['violations'] });
+      return res.violations.map((v) => ({ id: v.id, impact: v.impact, n: v.nodes.length, where: v.nodes[0] && v.nodes[0].target.join(' ') }));
+    });
+    const axeAll = [];
+    axeAll.push({ where: 'home', v: await axeRun() });
+    await ap.click('.tool-card[data-open="edit"]');
+    for (const t of TOOLS) {
+      await gotoTool(ap, t);
+      await ap.waitForTimeout(200);
+      axeAll.push({ where: t, v: await axeRun() });
+    }
+    const crit = axeAll.flatMap((x) => x.v.filter((v) => v.impact === 'critical').map((v) => `${x.where}:${v.id}(${v.where})`));
+    const serious = [...new Set(axeAll.flatMap((x) => x.v.filter((v) => v.impact === 'serious').map((v) => v.id)))];
+    const ver = JSON.parse(fs.readFileSync(path.join(path.dirname(axePath), 'package.json'), 'utf8')).version;
+    check(`자동 접근성 검사(axe-core ${ver}): 처음 화면 + 도구 6곳 심각(critical) · 중대(serious) 0개`, crit.length === 0 && serious.length === 0,
+      crit.length ? crit.join(' | ').slice(0, 300) : `critical 0개 · serious ${serious.length ? serious.join(',') : '0개'}`);
+    await actx.close();
+  }
+
   // ── 12. 스크린샷 ──
   if (SCREENS) {
     const out = path.join(root, 'docs', 'screens');
@@ -1399,6 +1615,29 @@ try {
     await np.waitForTimeout(4200);
     await np.screenshot({ path: path.join(out, 'guide-drawer.png') });
     await nd.close();
+
+    // 도구별 사용법 패널 · 저장 위치 안내 · 1920px 빈 화면
+    const gd = await browser.newContext({ viewport: { width: 1440, height: 1000 }, colorScheme: 'light', deviceScaleFactor: 1 });
+    const gp = await gd.newPage();
+    await gp.goto(`${BASE}/#edit`, { waitUntil: 'networkidle' });
+    await gp.evaluate(() => document.fonts.ready);
+    for (const [t, name] of [['img2pdf', 'guide-img2pdf'], ['pdf2img', 'guide-pdf2img'], ['decorate', 'guide-decorate'], ['compress', 'guide-compress'], ['security', 'guide-security']]) {
+      await gp.click(`#tab-${t}`);
+      await gp.mouse.move(5, 5);
+      await gp.waitForTimeout(3400); // 예시가 결과 장면쯤 오도록
+      await gp.screenshot({ path: path.join(out, `${name}.png`) });
+    }
+    await gp.evaluate(() => { const b = document.querySelector('#edit-guide .guide-body') || document.getElementById('edit-guide'); document.getElementById('guide-dl').scrollIntoView({ block: 'start' }); b.scrollTop = Math.max(0, b.scrollTop - 8); });
+    await gp.waitForTimeout(3000);
+    const gb = await gp.locator('#edit-guide').boundingBox();
+    await gp.screenshot({ path: path.join(out, 'guide-download.png'), clip: { x: gb.x - 8, y: 0, width: gb.width + 16, height: 1000 } });
+    await gp.setViewportSize({ width: 1920, height: 1080 });
+    await gp.click('#tab-edit');
+    await gp.evaluate(() => { window.scrollTo(0, 0); document.querySelectorAll('#edit-guide, #edit-guide *').forEach((e) => { if (e.scrollTop) e.scrollTop = 0; }); });
+    await gp.mouse.move(5, 5);
+    await gp.waitForTimeout(3000);
+    await gp.screenshot({ path: path.join(out, 'wide-empty.png') });
+    await gd.close();
     console.log(`스크린샷: ${out}`);
   }
 } catch (e) {

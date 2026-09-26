@@ -37,9 +37,16 @@
 - 1쪽 이상 고르면 작업 영역 위에 파란 **선택 막대**가 붙습니다(스크롤해도 보임): 왼쪽 90° · 오른쪽 90° · 맨 앞으로 · 맨 뒤로 · 몇 쪽 뒤로… · 선택한 쪽만 저장 · 삭제/복구 · 되돌리기 · 선택 해제. 좁으면 덜 쓰는 버튼은 "더보기"로 접힙니다.
 - 고른 카드를 끌면 고른 쪽이 모두 원래 순서대로 함께 옮겨집니다. 커서 옆에 겹친 카드와 "N쪽" 배지가 보이고, 화면 위·아래 끝에 가까우면 자동으로 스크롤합니다.
 - 옮기기 · 회전 · 삭제 · 교체는 50단계까지 되돌릴 수 있습니다.
-- 폭 1280px 이상에서는 오른쪽에 **"이렇게 써요"** 패널(움직이는 예시 3개 + 단축키)이 있고, 접으면 얇은 막대만 남습니다(접힘 상태 기억). 그보다 좁으면 제목 옆 [사용법] 버튼으로 오른쪽 서랍을 엽니다.
+- **모든 도구**(편집 · 사진→PDF · PDF→사진 · 꾸미기 · 용량 줄이기 · 보안)에 오른쪽 **"이렇게 써요"** 패널이 있습니다. 도구마다 움직이는 예시 2개(편집은 3개 + 단축키), 순서 3단계, "자주 막히는 곳" 2개가 있고, 아래에 공통 **"저장한 파일은 어디로 가나요?"**(크롬 · 엣지 · 웨일 · 사파리별 안내, 접으면 모든 도구에서 접힘)가 붙습니다.
+- 폭 1280px 이상에서는 패널이 오른쪽에 붙고(1600px 이상은 360px), [접기]를 누르면 얇은 막대만 남습니다. 접힘은 도구마다 따로 기억합니다. 그보다 좁으면 제목 옆 [사용법] 버튼으로 오른쪽 서랍을 엽니다.
+- 예시는 보이는 도구의 것만 움직이고, 접히거나 서랍이 닫히거나 브라우저 탭이 뒤로 가면 멈춥니다. 운영체제에서 "움직임 줄이기"를 켜면 마지막 장면으로 멈춰 보여 줍니다. 예시 그림은 화면 읽기 프로그램에서 숨기고 아래 설명 글을 읽게 했습니다.
+- 넓은 화면에서도 빈 화면 카드와 단계 카드는 최대 1100px로 가운데에 두고, 파일을 넣은 뒤의 쪽 그리드는 전체 폭을 씁니다.
 
 ![사용법 서랍](docs/screens/guide-drawer.png)
+
+![사진→PDF 사용법](docs/screens/guide-img2pdf.png)
+![저장 위치 안내](docs/screens/guide-download.png)
+![1920px 빈 화면](docs/screens/wide-empty.png)
 
 ![설정하고 저장](docs/screens/save-dialog.png)
 
@@ -178,6 +185,8 @@ npm run screens     # 점검 + docs/screens/ 스크린샷 다시 찍기
 node test/real-files.mjs "경로/파일1.pdf" "경로/파일2.pdf"   # 실제 PDF로 node · 브라우저(Worker · 메인 스레드) 실측. 파일은 저장소에 넣지 않음
 ```
 
+`test:ui`에는 모든 도구의 사용법 패널(보임 · 움직임 · 도구 바꾸면 멈춤 · 접힘 기억 · 움직임 줄이기 · 1000px 서랍 · 400px 가로 스크롤)과 axe-core 자동 접근성 검사(처음 화면 + 도구 6곳, critical · serious 0개)가 들어 있습니다.
+
 `test:ui`는 프로젝트에 playwright가 없으면 `PLAYWRIGHT_DIR=<playwright를 설치한 폴더>`로 위치를 알려 줄 수 있습니다.
 
 ## 구성
@@ -187,6 +196,7 @@ server.js            express 정적 서버 (+ /vendor/* 로 라이브러리 제�
 public/index.html    화면 (처음 화면 + 작업 화면, 선 아이콘 SVG 스프라이트)
 public/style.css     스타일 (라이트/다크, 반응형)
 public/pdf-core.js   PDF 핵심 로직: 쪽 순서 순수 함수, 나눠 저장 계획(splitGroups), 워터마크, 서명·도장 자리, 걸린 제한 읽기 (브라우저와 검증 스크립트가 함께 씀)
+public/guide-anim.js 사용법 패널의 움직이는 예시(작은 DOM 무대 + 시간표, 무한 반복)
 public/compress.js   용량 줄이기 엔진 (1·2단계, 이진 탐색, 사진 파일) — 그림 codec만 환경마다 넘겨받음
 public/compress-worker.js  용량 줄이기를 Web Worker에서 돌리는 얇은 껍데기
 public/app.js        화면 동작
@@ -205,6 +215,7 @@ scripts/write-build-info.mjs  배포 직전 커밋·시각 기록 (npm run deplo
 - [pdfjs-dist](https://github.com/mozilla/pdf.js) 3.11.174 — 썸네일, PDF → 이미지
 - [JSZip](https://stuk.github.io/jszip/) 3.10.1 — 여러 파일을 zip으로 묶기
 - [express](https://expressjs.com/) 4.21.2 — 정적 파일 서버
+- [axe-core](https://github.com/dequelabs/axe-core) 4.13.0 — 개발용, 자동 접근성 검사(ui-check)
 - [Pretendard](https://github.com/orioncactus/pretendard) 1.3.9 — 글꼴 (SIL OFL). 한글 워터마크에는 `Pretendard-Bold.otf`를 `/vendor/fonts/`로 제공하고 워터마크를 쓸 때만 불러와 서브셋으로 넣음
 - [@cantoo/fontkit](https://github.com/cantoo-scribe/fontkit) 2.0.12 — @cantoo/pdf-lib용 글꼴 처리(서브셋). `@pdf-lib/fontkit` 1.1.1은 Pretendard 서브셋에서 오류가 나서 이 포크를 씀. `/vendor/fontkit.min.js`
 - [heic-to](https://github.com/hoppergee/heic-to) 1.5.2 — 아이폰 HEIC/HEIF → JPEG (libheif 1.22.2, LGPL-3.0). CSP용 빌드(eval · new Function 없음)를 `/vendor/heic/heic-to.js`로 제공하고 HEIC 사진이 들어올 때만 불러옴(약 3MB). 라이선스: `/vendor/heic/LICENSE`
