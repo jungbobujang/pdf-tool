@@ -53,6 +53,11 @@
       <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4"/><path d="m6.5 9.5 5.5-5.5 5.5 5.5"/><path d="M4 16v2.5A2.5 2.5 0 0 0 6.5 21h11a2.5 2.5 0 0 0 2.5-2.5V16"/></symbol>
       <symbol id="i-rotate" viewBox="0 0 24 24"><path d="M20 11.5A8 8 0 1 1 17.7 6"/><path d="M20 4v5h-5"/></symbol>
       <symbol id="i-swap" viewBox="0 0 24 24"><path d="M4 8h15"/><path d="m15 4 4 4-4 4"/><path d="M20 16H5"/><path d="m9 12-4 4 4 4"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></symbol>
+      <symbol id="i-zoom-in" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2M8 11h6M11 8v6"/></symbol>
+      <symbol id="i-zoom-out" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2M8 11h6"/></symbol>
+      <symbol id="i-left" viewBox="0 0 24 24"><path d="m15 5-7 7 7 7"/></symbol>
+      <symbol id="i-right" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
       <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
       <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
       <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
@@ -242,12 +247,12 @@
     <main class="work">
      <div class="work-layout">
      <div class="work-main">
-      <!-- 편집 · 합치기 · 자르기 -->
+      <!-- 편집 · 합치기 -->
       <section class="panel panel-edit" id="panel-edit" role="tabpanel" aria-labelledby="tab-edit">
        <div class="edit-main">
         <header class="tool-head with-guide">
           <div>
-            <h1>편집 · 합치기 · 자르기</h1>
+            <h1>편집 · 합치기</h1>
             <p>여러 PDF를 한 화면에 펼쳐 순서를 바꾸고, 필요 없는 쪽을 빼고, 합쳐서 저장해요.</p>
           </div>
           <button type="button" class="btn guide-open" id="guide-open" aria-controls="edit-guide" aria-expanded="false"><svg class="ic sm" aria-hidden="true"><use href="#i-help"/></svg>사용법</button>
@@ -270,6 +275,16 @@
 
         <div class="locks" id="edit-locks"></div>
         <ul class="chips" id="edit-chips" aria-label="넣은 파일"></ul>
+        <div class="find-bar" id="edit-find-bar" hidden>
+          <label class="find-box">
+            <svg class="ic sm" aria-hidden="true"><use href="#i-search"/></svg>
+            <input type="search" id="edit-find" placeholder="쪽 안의 글자로 찾기 (예: 3단원)" aria-label="쪽 안의 글자로 찾기" autocomplete="off" spellcheck="false" enterkeyhint="search">
+          </label>
+          <span class="find-status" id="edit-find-status" role="status" aria-live="polite"></span>
+          <button type="button" class="icon-btn" id="edit-find-prev" aria-label="이전 찾은 쪽 (Shift+Enter)" title="이전 찾은 쪽 (Shift+Enter)" disabled><svg class="ic sm" aria-hidden="true"><use href="#i-left"/></svg></button>
+          <button type="button" class="icon-btn" id="edit-find-next" aria-label="다음 찾은 쪽 (Enter)" title="다음 찾은 쪽 (Enter)" disabled><svg class="ic sm" aria-hidden="true"><use href="#i-right"/></svg></button>
+        </div>
+        <p class="notice find-note" id="edit-find-note" hidden></p>
         <div class="notice size-note" id="edit-sizes" hidden>
           <p id="edit-sizes-text"></p>
           <fieldset class="seg compact"><legend class="sr-only">쪽 크기</legend>
@@ -278,6 +293,7 @@
             <label><input type="radio" name="sizefix" value="rotate"><span>가로 쪽은 돌려서</span></label>
           </fieldset>
           <label class="paper-sel">기준 <select id="sizefix-paper" aria-label="기준 종이"><option value="a4" selected>A4</option><option value="letter">Letter</option></select></label>
+          <p class="size-annot" id="edit-sizes-annot" hidden></p>
         </div>
         <div class="notice blank-note" id="edit-blank" hidden>
           <p id="edit-blank-text"></p>
@@ -859,6 +875,32 @@
         <button class="btn primary" value="ok" id="replace-ok" disabled>교체</button>
       </div>
     </form>
+  </dialog>
+
+  <!-- 쪽 크게 보기 -->
+  <dialog id="viewer" class="viewer" aria-labelledby="viewer-title">
+    <div class="viewer-bar">
+      <div class="viewer-head">
+        <strong id="viewer-title"></strong>
+        <span class="viewer-state" id="viewer-state"></span>
+      </div>
+      <div class="viewer-tools">
+        <button type="button" class="icon-btn" id="vw-prev" aria-label="이전 쪽 (←)" title="이전 쪽 (←)"><svg class="ic sm" aria-hidden="true"><use href="#i-left"/></svg></button>
+        <button type="button" class="icon-btn" id="vw-next" aria-label="다음 쪽 (→)" title="다음 쪽 (→)"><svg class="ic sm" aria-hidden="true"><use href="#i-right"/></svg></button>
+        <span class="viewer-sep" aria-hidden="true"></span>
+        <button type="button" class="icon-btn" id="vw-out" aria-label="작게 보기 (-)" title="작게 보기 (-)"><svg class="ic sm" aria-hidden="true"><use href="#i-zoom-out"/></svg></button>
+        <button type="button" class="btn sm viewer-zoom" id="vw-zoom" title="화면에 맞추기 (0)">100%</button>
+        <button type="button" class="icon-btn" id="vw-in" aria-label="크게 보기 (+)" title="크게 보기 (+)"><svg class="ic sm" aria-hidden="true"><use href="#i-zoom-in"/></svg></button>
+        <span class="viewer-sep" aria-hidden="true"></span>
+        <button type="button" class="icon-btn" id="vw-rotl" aria-label="왼쪽으로 90° 회전" title="왼쪽으로 90° 회전"><svg class="ic sm" aria-hidden="true"><use href="#i-rotate-left"/></svg></button>
+        <button type="button" class="icon-btn" id="vw-rot" aria-label="오른쪽으로 90° 회전" title="오른쪽으로 90° 회전"><svg class="ic sm" aria-hidden="true"><use href="#i-rotate"/></svg></button>
+        <button type="button" class="icon-btn" id="vw-rep" aria-label="다른 쪽으로 교체" title="다른 쪽으로 교체"><svg class="ic sm" aria-hidden="true"><use href="#i-swap"/></svg></button>
+        <button type="button" class="btn sm viewer-del" id="vw-del">삭제 예정</button>
+        <span class="viewer-sep" aria-hidden="true"></span>
+        <button type="button" class="icon-btn" id="vw-close" aria-label="닫기 (Esc)" title="닫기 (Esc)"><svg class="ic sm" aria-hidden="true"><use href="#i-x"/></svg></button>
+      </div>
+    </div>
+    <div class="viewer-stage" id="viewer-stage"></div>
   </dialog>
 
   <!-- 새 소식 -->

@@ -551,6 +551,26 @@
    * mode: 'fit'(가로 쪽도 그대로 줄여 넣음) | 'rotate'(가로 쪽은 90° 돌려 세로에 맞춤)
    * 글자는 그대로 남는다(쪽이 폼 XObject로 들어감). 쪽의 주석 · 링크는 빠진다.
    */
+  /**
+   * 쪽에 붙은 링크 · 주석 수. 쪽 크기를 맞추면(쪽을 그림처럼 옮겨 그리므로) 이것들은 사라진다.
+   * Popup은 주석에 딸린 창이라 세지 않는다. 양식 칸(Widget)도 사라지므로 주석으로 센다.
+   * @returns {{links:number, notes:number}}
+   */
+  function countAnnots(page) {
+    const out = { links: 0, notes: 0 };
+    try {
+      const annots = page.node.Annots();
+      if (!annots) return out;
+      for (let i = 0; i < annots.size(); i++) {
+        const a = annots.lookup(i);
+        const sub = a && a.get ? String(a.get(PDFLib.PDFName.of('Subtype')) || '') : '';
+        if (sub === '/Link') out.links++;
+        else if (sub && sub !== '/Popup') out.notes++;
+      }
+    } catch (e) { /* 읽지 못하면 0으로 본다 */ }
+    return out;
+  }
+
   async function normalizePages(src, { paper = 'a4', mode = 'fit' } = {}, onProgress) {
     const P = PAPERS[paper] || PAPERS.a4;
     const out = await PDFDocument.create();
@@ -752,6 +772,7 @@
     classifySize,
     sizeSummary,
     normalizePages,
+    countAnnots,
     interleave,
     whiteRatio,
     isBlankPage,

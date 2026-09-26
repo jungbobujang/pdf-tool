@@ -1867,6 +1867,128 @@ try {
       `ES2020 없음 → 안내 ${Math.round(old.note)}px · 앱 ${old.home}px · JS 꺼짐 → 안내 글 ${/열 수 없어요/.test(nojs) ? '보임' : '없음'}`);
   }
 
+  // ── 11-f. 쪽 크게 보기 · 글자로 찾기 · 붙여넣기 · 크기 맞추기 링크 경고 ──
+  {
+    const vctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: 'light', acceptDownloads: true });
+    const v = await vctx.newPage();
+    const verr = [];
+    watch(v, verr);
+    await v.goto(BASE, { waitUntil: 'networkidle' });
+    await v.setInputFiles('#home-input', [fileA, fileB]);
+    await until(v, () => document.querySelectorAll('#edit-grid .page-card canvas').length === 7, undefined, { timeout: 20000 });
+    const vcard = v.locator('#edit-grid .page-card').nth(1);
+    await vcard.dblclick({ position: { x: 60, y: 60 } });
+    await until(v, () => { const s = window.__pdfWorkshop.viewer(); return s.open && s.canvas; }, undefined, { timeout: 15000 });
+    const v1 = await v.evaluate(() => ({ st: window.__pdfWorkshop.viewer(), title: document.getElementById('viewer-title').textContent }));
+    if (SCREENS) await v.screenshot({ path: path.join(root, 'docs', 'screens', 'viewer.png') });
+    await v.keyboard.press('ArrowRight');
+    await until(v, () => window.__pdfWorkshop.viewer().i === 2 && /:2:/.test(window.__pdfWorkshop.viewer().rendered || '') || window.__pdfWorkshop.viewer().rendered.includes(':2:0:'), undefined, { timeout: 10000 }).catch(() => {});
+    await v.waitForTimeout(300);
+    const v2 = await v.evaluate(() => ({ st: window.__pdfWorkshop.viewer(), title: document.getElementById('viewer-title').textContent }));
+    await v.keyboard.press('+');
+    await until(v, () => window.__pdfWorkshop.viewer().rendered.includes(':1.25:'), undefined, { timeout: 10000 });
+    const v3 = await v.evaluate(() => window.__pdfWorkshop.viewer());
+    await v.click('#vw-rot');
+    await v.click('#vw-del');
+    await until(v, () => window.__pdfWorkshop.viewer().rendered.includes(':90:'), undefined, { timeout: 10000 });
+    const v4 = await v.evaluate(() => ({ state: document.getElementById('viewer-state').textContent, card: document.querySelectorAll('#edit-grid .page-card')[2].getAttribute('aria-label'), del: document.querySelectorAll('#edit-grid .page-card')[2].classList.contains('deleted') }));
+    await v.click('#vw-rep');
+    const repOpen = await v.evaluate(() => document.getElementById('replace-dialog').open && document.getElementById('viewer').open);
+    await v.keyboard.press('Escape');
+    await v.waitForTimeout(150);
+    const afterRep = await v.evaluate(() => ({ rep: document.getElementById('replace-dialog').open, viewer: document.getElementById('viewer').open }));
+    await v.keyboard.press('Escape');
+    await v.waitForTimeout(200); // 닫힘(close) 이벤트는 한 박자 뒤에 온다
+    const closed = await v.evaluate(() => ({ open: document.getElementById('viewer').open, focus: document.activeElement && document.activeElement.classList.contains('page-card') && [...document.querySelectorAll('#edit-grid .page-card')].indexOf(document.activeElement) }));
+    // 키보드: 카드에서 Enter
+    await v.keyboard.press('Enter');
+    await until(v, () => window.__pdfWorkshop.viewer().open);
+    const enterIdx = await v.evaluate(() => window.__pdfWorkshop.viewer().i);
+    await v.keyboard.press('Escape');
+    await v.keyboard.press('Control+z');
+    await v.keyboard.press('Control+z');
+    check('쪽 크게 보기: 더블클릭 · Enter로 열기, ←→ 이동, +/- 확대, 회전 · 삭제 예정 · 교체, Esc로 닫고 카드로 돌아옴',
+      v1.st.i === 1 && v1.st.canvas.cssH > 600 && /2 \/ 7/.test(v1.title) && v2.st.i === 2 && v3.zoom === 1.25 && v3.canvas.cssH > v1.st.canvas.cssH * 1.2 &&
+      /삭제 예정/.test(v4.state) && /90° 회전/.test(v4.state) && v4.del && repOpen && !afterRep.rep && afterRep.viewer && !closed.open && closed.focus === 2 && enterIdx === 2,
+      `크기 ${Math.round(v1.st.canvas.cssW)}×${Math.round(v1.st.canvas.cssH)}px(캔버스 ${v1.st.canvas.w}×${v1.st.canvas.h}) → 125% ${Math.round(v3.canvas.cssH)}px · "${v4.state}" · 교체 창 위에 뜸 · Esc 후 ${closed.focus}번 카드에 포커스`);
+
+    // 글자로 찾기 (한글 글꼴을 넣은 PDF + 글자 없는 스캔본)
+    const fontkit = require('@cantoo/fontkit');
+    const kd = await PDFDocument.create();
+    kd.registerFontkit(fontkit);
+    const kf = await kd.embedFont(fs.readFileSync(path.join(root, 'node_modules', 'pretendard', 'dist', 'public', 'static', 'Pretendard-Bold.otf')), { subset: true });
+    [['3단원 요약', '3단원 문제'], ['4단원 요약'], ['3 단원 복습']].forEach((lines) => {
+      const pg = kd.addPage([595, 842]);
+      lines.forEach((t, i) => pg.drawText(t, { x: 60, y: 760 - i * 60, size: 32, font: kf }));
+    });
+    const kFile = await writePdf('학습지.pdf', kd);
+    const sd = await PDFDocument.create();
+    sd.addPage([595, 842]).drawImage(await sd.embedJpg(photoJpeg(600, 800, 5)), { x: 0, y: 0, width: 595, height: 842 });
+    const sFile = await writePdf('스캔본.pdf', sd);
+    await v.click('#logo');
+    await v.setInputFiles('#home-input', [kFile, sFile]);
+    await until(v, () => document.querySelectorAll('#edit-grid .page-card').length === 4);
+    await v.fill('#edit-find', '3단원');
+    await until(v, () => /곳|없어요/.test(document.getElementById('edit-find-status').textContent), undefined, { timeout: 15000 });
+    const f1 = await v.evaluate(() => ({
+      status: document.getElementById('edit-find-status').textContent,
+      badges: [...document.querySelectorAll('#edit-grid .page-card')].map((c) => c.dataset.found || ''),
+      note: document.getElementById('edit-find-note').hidden ? '' : document.getElementById('edit-find-note').textContent,
+    }));
+    await v.focus('#edit-find');
+    await v.keyboard.press('Enter');
+    await v.keyboard.press('Enter');
+    if (SCREENS) { await v.waitForTimeout(500); await v.screenshot({ path: path.join(root, 'docs', 'screens', 'find.png') }); }
+    const f2 = await v.evaluate(() => ({ st: window.__pdfWorkshop.find(), now: [...document.querySelectorAll('#edit-grid .page-card')].findIndex((c) => c.classList.contains('found-now')) }));
+    check('글자로 쪽 찾기: "3단원" → 찾은 쪽에 노란 테두리 + "N곳", Enter로 다음, 스캔본은 "글자가 없어 검색할 수 없어요"',
+      f1.badges.join(',') === '2,,1,' && /2쪽에서 3곳/.test(f1.status) && /스캔본\.pdf.*글자가 없어 검색할 수 없어요\(스캔본\)/.test(f1.note) && f2.now === 2 && f2.st.at === 1,
+      `${f1.status} · 배지 [${f1.badges.join(',')}] · Enter 두 번 → ${f2.now + 1}번 카드 · "${f1.note.slice(0, 40)}…"`);
+
+    // Ctrl+V 붙여넣기
+    const pngB64 = fs.readFileSync(png).toString('base64');
+    const pdfB64 = fs.readFileSync(fileA).toString('base64');
+    const pasteFile = (b64, name, type) => v.evaluate(([b, n, t]) => {
+      const bin = Uint8Array.from(atob(b), (c) => c.charCodeAt(0));
+      const dt = new DataTransfer();
+      dt.items.add(new File([bin], n, { type: t }));
+      document.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    }, [b64, name, type]);
+    await v.click('#logo');
+    await v.evaluate(() => document.getElementById('toasts').replaceChildren());
+    await pasteFile(pngB64, 'image.png', 'image/png');
+    await until(v, () => document.querySelectorAll('#img-grid .img-card').length === 1, undefined, { timeout: 10000 });
+    const p1 = await v.evaluate(() => ({ tab: document.querySelector('.tab[aria-selected="true"]').dataset.tab, name: document.querySelector('#img-grid .page-src').textContent, toast: document.getElementById('toasts').textContent }));
+    await pasteFile(pdfB64, '보고서A.pdf', 'application/pdf');
+    await until(v, () => document.querySelectorAll('#edit-grid .page-card').length >= 3, undefined, { timeout: 10000 });
+    const p2 = await v.evaluate(() => ({ tab: document.querySelector('.tab[aria-selected="true"]').dataset.tab, toast: document.getElementById('toasts').textContent }));
+    await v.click('#tab-compress');
+    await pasteFile(pngB64, 'image.png', 'image/png');
+    await until(v, () => document.querySelectorAll('#cmp-files > li').length === 1, undefined, { timeout: 15000 });
+    const p3 = await v.evaluate(() => document.querySelector('.tab[aria-selected="true"]').dataset.tab);
+    check('Ctrl+V: 클립보드 사진 → 사진 → PDF(알림 "사진 1장을 넣었어요") · PDF → 편집 · 용량 줄이기 화면이면 거기에',
+      p1.tab === 'img2pdf' && /^붙여넣은 사진_\d{8}_\d{6}\.png$/.test(p1.name) && /클립보드의 사진 1장을 넣었어요/.test(p1.toast) && p2.tab === 'edit' && /PDF 1개를 넣었어요/.test(p2.toast) && p3 === 'compress',
+      `사진 → ${p1.tab} "${p1.name}" · PDF → ${p2.tab} · 용량 줄이기에서 사진 → ${p3}`);
+
+    // 크기 맞추기: 링크 · 주석이 있으면 노란 경고
+    const { PDFName, PDFString } = PDFLib;
+    const ad = await PDFDocument.create();
+    const ap1 = ad.addPage([595, 842]);
+    ad.addPage([842, 595]);
+    const link = ad.context.register(ad.context.obj({ Type: 'Annot', Subtype: 'Link', Rect: [50, 50, 200, 80], Border: [0, 0, 0], A: { Type: 'Action', S: 'URI', URI: PDFString.of('https://example.com') } }));
+    const memo = ad.context.register(ad.context.obj({ Type: 'Annot', Subtype: 'Text', Rect: [300, 700, 320, 720], Contents: PDFString.of('memo') }));
+    ap1.node.set(PDFName.of('Annots'), ad.context.obj([link, memo]));
+    const aFile = await writePdf('링크있음.pdf', ad);
+    await v.click('#logo');
+    await v.setInputFiles('#home-input', [aFile]);
+    await until(v, () => !document.getElementById('edit-sizes').hidden);
+    const a0 = await v.evaluate(() => document.getElementById('edit-sizes-annot').hidden);
+    await v.click('label:has(> input[name="sizefix"][value="fit"])');
+    const a1 = await v.evaluate(() => ({ hidden: document.getElementById('edit-sizes-annot').hidden, text: document.getElementById('edit-sizes-annot').textContent }));
+    check('"모두 A4 세로로"를 고르면 "이 파일의 링크 N개와 주석 M개는 크기를 맞추면 사라져요"', a0 && !a1.hidden && a1.text === '이 파일의 링크 1개와 주석 1개는 크기를 맞추면 사라져요.', a1.text);
+    check('크게 보기 · 찾기 · 붙여넣기 흐름 콘솔 에러 0개', verr.length === 0, verr.length ? verr.join(' | ').slice(0, 200) : '0개');
+    await vctx.close();
+  }
+
   // ── 12. 스크린샷 ──
   if (SCREENS) {
     const out = path.join(root, 'docs', 'screens');

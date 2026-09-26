@@ -662,7 +662,7 @@
   });
 
   // ═══════════════════════════════════════════════════════════
-  // 탭1: 편집 · 합치기 · 자르기
+  // 탭1: 편집 · 합치기
   // ═══════════════════════════════════════════════════════════
   const Edit = (() => {
     const grid = $('edit-grid');
@@ -714,7 +714,7 @@
       const others = files.filter((f) => !isPdfFile(f));
       if (others.length) {
         toast(`PDF가 아닌 파일 ${others.length}개는 넣지 않았어요.`,
-          '사진은 "이미지 → PDF" 탭에서 PDF로 바꿀 수 있어요.', 'error');
+          '사진은 왼쪽 "사진 → PDF"에서 PDF로 바꿀 수 있어요.', 'error');
       }
       if (!pdfs.length) return [];
       const added = [];
@@ -741,7 +741,7 @@
       return added;
     }
 
-    /** 이미 풀린 문서를 받아서 넣는다(암호 탭에서 보내기). */
+    /** 이미 풀린 문서를 받아서 넣는다(보안에서 보내기). */
     function addDecrypted(name, bytes, doc) {
       const src = createSource(name, { bytes, doc, locked: false });
       appendPages(src);
@@ -824,6 +824,7 @@
           h('div', { class: 'thumb' }, h('span', { class: 'loading' }, '불러오는 중…')),
           h('span', { class: 'page-no' }),
           h('span', { class: 'blank-badge', title: '거의 흰 쪽이에요. 위 안내줄에서 확인할 수 있어요.' }, '빈 쪽?'),
+          h('span', { class: 'find-badge', 'aria-hidden': 'true' }),
           h('button', { type: 'button', class: 'del-band', 'data-act': 'del', tabindex: '-1' }, '삭제 예정 · 되돌리기')),
         h('button', { type: 'button', class: 'sel-check', 'data-act': 'check', role: 'checkbox', 'aria-checked': 'false', 'aria-label': '이 쪽 선택', title: '선택 (Ctrl+클릭과 같아요)', tabindex: '-1' },
           icon('check')),
@@ -919,6 +920,9 @@
       updateSizes();
       updateBlank();
       updateDuplex();
+      $('edit-find-bar').hidden = !has;
+      if (find.q && find.sig !== srcSig()) scheduleFind(0);
+      else applyFind();
     }
 
     function updateCount() {
@@ -1396,6 +1400,11 @@
         clickSelect(el.dataset.key, { ctrl: !e.shiftKey || e.ctrlKey || e.metaKey, shift: e.shiftKey });
         return;
       }
+      if (e.key === 'Enter' && !e.altKey && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        openViewer(pages.findIndex((p) => p.key === el.dataset.key));
+        return;
+      }
       if (!e.altKey || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
       e.preventDefault();
       const i = pages.findIndex((p) => p.key === el.dataset.key);
@@ -1541,6 +1550,19 @@
       box.hidden = sum.length < 2;
       if (sum.length < 2) return;
       $('edit-sizes-text').textContent = `쪽 크기가 섞여 있어요 (${sum.map(([k, n]) => `${k} ${n}`).join(' · ')}). 인쇄하면 들쭉날쭉할 수 있어요.`;
+      // 크기를 맞추면 쪽을 그림처럼 옮겨 그리므로 링크 · 주석이 사라진다 → 미리 알린다
+      const an = { links: 0, notes: 0 };
+      kept.forEach((p) => {
+        const src = srcById(p.srcId);
+        if (!src.annots) src.annots = [];
+        if (!src.annots[p.index]) src.annots[p.index] = Core.countAnnots(src.doc.getPage(p.index));
+        an.links += src.annots[p.index].links;
+        an.notes += src.annots[p.index].notes;
+      });
+      const parts = [an.links && `링크 ${an.links}개`, an.notes && `주석 ${an.notes}개`].filter(Boolean);
+      const note = $('edit-sizes-annot');
+      note.hidden = !parts.length || sizeFix.mode === 'keep';
+      note.textContent = parts.length ? `이 파일의 ${parts.join('와 ')}는 크기를 맞추면 사라져요.` : '';
     }
     const PAPER_NAME = { a4: 'A4', letter: 'Letter' };
     function syncSizeUi() {
@@ -1553,6 +1575,7 @@
       if (e.target.name === 'sizefix') sizeFix.mode = e.target.value;
       if (e.target.id === 'sizefix-paper') sizeFix.paper = e.target.value;
       syncSizeUi();
+      updateSizes();
       if (sizeFix.mode !== 'keep') toast(`저장할 때 모든 쪽을 ${PAPER_NAME[sizeFix.paper]} 세로에 맞춰요.`, sizeFix.mode === 'rotate' ? '가로 쪽은 90° 돌려서 넣어요. 글자는 그대로 선택돼요.' : '가로 쪽은 줄여서 가운데에 넣어요. 글자는 그대로 선택돼요.', 'info');
     });
     /** 쪽들을 모으고(필요하면) 한 종이에 맞춘다 */
@@ -2045,12 +2068,282 @@
       Object.assign(sizeFix, { mode: 'keep', paper: 'a4' });
       syncSizeUi();
       openSplit(false);
+      if (vdlg.open) vdlg.close();
+      clearTimeout(find.timer);
+      find.token++;
+      findInput.value = '';
+      Object.assign(find, { q: '', hits: [], at: -1, counts: new Map() });
+      $('edit-find-status').textContent = '';
+      $('edit-find-note').hidden = true;
       render();
     }
+
+    // ── 쪽 크게 보기 (더블클릭 · Enter) ──
+    const vdlg = $('viewer');
+    const vstage = $('viewer-stage');
+    const ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3];
+    const view = { i: -1, zoom: 1, token: 0, rendered: '' };
+    function openViewer(i) {
+      if (i < 0 || i >= pages.length || isBusy()) return;
+      view.i = i;
+      view.zoom = 1;
+      if (!vdlg.open) vdlg.showModal();
+      renderViewer();
+    }
+    function viewerInfo() {
+      const p = pages[view.i];
+      const src = p && srcById(p.srcId);
+      if (!p || !src) return;
+      const kept = keptPages();
+      const no = p.deleted ? '삭제 예정' : `${kept.indexOf(p) + 1}번째 쪽`;
+      $('viewer-title').textContent = `${view.i + 1} / ${pages.length} · ${src.name} ${p.index + 1}쪽`;
+      $('viewer-state').textContent = [no, p.rot ? `${p.rot}° 회전` : ''].filter(Boolean).join(' · ');
+      vdlg.classList.toggle('deleted', p.deleted);
+      $('vw-del').textContent = p.deleted ? '되돌리기' : '삭제 예정';
+      $('vw-del').setAttribute('aria-pressed', String(p.deleted));
+      $('vw-prev').disabled = view.i <= 0;
+      $('vw-next').disabled = view.i >= pages.length - 1;
+      $('vw-zoom').textContent = `${Math.round(view.zoom * 100)}%`;
+      $('vw-out').disabled = view.zoom <= ZOOMS[0];
+      $('vw-in').disabled = view.zoom >= ZOOMS[ZOOMS.length - 1];
+      $('vw-rep').disabled = sources.filter((x) => x.doc).length === 0;
+    }
+    /** 보고 있는 쪽 하나만 화면 해상도로 그린다 */
+    async function renderViewer() {
+      const my = ++view.token;
+      const p = pages[view.i];
+      if (!p) { vdlg.close(); return; }
+      viewerInfo();
+      const src = srcById(p.srcId);
+      const want = `${p.key}:${p.srcId}:${p.index}:${p.rot}:${view.zoom}:${vstage.clientWidth}x${vstage.clientHeight}`;
+      if (view.rendered === want && vstage.querySelector('canvas')) return;
+      if (!vstage.querySelector('canvas')) vstage.replaceChildren(h('span', { class: 'loading' }, '그리는 중…'));
+      try {
+        const pdf = await getPdfjs(src);
+        if (my !== view.token) return;
+        const page = await pdf.getPage(p.index + 1);
+        const rotation = Core.normAngle(page.rotate + p.rot);
+        const vp1 = page.getViewport({ scale: 1, rotation });
+        const fit = Math.max(0.05, Math.min((vstage.clientWidth - 32) / vp1.width, (vstage.clientHeight - 32) / vp1.height));
+        const css = fit * view.zoom;
+        let scale = css * Math.min(window.devicePixelRatio || 1, 2);
+        // 캔버스 한계(아이폰 사파리 약 16MP) 안에서
+        const px = vp1.width * vp1.height * scale * scale;
+        if (px > MAX_CANVAS_PIXELS * 0.95) scale *= Math.sqrt((MAX_CANVAS_PIXELS * 0.95) / px);
+        scale = Math.min(scale, (MAX_CANVAS_SIDE - 1) / Math.max(vp1.width, vp1.height));
+        const vp = page.getViewport({ scale, rotation });
+        const canvas = makeCanvas(vp.width, vp.height);
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        await page.render({ canvasContext: ctx, viewport: vp }).promise;
+        page.cleanup();
+        if (my !== view.token) return;
+        canvas.className = 'viewer-canvas';
+        canvas.style.width = `${Math.round(vp1.width * css)}px`;
+        canvas.style.height = `${Math.round(vp1.height * css)}px`;
+        canvas.setAttribute('role', 'img');
+        canvas.setAttribute('aria-label', `${src.name} ${p.index + 1}쪽 크게 보기`);
+        vstage.replaceChildren(canvas);
+        vstage.classList.toggle('zoomed', view.zoom > 1);
+        view.rendered = want;
+      } catch (e) {
+        if (my !== view.token) return;
+        vstage.replaceChildren(h('p', { class: 'viewer-error' }, `이 쪽을 크게 그리지 못했어요. ${explain(e, src.name).title}`));
+      }
+    }
+    function viewerGo(d) {
+      const j = view.i + d;
+      if (j < 0 || j >= pages.length) return;
+      view.i = j;
+      renderViewer();
+    }
+    function viewerZoom(dir) {
+      if (dir === 0) view.zoom = 1;
+      else {
+        const k = ZOOMS.indexOf(view.zoom);
+        view.zoom = ZOOMS[Math.max(0, Math.min(ZOOMS.length - 1, (k < 0 ? 2 : k) + dir))];
+      }
+      renderViewer();
+    }
+    function viewerAct(act) {
+      const p = pages[view.i];
+      if (!p || isBusy()) return;
+      const no = p.deleted ? '삭제 예정 쪽' : `${keptPages().indexOf(p) + 1}번째 쪽`;
+      if (act === 'rotl' || act === 'rot') {
+        const dir = act === 'rotl' ? 'left' : 'right';
+        record(`${no} ${dir === 'left' ? '왼쪽' : '오른쪽'} 90°`, () => (p.rot = Core.rotate(p.rot, dir)));
+      } else if (act === 'del') {
+        record(p.deleted ? `${no} 복구` : `${no} 삭제`, () => (p.deleted = !p.deleted));
+      } else if (act === 'rep') {
+        Replace.open(p);
+        return;
+      }
+      renderViewer();
+    }
+    $('vw-prev').addEventListener('click', () => viewerGo(-1));
+    $('vw-next').addEventListener('click', () => viewerGo(1));
+    $('vw-in').addEventListener('click', () => viewerZoom(1));
+    $('vw-out').addEventListener('click', () => viewerZoom(-1));
+    $('vw-zoom').addEventListener('click', () => viewerZoom(0));
+    $('vw-rotl').addEventListener('click', () => viewerAct('rotl'));
+    $('vw-rot').addEventListener('click', () => viewerAct('rot'));
+    $('vw-rep').addEventListener('click', () => viewerAct('rep'));
+    $('vw-del').addEventListener('click', () => viewerAct('del'));
+    $('vw-close').addEventListener('click', () => vdlg.close());
+    vdlg.addEventListener('keydown', (e) => {
+      if (e.target.closest('button') && (e.key === 'Enter' || e.key === ' ')) return;
+      const k = e.key;
+      if (k === 'ArrowLeft' || k === 'PageUp') { e.preventDefault(); viewerGo(-1); }
+      else if (k === 'ArrowRight' || k === 'PageDown') { e.preventDefault(); viewerGo(1); }
+      else if (k === '+' || k === '=') { e.preventDefault(); viewerZoom(1); }
+      else if (k === '-' || k === '_') { e.preventDefault(); viewerZoom(-1); }
+      else if (k === '0') { e.preventDefault(); viewerZoom(0); }
+      else if (k === 'Delete') { e.preventDefault(); viewerAct('del'); }
+    });
+    vdlg.addEventListener('close', () => {
+      view.token++;
+      vstage.replaceChildren();
+      view.rendered = '';
+      const p = pages[view.i];
+      const card = p && cards.get(p.key);
+      if (card && card.isConnected) card.focus();
+    });
+    // 교체 창을 닫으면 보던 쪽을 다시 그린다
+    $('replace-dialog').addEventListener('close', () => { if (vdlg.open) { view.rendered = ''; renderViewer(); } });
+    let vResize = 0;
+    window.addEventListener('resize', () => {
+      if (!vdlg.open) return;
+      clearTimeout(vResize);
+      vResize = setTimeout(renderViewer, 150);
+    });
+    grid.addEventListener('dblclick', (e) => {
+      if (e.target.closest('button, input, a')) return;
+      const el = e.target.closest('.page-card');
+      if (!el) return;
+      e.preventDefault();
+      openViewer(pages.findIndex((p) => p.key === el.dataset.key));
+    });
+
+    // ── 글자로 쪽 찾기 (pdf.js 글자 레이어, 파일마다 한 번 만들어 둔다) ──
+    const findInput = $('edit-find');
+    const find = { q: '', token: 0, hits: [], at: -1, sig: '', counts: new Map(), timer: 0 };
+    const norm = (t) => String(t).normalize('NFC').replace(/\s+/g, '').toLowerCase();
+    const srcSig = () => sources.map((x) => `${x.id}${x.doc ? '' : '!'}`).join(',');
+    function textIndex(src, onPage) {
+      if (!src.textIdx) {
+        src.textIdx = (async () => {
+          const pdf = await getPdfjs(src);
+          const out = [];
+          for (let i = 0; i < src.pageCount; i++) {
+            const pg = await pdf.getPage(i + 1);
+            const tc = await pg.getTextContent();
+            out.push(norm(tc.items.map((it) => it.str || '').join('')));
+            pg.cleanup();
+            src.textDone = i + 1;
+            if (onPage) onPage();
+            await breathe();
+          }
+          return out;
+        })();
+        src.textIdx.catch(() => { src.textIdx = null; });
+      }
+      return src.textIdx;
+    }
+    function countIn(text, q) {
+      let n = 0;
+      for (let i = text.indexOf(q); i >= 0; i = text.indexOf(q, i + q.length)) n++;
+      return n;
+    }
+    function scheduleFind(delay = 250) {
+      clearTimeout(find.timer);
+      find.timer = setTimeout(runFind, delay);
+    }
+    async function runFind() {
+      const my = ++find.token;
+      find.q = norm(findInput.value);
+      find.sig = srcSig();
+      find.counts = new Map();
+      find.hits = [];
+      find.at = -1;
+      const status = $('edit-find-status');
+      const note = $('edit-find-note');
+      if (!find.q) {
+        status.textContent = '';
+        note.hidden = true;
+        applyFind();
+        return;
+      }
+      const readable = sources.filter((x) => x.doc && !x.locked);
+      const total = readable.reduce((a, x) => a + x.pageCount, 0);
+      const progress = () => {
+        if (my !== find.token) return;
+        const done = readable.reduce((a, x) => a + (x.textDone || 0), 0);
+        if (done < total) status.textContent = `글자 읽는 중 ${done}/${total}쪽`;
+      };
+      progress();
+      const scans = [];
+      for (const src of readable) {
+        let idx;
+        try { idx = await textIndex(src, progress); } catch { idx = null; }
+        if (my !== find.token) return;
+        if (!idx) continue;
+        if (idx.every((t) => !t)) { scans.push(src.name); continue; }
+        idx.forEach((t, i) => {
+          const n = t ? countIn(t, find.q) : 0;
+          if (n) find.counts.set(`${src.id}:${i}`, n);
+        });
+      }
+      find.hits = pages.filter((p) => find.counts.has(`${p.srcId}:${p.index}`));
+      const places = find.hits.reduce((a, p) => a + find.counts.get(`${p.srcId}:${p.index}`), 0);
+      status.textContent = find.hits.length ? `${find.hits.length}쪽에서 ${places}곳 · Enter로 다음` : '찾는 글자가 없어요';
+      note.hidden = !scans.length;
+      note.textContent = scans.length ? `${scans.map((n) => `"${n}"`).join(', ')}: 이 파일은 글자가 없어 검색할 수 없어요(스캔본). 쪽 미리보기를 보며 찾아 주세요.` : '';
+      applyFind();
+    }
+    function applyFind() {
+      const on = !!find.q;
+      for (const p of pages) {
+        const el = cards.get(p.key);
+        if (!el) continue;
+        const n = on ? find.counts.get(`${p.srcId}:${p.index}`) || 0 : 0;
+        el.classList.toggle('found', n > 0);
+        el.classList.toggle('found-now', n > 0 && find.at >= 0 && find.hits[find.at] === p);
+        const b = el.querySelector('.find-badge');
+        if (b) b.textContent = n ? `${n}곳` : '';
+        el.dataset.found = n ? String(n) : '';
+      }
+      $('edit-find-prev').disabled = find.hits.length < 1;
+      $('edit-find-next').disabled = find.hits.length < 1;
+    }
+    function findGo(d) {
+      if (!find.hits.length) return;
+      find.at = (find.at + d + find.hits.length) % find.hits.length;
+      applyFind();
+      const el = cards.get(find.hits[find.at].key);
+      if (el) el.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+      $('edit-find-status').textContent = `${find.at + 1} / ${find.hits.length}쪽 · ${find.counts.get(`${find.hits[find.at].srcId}:${find.hits[find.at].index}`)}곳`;
+    }
+    findInput.addEventListener('input', () => scheduleFind());
+    findInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (find.q !== norm(findInput.value)) { clearTimeout(find.timer); runFind().then(() => findGo(1)); } else findGo(e.shiftKey ? -1 : 1);
+      } else if (e.key === 'Escape' && findInput.value) {
+        e.preventDefault();
+        e.stopPropagation();
+        findInput.value = '';
+        runFind();
+      }
+    });
+    $('edit-find-next').addEventListener('click', () => findGo(1));
+    $('edit-find-prev').addEventListener('click', () => findGo(-1));
 
     render();
 
     return {
+      viewerState: () => ({ open: vdlg.open, i: view.i, zoom: view.zoom, rendered: view.rendered, canvas: (() => { const c = vstage.querySelector('canvas'); return c ? { w: c.width, h: c.height, cssW: parseFloat(c.style.width), cssH: parseFloat(c.style.height) } : null; })() }),
+      findState: () => ({ q: find.q, hits: find.hits.map((p) => pages.indexOf(p)), at: find.at }),
       addFiles, addDecrypted, reset, render, removeSource, shortcutSave,
       get sources() { return sources; },
       getPdfjs, srcById,
@@ -3684,7 +3977,7 @@
   }
 
   // ═══════════════════════════════════════════════════════════
-  // 탭2: 이미지 → PDF
+  // 탭2: 사진 → PDF
   // ═══════════════════════════════════════════════════════════
   const Img = (() => {
     const grid = $('img-grid');
@@ -3913,7 +4206,7 @@
   })();
 
   // ═══════════════════════════════════════════════════════════
-  // 탭3: PDF → 이미지
+  // 탭3: PDF → 사진
   // ═══════════════════════════════════════════════════════════
   const P2I = (() => {
     const grid = $('p2i-grid');
@@ -5454,7 +5747,7 @@
   // ═══════════════════════════════════════════════════════════
   const Title = (() => {
     const BASE_TITLE = 'PDF 작업실';
-    const LABEL = { edit: '편집 중', img2pdf: '사진→PDF', pdf2img: 'PDF→사진', decorate: '꾸미기', compress: '용량 줄이기', security: '보안' };
+    const LABEL = { edit: '편집 중', img2pdf: '사진 → PDF', pdf2img: 'PDF → 사진', decorate: '꾸미기', compress: '용량 줄이기', security: '보안' };
     function fileCount(tool) {
       const n = (sel) => document.querySelectorAll(sel).length;
       if (tool === 'edit') return { n: n('#edit-chips > li.chip'), unit: '파일' };
@@ -5524,6 +5817,65 @@
     document.querySelectorAll('.tool-card').forEach((card) =>
       card.addEventListener('click', () => openTool(card.dataset.open, true)));
     return { route };
+  })();
+
+  // ═══════════════════════════════════════════════════════════
+  // Ctrl+V 붙여넣기: 클립보드의 사진은 사진 → PDF(또는 사진을 받는 지금 도구)로, PDF는 편집으로
+  // ═══════════════════════════════════════════════════════════
+  const Paste = (() => {
+    const EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif', 'image/bmp': 'bmp', 'application/pdf': 'pdf' };
+    function named(files) {
+      const d = new Date();
+      const p2 = (n) => String(n).padStart(2, '0');
+      const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}_${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`;
+      // 화면 캡처는 이름이 "image.png"로만 와서 겹치므로 알아볼 수 있는 이름을 붙인다
+      return files.map((f, i) => (f.name && !/^image\.(png|jpe?g|gif|webp|bmp)$/i.test(f.name)
+        ? f
+        : new File([f], `붙여넣은 사진_${stamp}${files.length > 1 ? `_${i + 1}` : ''}.${EXT[f.type] || 'png'}`, { type: f.type || 'image/png', lastModified: Date.now() })));
+    }
+    async function take(files) {
+      const list = named(files);
+      const pdfs = list.filter(isPdfFile);
+      const imgs = list.filter((f) => !isPdfFile(f));
+      const inWork = activeView === 'work';
+      if (imgs.length) {
+        let n = 0;
+        if (inWork && activeTab === 'compress') {
+          await Shrink.addFiles(imgs);
+          n = imgs.length;
+        } else {
+          if (!inWork || activeTab !== 'img2pdf') openTool('img2pdf');
+          n = (await Img.addFiles(imgs)) || 0;
+        }
+        if (n) toast(`클립보드의 사진 ${n}장을 넣었어요.`, '', 'ok');
+      }
+      if (pdfs.length) {
+        if (inWork && activeTab === 'compress' && !imgs.length) await Shrink.addFiles(pdfs);
+        else {
+          if (!imgs.length) openTool('edit');
+          await Edit.addFiles(pdfs);
+        }
+        toast(`클립보드의 PDF ${pdfs.length}개를 넣었어요.`, '', 'ok');
+      }
+    }
+    document.addEventListener('paste', (e) => {
+      const t = e.target;
+      if (t && t.closest && t.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"]')) return;
+      if (isBusy() || document.querySelector('dialog[open]')) return;
+      const dt = e.clipboardData;
+      const files = dt ? [...dt.files] : [];
+      if (!files.length && dt) {
+        for (const it of dt.items || []) if (it.kind === 'file') { const f = it.getAsFile(); if (f) files.push(f); }
+      }
+      const usable = files.filter((f) => isPdfFile(f) || /^image\//.test(f.type) || /\.(heic|heif)$/i.test(f.name));
+      if (!usable.length) {
+        if (files.length) toast('붙여 넣은 파일은 여기서 쓸 수 없어요.', 'PDF나 사진(JPG · PNG · WEBP · HEIC)만 넣을 수 있어요.', 'info');
+        return;
+      }
+      e.preventDefault();
+      take(usable).catch(showError);
+    });
+    return { take };
   })();
 
   // ═══════════════════════════════════════════════════════════
@@ -5832,5 +6184,5 @@
     if (t && (t !== activeTab || activeView !== 'work')) openTool(t);
   });
 
-  window.__pdfWorkshop = { version: 5, ready: true, guide: Guide.state, compress: Shrink.state, worker: Squeeze.inWorker, lastStage: () => errCtx.stage, pwa: Pwa.state, hasWork, news: News.state, feedback: Feedback.state, title: Title.compute };
+  window.__pdfWorkshop = { version: 5, ready: true, guide: Guide.state, compress: Shrink.state, worker: Squeeze.inWorker, lastStage: () => errCtx.stage, pwa: Pwa.state, hasWork, viewer: Edit.viewerState, find: Edit.findState, news: News.state, feedback: Feedback.state, title: Title.compute };
 })();
