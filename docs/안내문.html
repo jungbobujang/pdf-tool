@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PDF 작업실 안내문</title>
+<!-- 학교 배포용 A4 한 장. 브라우저에서 열고 Ctrl+P(여백: 기본, 배경 그래픽 켜기)로 인쇄하세요. -->
+<style>
+  @page { size: A4; margin: 14mm 15mm; }
+  :root { --ink: #172033; --muted: #4B5563; --accent: #3355FF; --navy: #141B2E; --ok: #18A36F; --line: #D6DCE6; --soft: #EEF1F6; }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { margin: 0; background: #E5E8EE; color: var(--ink); font-family: "Pretendard Variable", Pretendard, "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; font-size: 11pt; line-height: 1.55; }
+  .sheet { width: 210mm; min-height: 297mm; margin: 10mm auto; padding: 14mm 15mm; background: #fff; box-shadow: 0 4px 24px rgba(0, 0, 0, .12); }
+  @media print {
+    body { background: #fff; }
+    .sheet { width: auto; min-height: 0; margin: 0; padding: 0; box-shadow: none; }
+  }
+  header { display: flex; align-items: center; gap: 14px; padding: 12px 16px; border-radius: 12px; background: var(--navy); color: #fff; }
+  header svg { width: 46px; height: 46px; flex: none; }
+  header h1 { margin: 0; font-size: 25pt; letter-spacing: -0.02em; line-height: 1.1; }
+  header p { margin: 3px 0 0; font-size: 10.5pt; color: #C9D2EA; }
+  .addr { margin: 12px 0 0; padding: 10px 14px; border: 2px solid var(--accent); border-radius: 10px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+  .addr b { font-size: 10pt; color: var(--muted); }
+  .addr span { font-size: 16pt; font-weight: 800; color: var(--accent); word-break: break-all; }
+  .addr small { flex-basis: 100%; color: var(--muted); font-size: 10pt; }
+  h2 { margin: 14px 0 7px; font-size: 13.5pt; letter-spacing: -0.01em; display: flex; align-items: center; gap: 7px; }
+  h2 i { font-style: normal; display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 9pt; }
+  .tools { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 0; padding: 0; list-style: none; }
+  .tools li { padding: 9px 12px; border-radius: 8px; background: var(--soft); }
+  .tools b { display: block; font-size: 10.5pt; }
+  .tools span { font-size: 9.5pt; color: var(--muted); }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .box { padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; }
+  .box ul, .box ol { margin: 0; padding-left: 17px; }
+  .box li { margin: 3px 0; }
+  .safe li::marker { color: var(--ok); }
+  .jobs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .job { padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); }
+  .job b { display: block; font-size: 10.5pt; margin-bottom: 2px; }
+  .job span { font-size: 9.5pt; color: var(--muted); }
+  footer { margin-top: 18px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 9.5pt; color: var(--muted); display: flex; justify-content: space-between; gap: 12px; }
+  kbd { padding: 0 4px; border: 1px solid var(--line); border-radius: 4px; font-family: inherit; font-size: 9pt; background: var(--soft); }
+</style>
+</head>
+<body>
+<main class="sheet">
+  <header>
+    <svg viewBox="0 0 34 34" aria-hidden="true"><rect width="34" height="34" rx="9" fill="#3355FF"/><rect x="12" y="6" width="13" height="17" rx="2.5" fill="#fff" fill-opacity=".5"/><rect x="8" y="10" width="13" height="17" rx="2.5" fill="#fff"/></svg>
+    <div>
+      <h1>PDF 작업실</h1>
+      <p>설치 없이, 파일을 올리지 않고 PDF를 고치는 무료 웹 도구</p>
+    </div>
+  </header>
+
+  <p class="addr"><b>주소</b><span>https://pdf-tool-production-a037.up.railway.app</span><small>엣지 · 크롬 · 웨일에서 여세요. 한 번 연 뒤에는 인터넷이 없어도 작동하고, [바탕화면에 설치]로 아이콘을 만들 수 있어요.</small></p>
+
+  <h2><i>1</i>할 수 있는 일 6가지</h2>
+  <ul class="tools">
+    <li><b>편집 · 합치기</b><span>여러 PDF 합치기, 쪽 순서 바꾸기 · 돌리기 · 빼기, 나눠 저장</span></li>
+    <li><b>사진 → PDF</b><span>휴대폰 사진 · 스캔한 활동지를 한 PDF로 (아이폰 사진도)</span></li>
+    <li><b>PDF → 사진</b><span>원하는 쪽만 PNG · JPG로, 한 쪽은 복사해 PPT · 한글에 붙이기</span></li>
+    <li><b>꾸미기</b><span>쪽번호 · 워터마크 · 서명과 도장 넣기</span></li>
+    <li><b>용량 줄이기</b><span>"공문 10MB"처럼 목표에 맞춰 줄이기 (글자는 그대로)</span></li>
+    <li><b>보안</b><span>암호 걸기 · 풀기, 이 파일에 걸린 제한 보기</span></li>
+  </ul>
+
+  <div class="two">
+    <div>
+      <h2><i>2</i>왜 안전한가요?</h2>
+      <div class="box safe">
+        <ul>
+          <li><b>파일이 컴퓨터 밖으로 나가지 않아요.</b> 모든 처리는 내 브라우저 안에서 끝나고, 서버에는 파일을 받는 기능이 아예 없어요.</li>
+          <li><b>인터넷을 꺼도 작동해요.</b> 보낼 곳이 없다는 뜻이에요.</li>
+          <li><b>브라우저가 연결을 막아요.</b> 이 사이트 밖으로 데이터를 보낼 수 없게 규칙(CSP)을 걸어 두었어요.</li>
+          <li><b>수집하는 정보가 없어요.</b> 쿠키 · 통계 · 광고 · 외부 스크립트가 없어요.</li>
+          <li><b>원본을 바꾸지 않아요.</b> 결과는 항상 새 파일로 저장돼요.</li>
+        </ul>
+      </div>
+    </div>
+    <div>
+      <h2><i>3</i>직접 확인하는 법</h2>
+      <div class="box">
+        <ol>
+          <li><b>와이파이 끄고 해 보기</b> — 사이트를 한 번 연 뒤 와이파이를 끄고 PDF 두 개를 합쳐 보세요. 그대로 저장돼요.</li>
+          <li><b>Network 탭 보기</b> — <kbd>F12</kbd> → Network 탭을 열고 파일을 넣어 보세요. 파일을 보내는 줄이 생기지 않아요.</li>
+          <li><b>규칙 읽기</b> — 사이트의 "직접 확인하는 법" 페이지에 브라우저에 거는 규칙이 쉬운 말로 나와 있어요.</li>
+        </ol>
+      </div>
+    </div>
+  </div>
+
+  <h2><i>4</i>자주 하는 작업</h2>
+  <div class="jobs">
+    <div class="job"><b>공문 첨부용 10MB 만들기</b><span>첫 화면 아래 [공문 첨부용 10MB 만들기] → PDF 넣기 → [줄이기] → [바로 저장]</span></div>
+    <div class="job"><b>스캔본 정리해서 합치기</b><span>PDF 여러 개 넣기 → 빈 쪽 · 크기 다른 쪽 안내 확인 → 끌어서 순서 맞추기 → [바로 저장]</span></div>
+    <div class="job"><b>학습지 사진을 PDF로</b><span>사진을 한꺼번에 끌어다 놓기 → 순서 · 용지 고르기 → [바로 저장]</span></div>
+  </div>
+
+  <footer>
+    <span>저장한 파일은 보통 "다운로드" 폴더에 있어요. 안 보이면 <kbd>Ctrl</kbd>+<kbd>J</kbd>.</span>
+    <span>결과물은 저장 후 열어서 확인해 주세요.</span>
+  </footer>
+</main>
+</body>
+</html>
