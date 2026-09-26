@@ -80,7 +80,7 @@ const check = (name, ok, detail = '') => rows.push({ name, ok: !!ok, detail });
 
 function watch(pg, list) {
   pg.on('console', (m) => m.type() === 'error' && list.push(m.text()));
-  pg.on('pageerror', (e) => list.push(String(e)));
+  pg.on('pageerror', (e) => list.push(String(e) + (e && e.stack ? ` @ ${String(e.stack).split('\n').slice(1, 3).join(' ').trim()}` : '')));
   pg.on('response', (r) => r.status() >= 400 && list.push(`${r.status()} ${r.url()}`));
   // 작업 중 새로고침 · 이동에는 "작업 중인 내용이 사라져요" 확인이 뜬다. 점검에서는 그대로 진행한다.
   pg.on('dialog', (d) => (d.type() === 'beforeunload' ? d.accept() : d.dismiss()).catch(() => {}));
@@ -1987,6 +1987,336 @@ try {
     check('"모두 A4 세로로"를 고르면 "이 파일의 링크 N개와 주석 M개는 크기를 맞추면 사라져요"', a0 && !a1.hidden && a1.text === '이 파일의 링크 1개와 주석 1개는 크기를 맞추면 사라져요.', a1.text);
     check('크게 보기 · 찾기 · 붙여넣기 흐름 콘솔 에러 0개', verr.length === 0, verr.length ? verr.join(' | ').slice(0, 200) : '0개');
     await vctx.close();
+  }
+
+  // ── 11-g. 모든 실행 버튼은 결과(다운로드) · 알림 · 창 중 하나를 반드시 낸다 ──
+  {
+    const bctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: 'light', acceptDownloads: true, permissions: ['clipboard-read', 'clipboard-write'] });
+    const bp = await bctx.newPage();
+    const berr = [];
+    watch(bp, berr);
+    let downloads = 0;
+    bp.on('download', (d) => { downloads++; d.cancel().catch(() => {}); });
+    await bp.goto(BASE, { waitUntil: 'networkidle' });
+    await bp.evaluate(() => {
+      window.__toastCount = 0;
+      new MutationObserver((ms) => ms.forEach((m) => { window.__toastCount += m.addedNodes.length; })).observe(document.getElementById('toasts'), { childList: true });
+    });
+    const snapUi = () => bp.evaluate(() => ({
+      toasts: window.__toastCount,
+      dialogs: [...document.querySelectorAll('dialog[open]')].map((d) => d.id).join(','),
+      busy: !document.getElementById('busy').hidden,
+      expanded: [...document.querySelectorAll('[aria-expanded="true"]')].map((e) => e.id).filter(Boolean).join(','),
+      errors: [...document.querySelectorAll('.form-error:not([hidden]), [role="alert"]:not([hidden]):not(.toast)')].map((e) => e.textContent.trim()).filter(Boolean).join('|'),
+    }));
+    async function settle() {
+      await until(bp, () => document.getElementById('busy').hidden, undefined, { timeout: 120000 });
+      await bp.evaluate(() => {
+        document.querySelectorAll('dialog[open]').forEach((d) => d.close());
+        document.getElementById('toasts').replaceChildren();
+        // 같은 안내가 다시 떠도 알아볼 수 있게 칸 안내를 비운다
+        document.querySelectorAll('.form-error').forEach((e) => { e.textContent = ''; e.hidden = true; });
+      });
+    }
+    /** 누르고 3초 안에 반응이 있는지. 숨었거나 비활성이면 누를 수 없으니 통과로 적는다. */
+    async function probe(sel, label, press) {
+      const vis = await bp.evaluate((s) => {
+        const e = document.querySelector(s);
+        if (!e) return 'none';
+        const r = e.getBoundingClientRect();
+        if (!r.width || !r.height || e.closest('[hidden]')) return 'hidden';
+        return e.disabled ? 'disabled' : 'ok';
+      }, sel);
+      if (!press && vis !== 'ok') return { label, result: vis === 'disabled' ? '비활성' : '숨김', ok: true };
+      const before = await snapUi();
+      const d0 = downloads;
+      if (press) await bp.keyboard.press(press); else await bp.click(sel);
+      const end = Date.now() + 3000;
+      let how = '';
+      while (Date.now() < end && !how) {
+        const now = await snapUi();
+        if (downloads > d0) how = '다운로드';
+        else if (now.toasts > before.toasts) how = '알림';
+        else if (now.dialogs && now.dialogs !== before.dialogs) how = `창(${now.dialogs})`;
+        else if (now.busy) how = '진행 표시';
+        else if (now.expanded !== before.expanded && now.expanded.length > before.expanded.length) how = '패널 열림';
+        else if (now.errors !== before.errors && now.errors) how = `안내(${now.errors.slice(0, 20)})`;
+        else await bp.waitForTimeout(80);
+      }
+      await settle();
+      return { label, result: how || '반응 없음', ok: !!how };
+    }
+    const rowsB = [];
+    const tool = async (t) => { await bp.click('#logo').catch(() => {}); await bp.evaluate((x) => { location.hash = x; }, t); await until(bp, (x) => !document.getElementById(`panel-${x}`).hidden, t); };
+
+    // ① 파일이 없을 때 (버튼 + 단축키)
+    const EMPTY = {
+      edit: ['#edit-save', '#edit-save-opts', '#edit-save-range', '#edit-split', '#edit-duplex'],
+      img2pdf: ['#img-save'],
+      pdf2img: ['#p2i-save', '#p2i-save-opts', '#p2i-copy'],
+      decorate: ['#decor-save', '#decor-save-opts'],
+      compress: ['#cmp-go', '#cmp-save', '#cmp-save-opts'],
+      security: ['#unlock-save', '#unlock-send', '#lock-save'],
+    };
+    for (const [t, sels] of Object.entries(EMPTY)) {
+      await tool(t);
+      for (const s of sels) rowsB.push({ when: '파일 없음', ...(await probe(s, `${t} ${s}`)) });
+      rowsB.push({ when: '파일 없음', ...(await probe(null, `${t} Ctrl+S`, 'Control+s')) });
+      rowsB.push({ when: '파일 없음', ...(await probe(null, `${t} Ctrl+Shift+S`, 'Control+Shift+S')) });
+    }
+
+    // ② 파일이 있을 때
+    await tool('edit');
+    await bp.setInputFiles('#edit-input', [fileA, fileB]);
+    await until(bp, () => document.querySelectorAll('#edit-grid .page-card canvas').length === 7, undefined, { timeout: 20000 });
+    for (const s of ['#edit-save', '#edit-save-opts', '#edit-save-range']) rowsB.push({ when: '파일 있음', ...(await probe(s, `edit ${s}`)) });
+    rowsB.push({ when: '파일 있음', ...(await probe('#edit-split', 'edit #edit-split(나눠 저장)')) });
+    rowsB.push({ when: '파일 있음', ...(await probe('#split-save', 'edit #split-save(파일 저장)')) });
+    await bp.evaluate(() => { const b = document.getElementById('split-close'); if (b && b.offsetParent) b.click(); });
+    rowsB.push({ when: '파일 있음', ...(await probe('#edit-duplex', 'edit #edit-duplex(양면 스캔)')) });
+    rowsB.push({ when: '파일 있음', ...(await probe('#dx-save', 'edit #dx-save(양면 저장)')) });
+    await bp.evaluate(() => { const b = document.getElementById('duplex-close'); if (b && b.offsetParent) b.click(); });
+
+    await tool('img2pdf');
+    await bp.setInputFiles('#img-input', [png]);
+    await until(bp, () => document.querySelectorAll('#img-grid .img-card').length === 1);
+    rowsB.push({ when: '파일 있음', ...(await probe('#img-save', 'img2pdf #img-save')) });
+
+    await tool('pdf2img');
+    await bp.setInputFiles('#p2i-input', [fileA]);
+    await until(bp, () => !document.getElementById('p2i-file').hidden && document.querySelectorAll('#p2i-grid .page-card, #p2i-grid [data-page]').length > 0, undefined, { timeout: 15000 }).catch(() => {});
+    for (const s of ['#p2i-save', '#p2i-save-opts', '#p2i-copy']) rowsB.push({ when: '파일 있음(모두 고름)', ...(await probe(s, `pdf2img ${s}`)) });
+    await bp.click('#p2i-none').catch(() => {});
+    for (const s of ['#p2i-save', '#p2i-copy']) rowsB.push({ when: '파일 있음(하나도 안 고름)', ...(await probe(s, `pdf2img ${s}`)) });
+
+    await tool('decorate');
+    await bp.setInputFiles('#decor-input', [fileA]);
+    await until(bp, () => !document.getElementById('decor-file').hidden, undefined, { timeout: 15000 });
+    for (const s of ['#decor-save', '#decor-save-opts']) rowsB.push({ when: '파일 있음(아무것도 안 켬)', ...(await probe(s, `decorate ${s}`)) });
+
+    await tool('compress');
+    await bp.setInputFiles('#cmp-input', [fileA]);
+    await until(bp, () => document.querySelectorAll('#cmp-files > li').length === 1, undefined, { timeout: 15000 });
+    await bp.waitForTimeout(800);
+    for (const s of ['#cmp-go', '#cmp-save', '#cmp-save-opts']) rowsB.push({ when: '파일 있음', ...(await probe(s, `compress ${s}`)) });
+
+    await tool('security');
+    await bp.setInputFiles('#unlock-input', [fileA]);
+    await bp.setInputFiles('#lock-input', [fileA]);
+    await bp.waitForTimeout(500);
+    for (const s of ['#unlock-save', '#unlock-send', '#lock-save']) rowsB.push({ when: '파일 있음(비밀번호 없음)', ...(await probe(s, `security ${s}`)) });
+
+    const silent = rowsB.filter((r) => !r.ok);
+    check(`모든 실행 버튼 · 저장 단축키가 3초 안에 반응(다운로드 · 알림 · 창 · 진행 · 안내) — ${rowsB.length}곳`, silent.length === 0,
+      silent.length ? `반응 없음: ${silent.map((r) => `${r.label}(${r.when})`).join(', ')}` : rowsB.filter((r) => !/숨김|비활성/.test(r.result)).map((r) => `${r.label.split(' ').slice(1).join(' ')}→${r.result}`).join(' · ').slice(0, 400));
+    fs.writeFileSync(path.join(tmp, 'buttons.json'), JSON.stringify(rowsB, null, 1));
+    check('버튼 점검 흐름 콘솔 에러 0개', berr.length === 0, berr.length ? berr.join(' | ').slice(0, 200) : '0개');
+    await bctx.close();
+  }
+
+  // ── 11-h. 다크 모드 · 모든 화면 접근성(axe) · 밝은 조각 · 확대 150/200% · 포커스 순서 · 인쇄 ──
+  {
+    const axePath2 = require.resolve('axe-core/axe.min.js');
+    const shots = path.join(root, 'docs', 'screens');
+    const results = [];
+    const brightAll = [];
+    for (const scheme of ['light', 'dark']) {
+      const actx = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: scheme, bypassCSP: true, acceptDownloads: true });
+      const a = await actx.newPage();
+      const aerr = [];
+      watch(a, aerr);
+      const run = async (where) => {
+        await a.addScriptTag({ path: axePath2 }).catch(() => {});
+        await a.waitForTimeout(150);
+        const v = await a.evaluate(async () => {
+          if (!window.axe) return [{ id: 'axe-missing', impact: 'critical', n: 1, where: '' }];
+          const res = await window.axe.run({ exclude: [['.demo-stage']] }, { resultTypes: ['violations'] });
+          return res.violations.map((x) => ({ id: x.id, impact: x.impact, n: x.nodes.length, where: x.nodes[0] && x.nodes[0].target.join(' ') }));
+        });
+        results.push({ scheme, where, v });
+        if (scheme === 'dark') {
+          // 어두운 화면에 남은 밝은 조각 (쪽 미리보기 · 종이 모양은 원래 흰색이라 뺀다)
+          const bright = await a.evaluate(() => {
+            const lum = (c) => {
+              const m = c.match(/rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?/);
+              if (!m || (m[4] !== undefined && Number(m[4]) < 0.5)) return 0;
+              const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
+              return 0.2126 * f(+m[1]) + 0.7152 * f(+m[2]) + 0.0722 * f(+m[3]);
+            };
+            const skip = '.paper, .thumb, canvas, img, .viewer-canvas, .demo-stage, .sign-pad, .preview, .cv-pane, .stamp-preview, .cmp-thumb, .pv-stage, .print-note, .old-browser-note, .img-card .thumb, .decor-preview, .lib pre';
+            const out = [];
+            for (const el of document.querySelectorAll('body *')) {
+              if (el.closest(skip)) continue;
+              const r = el.getBoundingClientRect();
+              if (r.width * r.height < 1500 || r.bottom < 0 || r.top > innerHeight || r.width === 0) continue;
+              const cs = getComputedStyle(el);
+              if (cs.visibility === 'hidden' || cs.display === 'none' || Number(cs.opacity) < 0.3) continue;
+              if (lum(cs.backgroundColor) > 0.75) out.push(`${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ''}.${[...el.classList].slice(0, 2).join('.')}`);
+            }
+            return [...new Set(out)].slice(0, 8);
+          });
+          if (bright.length) brightAll.push(`${where}: ${bright.join(' ')}`);
+          if (SCREENS) await a.screenshot({ path: path.join(shots, `dark-${where}.png`) });
+        }
+      };
+      await a.goto(BASE, { waitUntil: 'networkidle' });
+      await a.evaluate(() => document.fonts.ready);
+      await run('home');
+      for (const t of ['img2pdf', 'pdf2img', 'decorate', 'compress', 'security']) {
+        await a.evaluate((x) => { location.hash = x; }, t);
+        await until(a, (x) => !document.getElementById(`panel-${x}`).hidden, t);
+        await a.mouse.move(2, 2);
+        await run(t);
+      }
+      // 편집(파일 있음) · 설정하고 저장 창 · 크게 보기 · 새 소식 · 의견
+      await a.evaluate(() => { location.hash = 'edit'; });
+      await a.setInputFiles('#edit-input', [fileA, fileB]);
+      await until(a, () => document.querySelectorAll('#edit-grid .page-card canvas').length === 7, undefined, { timeout: 20000 });
+      await a.evaluate(() => document.getElementById('toasts').replaceChildren());
+      await run('edit');
+      await a.click('#edit-save-opts');
+      await until(a, () => document.getElementById('save-dialog').open);
+      await a.waitForTimeout(500);
+      await run('save-dialog');
+      await a.keyboard.press('Escape');
+      await a.locator('#edit-grid .page-card').first().dblclick({ position: { x: 50, y: 50 } });
+      await until(a, () => window.__pdfWorkshop.viewer().canvas, undefined, { timeout: 15000 });
+      await run('viewer');
+      await a.keyboard.press('Escape');
+      await a.waitForTimeout(200);
+      await a.click('#side-version');
+      await until(a, () => document.getElementById('news-dialog').open);
+      await run('news');
+      await a.keyboard.press('Escape');
+      await a.click('.side-feedback');
+      await until(a, () => document.getElementById('feedback-dialog').open);
+      await run('feedback');
+      await a.keyboard.press('Escape');
+      for (const u of ['check', 'privacy', 'licenses']) {
+        await a.goto(`${BASE}/${u}`, { waitUntil: 'networkidle' });
+        await a.waitForTimeout(u === 'check' ? 1500 : 100);
+        await run(u);
+      }
+      if (aerr.length) results.push({ scheme, where: 'console', v: aerr.map((e) => ({ id: e.slice(0, 80), impact: 'console' })) });
+      await actx.close();
+    }
+    const bad = results.flatMap((r) => r.v.filter((x) => x.impact === 'critical' || x.impact === 'serious' || x.impact === 'console').map((x) => `${r.scheme}/${r.where}:${x.id}(${x.where || ''})`));
+    const screensN = results.length / 2;
+    check(`자동 접근성 검사(axe-core): 라이트 · 다크 × ${screensN}개 화면(도구 6 · 처음 · 창 4 · 안내 3) critical · serious 0개`, bad.length === 0,
+      bad.length ? bad.join(' | ').slice(0, 400) : `${results.length}번 검사 · 모두 0개 (다크 대비 포함)`);
+    check('다크 모드: 어두운 화면에 밝은 조각이 남지 않음(쪽 미리보기 · 종이 제외)', brightAll.length === 0, brightAll.length ? brightAll.join(' | ').slice(0, 400) : `${screensN}개 화면 확인`);
+
+    // 브라우저 확대 150% · 200% 흉내(CSS 픽셀 폭을 1280/1.5, 1280/2로 줄임)
+    const zoomRes = [];
+    for (const [z, w, hgt] of [[150, 853, 600], [200, 640, 450]]) {
+      const zc = await browser.newContext({ viewport: { width: w, height: hgt }, colorScheme: 'light', deviceScaleFactor: z / 100 });
+      const zp = await zc.newPage();
+      await zp.goto(BASE, { waitUntil: 'networkidle' });
+      const homeSw = await zp.evaluate(() => document.documentElement.scrollWidth);
+      await zp.setInputFiles('#home-input', [fileA, fileB]);
+      await until(zp, () => document.querySelectorAll('#edit-grid .page-card').length === 7);
+      const lay = await zp.evaluate(() => {
+        const bar = document.getElementById('edit-bar').getBoundingClientRect();
+        const side = document.querySelector('.sidebar').getBoundingClientRect();
+        const main = document.querySelector('.work').getBoundingClientRect();
+        const btns = [...document.querySelectorAll('#edit-bar button')].filter((b) => b.offsetParent).map((b) => b.getBoundingClientRect());
+        return {
+          sw: document.documentElement.scrollWidth,
+          barIn: bar.left >= -1 && bar.right <= innerWidth + 1 && bar.bottom <= innerHeight + 1,
+          btnIn: btns.every((r) => r.left >= -1 && r.right <= innerWidth + 1 && r.width >= 24),
+          overlap: side.width > 0 && side.height > 200 && side.right > main.left + 2,
+        };
+      });
+      await zp.click('#edit-save-opts');
+      await until(zp, () => document.getElementById('save-dialog').open);
+      const dlg = await zp.evaluate(() => {
+        const d = document.getElementById('save-dialog').getBoundingClientRect();
+        const sv = document.getElementById('sd-save').getBoundingClientRect();
+        return { inside: d.left >= -1 && d.right <= innerWidth + 1 && d.top >= -1 && d.bottom <= innerHeight + 1, save: sv.bottom <= innerHeight + 1 && sv.right <= innerWidth + 1 && sv.width > 0 };
+      });
+      await zp.keyboard.press('Escape');
+      zoomRes.push({ z, homeSw, w, ...lay, ...dlg });
+      await zc.close();
+    }
+    check('브라우저 확대 150% · 200%: 가로 스크롤 없음 · 저장 막대 버튼 화면 안 · 사이드바 안 겹침 · 설정 창과 [저장] 단추가 화면 안',
+      zoomRes.every((r) => r.homeSw <= r.w && r.sw <= r.w && r.barIn && r.btnIn && !r.overlap && r.inside && r.save),
+      zoomRes.map((r) => `${r.z}%: 폭 ${r.sw}/${r.w} · 막대 ${r.barIn && r.btnIn ? 'OK' : '넘침'} · 사이드바 ${r.overlap ? '겹침' : 'OK'} · 창 ${r.inside && r.save ? 'OK' : '넘침'}`).join(' / '));
+
+    // 포커스 순서: 처음 화면에서 Tab을 누르면 보이는 것만, 위에서 아래로
+    const fctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: 'light' });
+    const fp = await fctx.newPage();
+    await fp.goto(BASE, { waitUntil: 'networkidle' });
+    const stops = [];
+    for (let i = 0; i < 24; i++) {
+      await fp.keyboard.press('Tab');
+      stops.push(await fp.evaluate(() => {
+        const e = document.activeElement;
+        const r = e.getBoundingClientRect();
+        return { name: (e.getAttribute('aria-label') || e.textContent || e.id || e.tagName).trim().replace(/\s+/g, ' ').slice(0, 16), y: Math.round(r.top + scrollY), vis: r.width > 0 && r.height > 0 };
+      }));
+    }
+    const hiddenStops = stops.filter((s) => !s.vis);
+    let backJumps = 0;
+    for (let i = 1; i < stops.length; i++) if (stops[i].y < stops[i - 1].y - 80) backJumps++;
+    await fctx.close();
+    check('포커스 순서(처음 화면 Tab 24번): [파일 고르기]에 닿고, 안 보이는 곳에 멈추지 않고 위에서 아래로', hiddenStops.length === 0 && backJumps <= 1 && stops.some((s) => /파일 고르기/.test(s.name)),
+      `${stops.slice(0, 10).map((s) => s.name).join(' → ')} … · 숨은 곳 ${hiddenStops.length} · 위로 되돌아감 ${backJumps}`);
+
+    // 인쇄: 앱 화면 대신 "PDF를 저장한 뒤 그 파일을 인쇄하세요"
+    const pc = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const pp2 = await pc.newPage();
+    await pp2.goto(BASE, { waitUntil: 'networkidle' });
+    await pp2.emulateMedia({ media: 'print' });
+    const pr = await pp2.evaluate(() => ({ note: document.querySelector('.print-note').getBoundingClientRect().height, text: document.querySelector('.print-note').innerText, home: document.getElementById('view-home').getBoundingClientRect().height }));
+    if (SCREENS) await pp2.screenshot({ path: path.join(shots, 'print.png') });
+    await pc.close();
+    check('인쇄(Ctrl+P): 앱 화면 대신 "PDF를 저장한 뒤 그 파일을 인쇄하세요" 한 장', pr.note > 50 && pr.home === 0 && /PDF를 저장한 뒤 그 파일을 인쇄하세요/.test(pr.text), `안내 ${Math.round(pr.note)}px · 앱 ${pr.home}px`);
+
+    // 저사양 흉내: CPU 4배 느리게 + 153쪽 → 썸네일이 끝까지 그려지고 3초 넘게 멈추지 않음
+    const big = await PDFDocument.create();
+    const bf = await big.embedFont(StandardFonts.Helvetica);
+    for (let i = 0; i < 153; i++) {
+      const pg = big.addPage([595, 842]);
+      pg.drawText(`Page ${i + 1}`, { x: 60, y: 760, size: 36, font: bf });
+      for (let k = 0; k < 12; k++) pg.drawRectangle({ x: 60, y: 700 - k * 40, width: 400 + ((k * 37 + i) % 80), height: 8, color: rgb(0.8, 0.83, 0.9) });
+    }
+    const bigFile = await writePdf('153쪽.pdf', big);
+    const lctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: 'light' });
+    const lp = await lctx.newPage();
+    const lerr = [];
+    watch(lp, lerr);
+    await lp.goto(BASE, { waitUntil: 'networkidle' });
+    const cdpL = await lctx.newCDPSession(lp);
+    await cdpL.send('Emulation.setCPUThrottlingRate', { rate: 4 });
+    await lp.evaluate(() => {
+      window.__long = [];
+      try { new PerformanceObserver((l) => l.getEntries().forEach((e) => window.__long.push(Math.round(e.duration)))).observe({ type: 'longtask', buffered: false }); } catch { /* 없음 */ }
+    });
+    const tl0 = Date.now();
+    await lp.setInputFiles('#home-input', [bigFile]);
+    await until(lp, () => document.querySelectorAll('#edit-grid .page-card').length === 153, undefined, { timeout: 120000 });
+    const cardsAt = Date.now() - tl0;
+    // 아래로 내려가며 모든 썸네일이 그려지는지
+    let painted = 0;
+    const scrollEnd = Date.now() + 240000;
+    while (Date.now() < scrollEnd) {
+      painted = await lp.evaluate(() => {
+        const cs = [...document.querySelectorAll('#edit-grid .page-card')];
+        const first = cs.find((c) => !c.querySelector('.thumb canvas'));
+        if (first) first.scrollIntoView({ block: 'center' });
+        return cs.filter((c) => c.querySelector('.thumb canvas')).length;
+      });
+      if (painted === 153) break;
+      await lp.waitForTimeout(400);
+    }
+    const allAt = Date.now() - tl0;
+    const longs = await lp.evaluate(() => window.__long);
+    await cdpL.send('Emulation.setCPUThrottlingRate', { rate: 1 });
+    await lctx.close();
+    const maxLong = longs.length ? Math.max(...longs) : 0;
+    check('저사양 흉내(CPU 4배 느리게) 153쪽: 썸네일 끝까지 · 화면이 3초 이상 멈추지 않음', painted === 153 && maxLong < 3000 && lerr.length === 0,
+      `카드 ${(cardsAt / 1000).toFixed(1)}초 · 썸네일 ${painted}/153 ${(allAt / 1000).toFixed(1)}초 · 가장 긴 멈춤 ${maxLong}ms(50ms 넘는 것 ${longs.length}번)`);
+    uiMeasures.push(`CPU 4배 느리게 153쪽: 카드 ${(cardsAt / 1000).toFixed(1)}초, 썸네일 전부 ${(allAt / 1000).toFixed(1)}초, 가장 긴 멈춤 ${maxLong}ms`);
   }
 
   // ── 12. 스크린샷 ──

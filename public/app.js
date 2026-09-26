@@ -90,6 +90,22 @@
     return f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
   }
 
+  // ── 파일 고르기 라벨(label for=파일 입력)을 키보드로도 누를 수 있게 ──
+  function keyboardFileLabels(root = document) {
+    root.querySelectorAll('label[for]').forEach((lb) => {
+      const input = document.getElementById(lb.htmlFor);
+      if (!input || input.type !== 'file' || lb.hasAttribute('tabindex')) return;
+      lb.tabIndex = 0;
+      lb.setAttribute('role', 'button');
+      lb.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault();
+        input.click();
+      });
+    });
+  }
+  keyboardFileLabels();
+
   // ── 알림 ───────────────────────────────────────────────────
   const toastBox = $('toasts');
   /**
@@ -819,7 +835,8 @@
     }
 
     function makeCard(p) {
-      const el = h('div', { class: 'page-card sort-item', tabindex: '0', 'data-key': p.key, role: 'option', 'aria-selected': 'false' },
+      // (카드 안에 버튼이 있어 option이 아니라 listitem. 선택 여부는 읽기 글에 "선택됨"으로 넣는다)
+      const el = h('div', { class: 'page-card sort-item', tabindex: '0', 'data-key': p.key, role: 'listitem' },
         h('div', { class: 'paper' },
           h('div', { class: 'thumb' }, h('span', { class: 'loading' }, '불러오는 중…')),
           h('span', { class: 'page-no' }),
@@ -908,7 +925,9 @@
         const del = el.querySelector('.card-tools [data-act="del"]');
         del.title = p.deleted ? '되돌리기' : '삭제 (다시 누르면 되돌리기)';
         del.setAttribute('aria-label', p.deleted ? '되돌리기' : '삭제');
-        el.setAttribute('aria-label', `${p.deleted ? '삭제 예정' : n + '번'}, ${label}${p.rot ? `, ${p.rot}도 회전` : ''}`);
+        el.dataset.no = p.deleted ? '' : String(n);
+        el.dataset.label = label;
+        setCardLabel(p, el);
         if (el.dataset.painted && el.dataset.painted !== `${p.srcId}:${p.index}:${p.rot}`) paintThumb(el);
       });
       const has = pages.length > 0 || sources.length > 0;
@@ -1000,6 +1019,15 @@
     const selMore = $('sel-more');
     const selectedPages = () => pages.filter((p) => sel.has(p.key));
 
+    /** 화면 읽기용: "3번째 쪽, 보고서A · 3쪽, 선택됨, 삭제 예정, 90도 회전" */
+    function setCardLabel(p, el) {
+      const parts = [p.deleted ? '삭제 예정 쪽' : `${el.dataset.no}번째 쪽`, el.dataset.label];
+      if (sel.has(p.key)) parts.push('선택됨');
+      if (p.deleted) parts.push('삭제 예정');
+      if (p.rot) parts.push(`${p.rot}도 회전`);
+      if (el.dataset.found) parts.push(`찾은 글자 ${el.dataset.found}곳`);
+      el.setAttribute('aria-label', parts.filter(Boolean).join(', '));
+    }
     function updateSelection() {
       const alive = new Set(pages.map((p) => p.key));
       for (const k of sel) if (!alive.has(k)) sel.delete(k);
@@ -1008,7 +1036,8 @@
       for (const [k, el] of cards) {
         const on = sel.has(k);
         el.classList.toggle('selected', on);
-        el.setAttribute('aria-selected', on ? 'true' : 'false');
+        const pp = pages.find((x) => x.key === k);
+        if (pp && el.dataset.label) setCardLabel(pp, el);
         el.querySelector('.sel-check').setAttribute('aria-checked', on ? 'true' : 'false');
       }
       grid.classList.toggle('select-mode', selectMode);
@@ -2312,6 +2341,7 @@
         const b = el.querySelector('.find-badge');
         if (b) b.textContent = n ? `${n}곳` : '';
         el.dataset.found = n ? String(n) : '';
+        if (el.dataset.label) setCardLabel(p, el);
       }
       $('edit-find-prev').disabled = find.hits.length < 1;
       $('edit-find-next').disabled = find.hits.length < 1;
@@ -4640,7 +4670,7 @@
       const name = unlockFile.name;
       Edit.addDecrypted(name, r.bytes, r.doc);
       showTab('edit');
-      toast(r.plain ? `"${name}"을(를) 편집 탭에 넣었어요.` : `"${name}" 암호를 풀어 편집 탭에 넣었어요.`,
+      toast(r.plain ? `"${name}"을(를) 편집 · 합치기에 넣었어요.` : `"${name}" 암호를 풀어 편집 · 합치기에 넣었어요.`,
         r.plain ? '원래 암호가 없는 파일이었어요.' : '저장하면 암호 없는 PDF가 돼요.', 'ok');
     });
 
@@ -4900,8 +4930,11 @@
       },
     });
     const stem = () => safeName(baseName(file.name));
-    async function saveNow(o = editor.getOpts(), name = `${stem()}_꾸미기`) {
+    async function saveNow(o, name) {
+      // (이름은 파일이 있을 때만 만든다: 파일 없이 Ctrl+S를 누르면 여기서 오류가 났었다)
       if (!file) return toast('PDF를 먼저 넣어 주세요.', '');
+      if (!o) o = editor.getOpts();
+      if (!name) name = `${stem()}_꾸미기`;
       const err = editor.validate();
       if (err) return toast(err, '');
       try {

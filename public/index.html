@@ -36,6 +36,12 @@
       <p>자바스크립트가 꺼져 있어요. 엣지, 크롬, 웨일로 열어 주세요.</p>
     </div>
   </noscript>
+  <!-- 인쇄(Ctrl+P)하면 앱 화면 대신 이 한 장만 나온다 -->
+  <div class="print-note">
+    <h1>PDF 작업실</h1>
+    <p><b>PDF를 저장한 뒤 그 파일을 인쇄하세요.</b></p>
+    <p>이 화면은 인쇄용이 아니에요. [바로 저장]으로 PDF를 저장하고, 다운로드 폴더에서 그 파일을 열어 인쇄하면 쪽 크기와 여백이 그대로 나와요.</p>
+  </div>
   <div class="old-browser-note" id="old-browser" hidden>
     <h1>이 브라우저에서는 열 수 없어요</h1>
     <p>엣지, 크롬, 웨일로 열어 주세요.</p>
@@ -405,7 +411,7 @@
           </div>
         </section>
 
-        <div class="grid pages" id="edit-grid" aria-label="쪽 목록" aria-multiselectable="true"></div>
+        <div class="grid pages" id="edit-grid" role="list" aria-label="쪽 목록 (Enter: 크게 보기, Space: 선택)"></div>
 
         <div class="savebar" id="edit-bar" hidden>
           <span class="count" id="edit-count"><b>0</b>쪽 저장 예정</span>
@@ -911,7 +917,7 @@
         <button type="submit" class="icon-btn" aria-label="닫기" title="닫기 (Esc)"><svg class="ic sm" aria-hidden="true"><use href="#i-x"/></svg></button>
       </header>
       <p class="sub" id="news-ver"></p>
-      <ul class="news-full" id="news-full"></ul>
+      <ul class="news-full" id="news-full" tabindex="0" aria-label="새 소식 목록"></ul>
     </form>
   </dialog>
 

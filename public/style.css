@@ -2400,3 +2400,22 @@ dialog.viewer.deleted .viewer-canvas { opacity: .45; }
   .viewer-sep { display: none; }
   .viewer-head strong { max-width: 100%; font-size: 14px; }
 }
+
+/* ═══ 인쇄: 앱 화면 대신 안내 한 장 ═══ */
+.print-note { display: none; }
+@media print {
+  body > :not(.print-note) { display: none !important; }
+  body { background: #fff !important; }
+  .print-note { display: block; max-width: 640px; margin: 40mm auto 0; padding: 0; color: #000; font-family: "Pretendard Variable", "Malgun Gothic", sans-serif; }
+  .print-note h1 { margin: 0 0 18px; font-size: 22pt; }
+  .print-note p { margin: 0 0 10px; font-size: 13pt; line-height: 1.6; }
+}
+
+/* 다크 모드: 남색 막대 위 흰 단추가 눈부시지 않게 */
+@media (prefers-color-scheme: dark) {
+  .btn.light { background: #2B3553; border-color: #3E4B72; color: #fff; }
+  .btn.light:hover:not(:disabled) { background: #34416A; border-color: #6E8FFF; color: #fff; }
+  .sb.danger { background: #3A1E24; border-color: #5A2A33; color: #FF9C9C; }
+  .sb.danger:hover:not(:disabled) { background: #4A242C; }
+}
+label.btn[role="button"]:focus-visible, label.drop-mini[role="button"]:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: 2px; }
