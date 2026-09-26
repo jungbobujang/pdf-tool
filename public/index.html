@@ -6,6 +6,12 @@
   <meta name="color-scheme" content="light dark">
   <title>PDF 작업실</title>
   <meta name="description" content="PDF 합치기, 자르기, 회전, 사진 변환, 암호, 쪽번호를 파일을 올리지 않고 브라우저 안에서 처리합니다.">
+  <meta name="app-version" content="">
+  <meta name="theme-color" content="#141B2E">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icons/logo.svg" type="image/svg+xml">
+  <link rel="icon" href="/icons/favicon-32.png" sizes="32x32" type="image/png">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
   <link rel="stylesheet" href="/vendor/pretendard/pretendardvariable.min.css">
   <link rel="stylesheet" href="style.css">
 </head>
@@ -41,12 +47,22 @@
 
   <div id="toasts" class="toasts" aria-live="assertive" popover="manual"></div>
 
+  <!-- 새 버전 알림 (서비스 워커가 새 버전을 받아 두면) -->
+  <div class="update-bar" id="update-bar" role="status" hidden>
+    <span id="update-text">새 버전이 있어요.</span>
+    <button type="button" class="btn sm" id="update-go">새로고침</button>
+    <button type="button" class="update-x" id="update-x" aria-label="새 버전 알림 닫기"><svg class="ic sm" aria-hidden="true"><use href="#i-x"/></svg></button>
+  </div>
+
   <!-- ① 처음 화면 -->
   <div class="view view-home" id="view-home">
     <header class="hero">
       <div class="hero-bar">
         <a href="./" class="logo" id="logo-home" title="처음 화면으로"><span class="logo-mark" aria-hidden="true"></span>PDF 작업실</a>
-        <p class="safe"><span class="safe-dot" aria-hidden="true"></span>파일은 이 컴퓨터 밖으로 나가지 않아요</p>
+        <div class="hero-right">
+          <p class="safe"><span class="safe-dot" aria-hidden="true"></span>파일은 이 컴퓨터 밖으로 나가지 않아요<span class="offline-badge" hidden>지금 인터넷 없이 작동 중</span></p>
+          <button type="button" class="btn install-btn" id="install-btn" hidden><svg class="ic sm" aria-hidden="true"><use href="#i-filedown"/></svg>바탕화면에 설치</button>
+        </div>
       </div>
       <div class="hero-text">
         <h1 class="hero-title" id="home-title">PDF, <em>올리지 않고</em> 바로 고치세요</h1>
@@ -67,37 +83,37 @@
 
       <h2 class="sr-only">도구</h2>
       <div class="tool-cards" id="tool-cards">
-        <button type="button" class="tool-card" data-open="edit" style="--tc: var(--c1)">
+        <button type="button" class="tool-card" data-open="edit">
           <span class="tool-icon"><svg class="ic"><use href="#i-layers"/></svg></span>
           <strong>편집 · 합치기</strong>
           <span class="tool-desc">여러 PDF를 펼쳐 순서 바꾸기, 쪽 빼기, 교체</span>
           <span class="tool-open">열기 →</span>
         </button>
-        <button type="button" class="tool-card" data-open="img2pdf" style="--tc: var(--c2)">
+        <button type="button" class="tool-card" data-open="img2pdf">
           <span class="tool-icon"><svg class="ic"><use href="#i-image"/></svg></span>
           <strong>사진 → PDF</strong>
           <span class="tool-desc">휴대폰 사진, 스캔한 활동지를 한 파일로</span>
           <span class="tool-open">열기 →</span>
         </button>
-        <button type="button" class="tool-card" data-open="pdf2img" style="--tc: var(--c3)">
+        <button type="button" class="tool-card" data-open="pdf2img">
           <span class="tool-icon"><svg class="ic"><use href="#i-filecheck"/></svg></span>
           <strong>PDF → 사진</strong>
           <span class="tool-desc">원하는 쪽만 PNG · JPG로 꺼내 PPT에 붙이기</span>
           <span class="tool-open">열기 →</span>
         </button>
-        <button type="button" class="tool-card" data-open="decorate" style="--tc: var(--c5)">
+        <button type="button" class="tool-card" data-open="decorate">
           <span class="tool-icon"><svg class="ic"><use href="#i-brush"/></svg></span>
           <strong>꾸미기</strong>
           <span class="tool-desc">쪽번호 · 워터마크 · 서명과 도장 넣기</span>
           <span class="tool-open">열기 →</span>
         </button>
-        <button type="button" class="tool-card" data-open="compress" style="--tc: var(--c6)">
+        <button type="button" class="tool-card" data-open="compress">
           <span class="tool-icon"><svg class="ic"><use href="#i-filedown"/></svg></span>
           <strong>용량 줄이기</strong>
           <span class="tool-desc">공문 10MB, 메일 20MB에 맞게 줄이기</span>
           <span class="tool-open">열기 →</span>
         </button>
-        <button type="button" class="tool-card" data-open="security" style="--tc: var(--c4)">
+        <button type="button" class="tool-card" data-open="security">
           <span class="tool-icon"><svg class="ic"><use href="#i-lock"/></svg></span>
           <strong>보안</strong>
           <span class="tool-desc">암호 걸기 · 풀기, 걸린 제한 보기</span>
@@ -116,32 +132,32 @@
         <p class="side-hint">← 로고를 누르면 처음 화면</p>
       </div>
       <nav class="side-nav" role="tablist" aria-label="도구" aria-orientation="vertical">
-        <button class="tab" role="tab" id="tab-edit" aria-controls="panel-edit" aria-selected="true" data-tab="edit" style="--tc: var(--c1)">
+        <button class="tab" role="tab" id="tab-edit" aria-controls="panel-edit" aria-selected="true" data-tab="edit">
           <span class="tab-icon"><svg class="ic"><use href="#i-layers"/></svg></span>
           <span class="tab-text"><span class="tab-name">편집 · 합치기</span><span class="tab-desc">순서 바꾸기 · 빼기 · 나누기</span></span>
         </button>
-        <button class="tab" role="tab" id="tab-img2pdf" aria-controls="panel-img2pdf" aria-selected="false" data-tab="img2pdf" tabindex="-1" style="--tc: var(--c2)">
+        <button class="tab" role="tab" id="tab-img2pdf" aria-controls="panel-img2pdf" aria-selected="false" data-tab="img2pdf" tabindex="-1">
           <span class="tab-icon"><svg class="ic"><use href="#i-image"/></svg></span>
           <span class="tab-text"><span class="tab-name">사진 → PDF</span><span class="tab-desc">사진 여러 장을 한 파일로</span></span>
         </button>
-        <button class="tab" role="tab" id="tab-pdf2img" aria-controls="panel-pdf2img" aria-selected="false" data-tab="pdf2img" tabindex="-1" style="--tc: var(--c3)">
+        <button class="tab" role="tab" id="tab-pdf2img" aria-controls="panel-pdf2img" aria-selected="false" data-tab="pdf2img" tabindex="-1">
           <span class="tab-icon"><svg class="ic"><use href="#i-filecheck"/></svg></span>
           <span class="tab-text"><span class="tab-name">PDF → 사진</span><span class="tab-desc">PNG · JPG · WEBP로</span></span>
         </button>
-        <button class="tab" role="tab" id="tab-decorate" aria-controls="panel-decorate" aria-selected="false" data-tab="decorate" tabindex="-1" style="--tc: var(--c5)">
+        <button class="tab" role="tab" id="tab-decorate" aria-controls="panel-decorate" aria-selected="false" data-tab="decorate" tabindex="-1">
           <span class="tab-icon"><svg class="ic"><use href="#i-brush"/></svg></span>
           <span class="tab-text"><span class="tab-name">꾸미기</span><span class="tab-desc">쪽번호 · 워터마크 · 도장</span></span>
         </button>
-        <button class="tab" role="tab" id="tab-compress" aria-controls="panel-compress" aria-selected="false" data-tab="compress" tabindex="-1" style="--tc: var(--c6)">
+        <button class="tab" role="tab" id="tab-compress" aria-controls="panel-compress" aria-selected="false" data-tab="compress" tabindex="-1">
           <span class="tab-icon"><svg class="ic"><use href="#i-filedown"/></svg></span>
           <span class="tab-text"><span class="tab-name">용량 줄이기</span><span class="tab-desc">목표 용량에 맞추기</span></span>
         </button>
-        <button class="tab" role="tab" id="tab-security" aria-controls="panel-security" aria-selected="false" data-tab="security" tabindex="-1" style="--tc: var(--c4)">
+        <button class="tab" role="tab" id="tab-security" aria-controls="panel-security" aria-selected="false" data-tab="security" tabindex="-1">
           <span class="tab-icon"><svg class="ic"><use href="#i-lock"/></svg></span>
           <span class="tab-text"><span class="tab-name">보안</span><span class="tab-desc">암호 · 걸린 제한 보기</span></span>
         </button>
       </nav>
-      <p class="side-safe"><svg class="ic" aria-hidden="true"><use href="#i-shield"/></svg>파일은 이 컴퓨터 밖으로 나가지 않아요.</p>
+      <p class="side-safe"><svg class="ic" aria-hidden="true"><use href="#i-shield"/></svg><span>파일은 이 컴퓨터 밖으로 나가지 않아요.<span class="offline-badge" hidden>지금 인터넷 없이 작동 중</span></span></p>
       <p class="app-version side-version" id="side-version" aria-label="배포 버전"></p>
     </aside>
 

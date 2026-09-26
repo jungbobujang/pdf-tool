@@ -5503,16 +5503,127 @@
 
   // 검증용으로 상태를 살짝 드러낸다(개인 정보 없음).
   // 배포된 커밋을 화면 구석에 작게 보여 준다(옛 버전이 떠 있는지 바로 알 수 있게).
-  fetch('/version', { cache: 'no-store' })
-    .then((r) => (r.ok ? r.json() : null))
-    .then((v) => {
-      if (!v || !v.commit) return;
+  //   인터넷이 없으면(서비스 워커가 준 화면) HTML에 박힌 커밋으로 보여 주고 "인터넷 없이 작동 중"을 켠다.
+  const Net = (() => {
+    const meta = document.querySelector('meta[name="app-version"]');
+    const pageCommit = (meta && meta.content) || '';
+    let offline = false;
+    const showVersion = (commit, title) => {
+      if (!commit) return;
       document.querySelectorAll('.app-version').forEach((el) => {
-        el.textContent = `v ${v.commit}`;
-        el.title = `배포 시각 ${new Date(v.builtAt).toLocaleString('ko-KR')}`;
+        el.textContent = `v ${commit}`;
+        if (title) el.title = title;
       });
-    })
-    .catch(() => { /* 버전 표시는 없어도 쓰는 데 지장 없다 */ });
+    };
+    showVersion(pageCommit, '');
+    function setOffline(on) {
+      offline = on;
+      document.querySelectorAll('.offline-badge').forEach((b) => { b.hidden = !on; });
+    }
+    function probe() {
+      if (!navigator.onLine) { setOffline(true); return Promise.resolve(); }
+      return fetch('/version', { cache: 'no-store' })
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+        .then((v) => {
+          setOffline(false);
+          // 화면이 옛 버전 캐시에서 나왔으면 화면의 커밋을 그대로 둔다(새 버전은 위쪽 띠로 알린다)
+          if (v && v.commit && (!pageCommit || pageCommit === v.commit)) showVersion(v.commit, `배포 시각 ${new Date(v.builtAt).toLocaleString('ko-KR')}`);
+        })
+        .catch(() => setOffline(true));
+    }
+    probe();
+    window.addEventListener('online', probe);
+    window.addEventListener('offline', () => setOffline(true));
+    return { probe, isOffline: () => offline };
+  })();
+
+  /** 작업 중인 파일이 있는가 (새로고침 · 탭 닫기 전에 확인) */
+  function hasWork() {
+    if (isBusy()) return true;
+    const loaded = ['edit-empty', 'img-empty', 'p2i-empty', 'decor-empty', 'cmp-empty'].some((id) => { const e = $(id); return e && e.hidden; });
+    const lockPicked = ['unlock-file', 'lock-file', 'restrict-file'].some((id) => { const e = $(id); return e && e.textContent.trim() !== 'PDF 고르기'; });
+    return loaded || lockPicked;
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // 오프라인(서비스 워커) · 새 버전 띠 · 바탕화면에 설치
+  // ═══════════════════════════════════════════════════════════
+  const Pwa = (() => {
+    const bar = $('update-bar');
+    const go = $('update-go');
+    const text = $('update-text');
+    let waiting = null;
+    let wantReload = false;
+    let armed = false;
+    function showUpdate(w) {
+      waiting = w;
+      armed = false;
+      bar.classList.remove('warn');
+      text.textContent = '새 버전이 있어요.';
+      go.textContent = '새로고침';
+      bar.hidden = false;
+    }
+    go.addEventListener('click', () => {
+      if (!waiting) return;
+      // 작업 중이면 한 번 더 확인한다(강제로 새로고침하지 않는다)
+      if (hasWork() && !armed) {
+        armed = true;
+        bar.classList.add('warn');
+        text.textContent = '새로고침하면 지금 작업이 사라져요. 먼저 저장하세요.';
+        go.textContent = '그래도 새로고침';
+        return;
+      }
+      wantReload = true;
+      waiting.postMessage('SKIP_WAITING');
+    });
+    $('update-x').addEventListener('click', () => { bar.hidden = true; });
+
+    let reg = null;
+    if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (wantReload) { wantReload = false; location.reload(); }
+      });
+      navigator.serviceWorker.register('/sw.js').then((r) => {
+        reg = r;
+        const offer = (w) => { if (w && navigator.serviceWorker.controller) showUpdate(w); };
+        if (r.waiting) offer(r.waiting);
+        r.addEventListener('updatefound', () => {
+          const w = r.installing;
+          if (!w) return;
+          w.addEventListener('statechange', () => { if (w.state === 'installed') offer(w); });
+        });
+      }).catch((e) => console.warn('서비스 워커 등록 실패(오프라인 사용만 안 됨):', e && e.message));
+      // 탭으로 돌아오면 새 버전이 있는지 가끔 확인
+      let lastCheck = Date.now();
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden || !reg || Date.now() - lastCheck < 30 * 60 * 1000) return;
+        lastCheck = Date.now();
+        reg.update().catch(() => {});
+      });
+    }
+
+    // 바탕화면에 설치 (브라우저가 설치를 제안할 수 있을 때만 버튼이 보인다)
+    const installBtn = $('install-btn');
+    let deferred = null;
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferred = e;
+      installBtn.hidden = false;
+    });
+    installBtn.addEventListener('click', async () => {
+      if (!deferred) return;
+      const d = deferred;
+      deferred = null;
+      installBtn.hidden = true;
+      d.prompt();
+      try { await d.userChoice; } catch { /* 취소해도 괜찮다 */ }
+    });
+    window.addEventListener('appinstalled', () => {
+      installBtn.hidden = true;
+      toast('바탕화면에 설치했어요.', '이제 인터넷이 없어도 바탕화면 아이콘으로 열 수 있어요.', 'ok');
+    });
+    return { state: () => ({ controlled: !!navigator.serviceWorker && !!navigator.serviceWorker.controller, updateShown: !bar.hidden, offline: Net.isOffline() }) };
+  })();
 
   // 저장 단축키: Ctrl+S = 바로 저장, Ctrl+Shift+S = 설정하고 저장… (브라우저의 "페이지 저장"은 막는다)
   document.addEventListener('keydown', (e) => {
@@ -5541,5 +5652,5 @@
     if (t && (t !== activeTab || activeView !== 'work')) openTool(t);
   });
 
-  window.__pdfWorkshop = { version: 5, ready: true, guide: Guide.state, compress: Shrink.state, worker: Squeeze.inWorker, lastStage: () => errCtx.stage };
+  window.__pdfWorkshop = { version: 5, ready: true, guide: Guide.state, compress: Shrink.state, worker: Squeeze.inWorker, lastStage: () => errCtx.stage, pwa: Pwa.state, hasWork };
 })();

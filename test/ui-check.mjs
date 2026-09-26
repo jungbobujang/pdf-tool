@@ -1538,7 +1538,8 @@ try {
     await ap.goto(BASE, { waitUntil: 'networkidle' });
     await ap.addScriptTag({ path: axePath });
     const axeRun = () => ap.evaluate(async () => {
-      const res = await window.axe.run(document, { resultTypes: ['violations'] });
+      // 예시 무대는 aria-hidden 장식이고 움직이는 중에는 투명도가 바뀌므로 뺀다(설명 글은 검사한다)
+      const res = await window.axe.run({ exclude: [['.demo-stage']] }, { resultTypes: ['violations'] });
       return res.violations.map((v) => ({ id: v.id, impact: v.impact, n: v.nodes.length, where: v.nodes[0] && v.nodes[0].target.join(' ') }));
     });
     const axeAll = [];
@@ -1550,11 +1551,109 @@ try {
       axeAll.push({ where: t, v: await axeRun() });
     }
     const crit = axeAll.flatMap((x) => x.v.filter((v) => v.impact === 'critical').map((v) => `${x.where}:${v.id}(${v.where})`));
-    const serious = [...new Set(axeAll.flatMap((x) => x.v.filter((v) => v.impact === 'serious').map((v) => v.id)))];
+    const serious = [...new Set(axeAll.flatMap((x) => x.v.filter((v) => v.impact === 'serious').map((v) => `${x.where}:${v.id}(${v.where})`)))];
     const ver = JSON.parse(fs.readFileSync(path.join(path.dirname(axePath), 'package.json'), 'utf8')).version;
     check(`자동 접근성 검사(axe-core ${ver}): 처음 화면 + 도구 6곳 심각(critical) · 중대(serious) 0개`, crit.length === 0 && serious.length === 0,
       crit.length ? crit.join(' | ').slice(0, 300) : `critical 0개 · serious ${serious.length ? serious.join(',') : '0개'}`);
     await actx.close();
+  }
+
+  // ── 11-c. 전송 차단(CSP) · 오프라인(서비스 워커) · 설치 정보 ──
+  {
+    const octx = await browser.newContext({ viewport: { width: 1280, height: 900 }, acceptDownloads: true, colorScheme: 'light' });
+    const o = await octx.newPage();
+    const oerr = [];
+    const csp = [];
+    watch(o, oerr);
+    o.on('console', (m) => /Content Security Policy|Refused to/i.test(m.text()) && csp.push(m.text()));
+    await o.goto(BASE, { waitUntil: 'networkidle' });
+
+    const head = await octx.request.get(`${BASE}/`);
+    const cspHeader = head.headers()['content-security-policy'] || '';
+    const need = ["default-src 'self'", "script-src 'self'", "connect-src 'self'", "frame-ancestors 'none'", "form-action 'none'", "base-uri 'self'", "worker-src 'self' blob:", "font-src 'self'"];
+    const missing = need.filter((r) => !cspHeader.split(/;\s*/).includes(r));
+    check('CSP 헤더: 이 사이트 밖으로 연결 · 스크립트 · 글꼴 차단 (unsafe-inline · eval 없음)', missing.length === 0 && !/unsafe-inline|unsafe-eval/.test(cspHeader),
+      missing.length ? `빠짐: ${missing.join(', ')}` : cspHeader.replace(/; /g, ' · ').slice(0, 160));
+
+    const man = await octx.request.get(`${BASE}/manifest.webmanifest`);
+    const manJson = man.ok() ? await man.json() : {};
+    const sw = await octx.request.get(`${BASE}/sw.js`);
+    const swText = sw.ok() ? await sw.text() : '';
+    const iconOk = await Promise.all((manJson.icons || []).map(async (ic) => (await octx.request.get(BASE + ic.src)).ok()));
+    check('manifest · sw.js 200, 아이콘(192 · 512 · maskable) 받힘', man.status() === 200 && sw.status() === 200 && manJson.name === 'PDF 작업실' && manJson.display === 'standalone' &&
+      (manJson.icons || []).some((i) => i.purpose === 'maskable') && iconOk.length >= 4 && iconOk.every(Boolean) && !/__PRECACHE__|'__COMMIT__'/.test(swText),
+    `manifest ${man.status()} · sw.js ${sw.status()} · 아이콘 ${iconOk.filter(Boolean).length}/${iconOk.length}`);
+
+    // 서비스 워커가 켜질 때까지(설치 때 앱 화면 · 라이브러리 · 글꼴을 모두 받아 둔다)
+    await until(o, () => !!navigator.serviceWorker.controller, undefined, { timeout: 60000 });
+    const cached = await o.evaluate(async () => {
+      const names = await caches.keys();
+      const c = await caches.open(names.find((n) => n.startsWith('pdfws-')));
+      const keys = (await c.keys()).map((r) => new URL(r.url).pathname);
+      return { names, n: keys.length, has: ['/', '/vendor/pdf.worker.min.js', '/vendor/heic/heic-to.js', '/vendor/pretendard/pretendardvariable.min.css'].every((k) => keys.includes(k)), version: keys.includes('/version') };
+    });
+    check('서비스 워커 등록 · 앱 셸 미리 캐시 (/version은 캐시 안 함)', cached.names.length === 1 && cached.n > 100 && cached.has && !cached.version,
+      `캐시 ${cached.names.join(',')} · ${cached.n}개`);
+
+    // 인터넷을 끊고 새로고침 → 편집 · 합치기 · 저장
+    await octx.setOffline(true);
+    await o.reload({ waitUntil: 'load' });
+    await until(o, () => window.__pdfWorkshop && window.__pdfWorkshop.ready);
+    await until(o, () => ![...document.querySelectorAll('.offline-badge')].every((b) => b.hidden), undefined, { timeout: 5000 }).catch(() => {});
+    const off = await o.evaluate(() => ({
+      badge: [...document.querySelectorAll('.offline-badge')].some((b) => !b.hidden && b.getBoundingClientRect().width > 0),
+      text: (document.querySelector('.offline-badge:not([hidden])') || {}).textContent,
+      ver: document.getElementById('home-version').textContent,
+    }));
+    await o.setInputFiles('#home-input', [fileA, fileB]);
+    await until(o, () => document.querySelectorAll('#edit-grid .page-card canvas').length === 7, undefined, { timeout: 20000 });
+    const [odl] = await Promise.all([o.waitForEvent('download'), o.click('#edit-save')]);
+    const odoc = await PDFDocument.load(fs.readFileSync(await odl.path()));
+    if (SCREENS) {
+      await o.evaluate(() => document.fonts.ready);
+      await o.mouse.move(5, 5);
+      await o.waitForTimeout(600);
+      await o.screenshot({ path: path.join(root, 'docs', 'screens', 'offline.png') });
+    }
+    await octx.setOffline(false);
+    check('인터넷 없이(오프라인) 새로고침 → 편집 · 합치기 · 저장 + "지금 인터넷 없이 작동 중" 배지', off.badge && odoc.getPageCount() === 7 && /^v /.test(off.ver),
+      `배지 "${off.text}" · ${odl.suggestedFilename()} ${odoc.getPageCount()}쪽 · 화면 ${off.ver}`);
+    check('CSP 위반 · 콘솔 에러 0개 (오프라인 흐름 포함)', csp.length === 0 && oerr.filter((e) => !/net::ERR_INTERNET_DISCONNECTED|Failed to fetch|\/version/.test(e)).length === 0,
+      csp.length ? csp.join(' | ').slice(0, 200) : oerr.length ? `오프라인 중 /version 실패만 ${oerr.length}건(정상)` : '0개');
+    await octx.close();
+
+    // 새 버전 배포 흉내: 같은 주소에서 커밋만 다른 서버로 바꿔 띄운다
+    const UPORT = 4000 + Math.floor(Math.random() * 2000) + 2000;
+    const startAs = (commit) => new Promise((resolve, reject) => {
+      const s = spawn(process.execPath, ['server.js'], { cwd: root, env: { ...process.env, PORT: String(UPORT), RAILWAY_GIT_COMMIT_SHA: commit }, stdio: 'pipe' });
+      s.stdout.on('data', (d) => String(d).includes('http://') && resolve(s));
+      s.on('error', reject);
+      setTimeout(() => reject(new Error('서버가 뜨지 않음')), 10000);
+    });
+    const stopped = (s) => new Promise((r) => { s.once('exit', r); s.kill(); });
+    let s1 = await startAs('aaaaaaa');
+    const uctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: 'light' });
+    const u = await uctx.newPage();
+    await u.goto(`http://localhost:${UPORT}/`, { waitUntil: 'networkidle' });
+    await until(u, () => !!navigator.serviceWorker.controller, undefined, { timeout: 60000 });
+    await stopped(s1);
+    s1 = await startAs('bbbbbbb');
+    await u.setInputFiles('#home-input', [fileA]);
+    await until(u, () => document.querySelectorAll('#edit-grid .page-card').length === 3);
+    await u.evaluate(async () => { const r = await navigator.serviceWorker.getRegistration(); await r.update(); });
+    await until(u, () => !document.getElementById('update-bar').hidden, undefined, { timeout: 60000 });
+    const bar1 = await u.textContent('#update-text');
+    await u.click('#update-go');
+    await u.waitForTimeout(500);
+    const bar2 = await u.evaluate(() => ({ text: document.getElementById('update-text').textContent, cards: document.querySelectorAll('#edit-grid .page-card').length, ver: document.querySelector('meta[name="app-version"]').content }));
+    await Promise.all([u.waitForEvent('load'), u.click('#update-go')]);
+    await until(u, () => window.__pdfWorkshop && window.__pdfWorkshop.ready);
+    const after = await u.evaluate(() => ({ ver: document.querySelector('meta[name="app-version"]').content, shown: document.getElementById('home-version').textContent }));
+    check('새 버전 배포 → "새 버전이 있어요 [새로고침]" 띠, 작업 중이면 한 번 더 확인 후에만 새로고침',
+      /새 버전이 있어요/.test(bar1) && /작업이 사라져요/.test(bar2.text) && bar2.cards === 3 && bar2.ver === 'aaaaaaa' && after.ver === 'bbbbbbb' && after.shown === 'v bbbbbbb',
+      `"${bar1}" → 누르면 "${bar2.text.slice(0, 24)}…"(카드 ${bar2.cards}장 유지) → 한 번 더 → v ${after.ver}`);
+    await uctx.close();
+    await stopped(s1);
   }
 
   // ── 12. 스크린샷 ──

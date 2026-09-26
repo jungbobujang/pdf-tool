@@ -2180,3 +2180,36 @@ legend.sr-only { width: 1px !important; }
 @media (min-width: 1600px) {
   .work-layout { grid-template-columns: minmax(0, 1fr) 360px; }
 }
+
+/* ── 도구 색 (예전에는 style 속성이었지만 CSP style-src 'self'를 위해 CSS로) ── */
+[data-open="edit"], [data-tab="edit"] { --tc: var(--c1); }
+[data-open="img2pdf"], [data-tab="img2pdf"] { --tc: var(--c2); }
+[data-open="pdf2img"], [data-tab="pdf2img"] { --tc: var(--c3); }
+[data-open="decorate"], [data-tab="decorate"] { --tc: var(--c5); }
+[data-open="compress"], [data-tab="compress"] { --tc: var(--c6); }
+[data-open="security"], [data-tab="security"] { --tc: var(--c4); }
+
+/* ── 오프라인 · 설치 · 새 버전 ── */
+.hero-right { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px 16px; }
+.offline-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  margin-left: 8px; padding: 2px 9px; border-radius: 999px;
+  font-size: 12px; font-weight: 700; line-height: 1.5;
+  background: rgba(61, 220, 151, .16); color: #7FE8B9; white-space: nowrap;
+}
+.offline-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #3DDC97; }
+.side-safe .offline-badge { margin: 6px 0 0; display: inline-flex; }
+.side-safe .offline-badge[hidden] { display: none; }
+.install-btn { min-height: 34px; padding: 6px 13px; font-size: 13px; background: rgba(255, 255, 255, .08); border-color: rgba(255, 255, 255, .22); color: #fff; }
+.install-btn:hover { background: rgba(255, 255, 255, .16); }
+.update-bar {
+  position: fixed; z-index: 90; top: 10px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 10px;
+  max-width: calc(100vw - 24px); padding: 8px 8px 8px 16px; border-radius: 12px;
+  background: var(--navy); color: #fff; box-shadow: var(--shadow-lg); font-size: 14px; font-weight: 600;
+}
+.update-bar .btn.sm { background: var(--accent); border-color: var(--accent); color: #fff; }
+.update-bar.warn { background: #5A3A08; }
+.update-x { display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 8px; background: transparent; color: #fff; cursor: pointer; }
+.update-x:hover { background: rgba(255, 255, 255, .12); }
+@media (max-width: 520px) { .update-bar { left: 12px; right: 12px; transform: none; font-size: 13px; } }

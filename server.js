@@ -42,14 +42,58 @@ const COMMIT = VERSION.commit;
 // index.html의 app.js · style.css · pdf-core.js 주소에 ?v=커밋 을 붙인다.
 // 커밋이 바뀌면 주소가 바뀌므로 브라우저나 중간 캐시에 옛 파일이 남지 않는다.
 const ASSETS = ['style.css', 'pdf-core.js', 'compress.js', 'guide-anim.js', 'app.js'];
-function renderIndex() {
-  let html = fs.readFileSync(path.join(PUBLIC, 'index.html'), 'utf8');
+// 안내 페이지(/check · /privacy · /licenses)가 쓰는 파일
+const PAGE_ASSETS = [];
+function renderHtml(file) {
+  let html = fs.readFileSync(file, 'utf8');
+  html = html.replace('<meta name="app-version" content="">', `<meta name="app-version" content="${COMMIT}">`);
   for (const a of ASSETS) {
     html = html.replace(new RegExp(`(href|src)="${a.replace('.', '\.')}"`, 'g'), `$1="${a}?v=${COMMIT}"`);
   }
   return html;
 }
+const renderIndex = () => renderHtml(path.join(PUBLIC, 'index.html'));
 const INDEX_HTML = renderIndex();
+
+// 브라우저에 거는 규칙(CSP). /check 페이지에서도 이 내용을 그대로 보여 준다.
+const CSP_RULES = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self'",
+  "img-src 'self' blob: data:",
+  "font-src 'self'",
+  "worker-src 'self' blob:",
+  "connect-src 'self'",
+  "object-src 'none'",
+  "frame-ancestors 'none'",
+  "form-action 'none'",
+  "base-uri 'self'",
+];
+const CSP = CSP_RULES.join('; ');
+
+// 오프라인용 서비스 워커가 설치 때 미리 받아 둘 파일 (커밋이 바뀌면 캐시 이름도 바뀐다)
+const listDir = (dir, prefix) => {
+  try { return fs.readdirSync(dir).filter((f) => !f.startsWith('.')).map((f) => `${prefix}/${encodeURIComponent(f)}`); } catch { return []; }
+};
+const PAGES = ['/check', '/privacy', '/licenses'].filter((p) => fs.existsSync(path.join(PUBLIC, 'pages', `${p.slice(1)}.html`)));
+function precacheList() {
+  return [
+    '/',
+    ...ASSETS.map((a) => `/${a}?v=${COMMIT}`),
+    `/compress-worker.js?v=${COMMIT}`,
+    '/manifest.webmanifest',
+    ...listDir(path.join(PUBLIC, 'icons'), '/icons'),
+    ...PAGES,
+    ...PAGE_ASSETS.map((a) => `/${a}?v=${COMMIT}`),
+    '/vendor/pdf-lib.min.js', '/vendor/pdf.min.js', '/vendor/pdf.worker.min.js', '/vendor/jszip.min.js', '/vendor/pako.min.js', '/vendor/fontkit.min.js',
+    '/vendor/jpeg-decoder.js', '/vendor/heic/heic-to.js',
+    '/vendor/pretendard/pretendardvariable.min.css',
+    ...listDir(nm('pretendard', 'dist', 'web', 'variable', 'woff2'), '/vendor/pretendard/woff2'),
+    '/vendor/fonts/Pretendard-Bold.otf',
+    ...listDir(nm('pdfjs-dist', 'cmaps'), '/vendor/cmaps'),
+    ...listDir(nm('pdfjs-dist', 'standard_fonts'), '/vendor/standard_fonts'),
+  ];
+}
 
 // 라이브러리는 CDN 없이 node_modules에서 직접 제공한다.
 const VENDOR = {
@@ -67,21 +111,8 @@ app.use((req, res, next) => {
   res.set('X-Content-Type-Options', 'nosniff');
   res.set('Referrer-Policy', 'no-referrer');
   // 외부로 나가는 연결을 막아 파일이 브라우저 밖으로 새지 않게 한다.
-  res.set(
-    'Content-Security-Policy',
-    [
-      "default-src 'self'",
-      "script-src 'self'",
-      "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' blob: data:",
-      "worker-src 'self' blob:",
-      "connect-src 'self' blob: data:",
-      "font-src 'self' data:",
-      "object-src 'none'",
-      "base-uri 'self'",
-      "form-action 'none'",
-    ].join('; ')
-  );
+  // (connect-src 'self': 이 사이트 말고는 어디로도 데이터를 보낼 수 없다. 스크립트 · 글꼴 · 스타일도 이 사이트 것만)
+  res.set('Content-Security-Policy', CSP);
   next();
 });
 
@@ -135,6 +166,22 @@ app.get('/vendor/:file', (req, res) => {
 app.get('/version', (req, res) => {
   res.set('Cache-Control', 'no-store');
   res.json(VERSION);
+});
+
+// 서비스 워커: 커밋과 미리 받을 목록을 넣어서 준다. 늘 새로 확인해야 새 버전을 알아챈다.
+const SW_JS = () => fs.readFileSync(path.join(PUBLIC, 'sw.js'), 'utf8')
+  .replace("'__COMMIT__'", JSON.stringify(COMMIT))
+  .replace('[/* __PRECACHE__ */]', JSON.stringify(precacheList(), null, 1));
+const SW_CACHED = SW_JS();
+app.get('/sw.js', (req, res) => {
+  res.set('Cache-Control', 'no-cache');
+  res.type('application/javascript');
+  res.send(process.env.NODE_ENV === 'development' ? SW_JS() : SW_CACHED);
+});
+app.get('/manifest.webmanifest', (req, res) => {
+  res.set('Cache-Control', 'no-cache');
+  res.type('application/manifest+json');
+  res.sendFile(path.join(PUBLIC, 'manifest.webmanifest'));
 });
 
 // HTML은 항상 서버에 새로 확인한다.
