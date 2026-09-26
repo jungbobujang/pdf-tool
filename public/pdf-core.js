@@ -262,7 +262,59 @@
     return { pageW, pageH, x: (pageW - w) / 2, y: (pageH - h) / 2, w, h };
   }
 
+  // ── 쪽 순서 조작 (순수 함수: 새 배열을 돌려주고 원래 배열은 건드리지 않는다) ──
+
+  /**
+   * 고른 쪽들을 원래 상대 순서를 지킨 채 targetIndex 자리로 옮긴다.
+   * targetIndex는 지금 순서에서의 "틈" 번호(0 = 맨 앞, order.length = 맨 뒤).
+   * 고른 쪽이 떨어져 있어도(2,5,9) 한 덩어리로 모인다.
+   */
+  function moveGroup(order, ids, targetIndex) {
+    const pick = new Set(ids);
+    const t = Math.max(0, Math.min(order.length, Math.trunc(targetIndex) || 0));
+    const moving = order.filter((id) => pick.has(id));
+    const rest = order.filter((id) => !pick.has(id));
+    // 틈 앞에 있던 고른 쪽은 빠지므로 그만큼 당긴다.
+    const before = order.slice(0, t).filter((id) => pick.has(id)).length;
+    const at = t - before;
+    return [...rest.slice(0, at), ...moving, ...rest.slice(at)];
+  }
+  const moveToFront = (order, ids) => moveGroup(order, ids, 0);
+  const moveToEnd = (order, ids) => moveGroup(order, ids, order.length);
+
+  /**
+   * 고른 쪽들을 n번째 쪽 바로 뒤로 옮긴다. 0이면 맨 앞.
+   * counted: 번호를 셀 때 쓰는 쪽 목록(기본은 order 전체, 편집 화면에서는 삭제 예정 쪽을 뺀 목록)
+   */
+  function moveAfter(order, ids, n, counted = order) {
+    const max = counted.length;
+    const num = typeof n === 'string' ? (n.trim() === '' ? NaN : Number(n)) : n;
+    if (!Number.isInteger(num) || num < 0 || num > max) {
+      throw new UserError(`1~${max} 사이 숫자를 넣어 주세요.`, '0을 넣으면 맨 앞으로 옮겨요.');
+    }
+    if (num === 0) return moveGroup(order, ids, 0);
+    return moveGroup(order, ids, order.indexOf(counted[num - 1]) + 1);
+  }
+
+  /** 지금 순서대로 고른 쪽만 뽑는다(선택한 쪽만 저장). */
+  const pickInOrder = (order, ids) => {
+    const pick = new Set(ids);
+    return order.filter((id) => pick.has(id));
+  };
+
+  /** 90° 단위 회전. dir: 'right'(+1) | 'left'(-1). 결과는 0/90/180/270. */
+  function rotate(deg, dir) {
+    const step = dir === 'left' || dir === -1 ? -90 : 90;
+    return normAngle((Number(deg) || 0) + step);
+  }
+
   return {
+    moveGroup,
+    moveToFront,
+    moveToEnd,
+    moveAfter,
+    pickInOrder,
+    rotate,
     A4,
     UserError,
     isEncryptedError,

@@ -50,6 +50,11 @@
   }
 
   const baseName = (name) => String(name || '문서').replace(/\.[^.]+$/, '') || '문서';
+  /** 쪽 캡션용 파일이름 앞부분 */
+  const shortName = (name) => {
+    const b = baseName(name);
+    return [...b].length > 12 ? `${[...b].slice(0, 11).join('')}…` : b;
+  };
   const safeName = (s) => String(s).replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim() || '문서';
   function ymd(d = new Date()) {
     const p = (n) => String(n).padStart(2, '0');
@@ -457,6 +462,7 @@
   const tabs = [...document.querySelectorAll('.tab')];
   let activeTab = 'edit';
   let activeView = 'home';
+  let guideSync = () => {}; // 사용법 패널 애니메이션 켜고 끄기 (Guide가 채운다)
 
   /** 처음 화면(home) ↔ 작업 화면(work) */
   function showView(name) {
@@ -464,6 +470,7 @@
     $('view-home').hidden = name !== 'home';
     $('view-work').hidden = name !== 'work';
     window.scrollTo({ top: 0 });
+    guideSync();
   }
 
   /** 작업 화면의 도구를 연다. 도구마다 넣은 파일과 상태는 그대로 남는다. */
@@ -481,6 +488,7 @@
       if (on && focus) t.focus();
     });
     document.querySelectorAll('.panel').forEach((p) => (p.hidden = p.id !== `panel-${name}`));
+    guideSync();
   }
   tabs.forEach((t, i) => {
     t.addEventListener('click', () => showTab(t.dataset.tab));
@@ -663,14 +671,17 @@
     }
 
     function makeCard(p) {
-      const el = h('div', { class: 'page-card sort-item', tabindex: '0', 'data-key': p.key },
+      const el = h('div', { class: 'page-card sort-item', tabindex: '0', 'data-key': p.key, role: 'option', 'aria-selected': 'false' },
         h('div', { class: 'paper' },
           h('div', { class: 'thumb' }, h('span', { class: 'loading' }, '불러오는 중…')),
           h('span', { class: 'page-no' }),
           h('button', { type: 'button', class: 'del-band', 'data-act': 'del', tabindex: '-1' }, '삭제 예정 · 되돌리기')),
+        h('button', { type: 'button', class: 'sel-check', 'data-act': 'check', role: 'checkbox', 'aria-checked': 'false', 'aria-label': '이 쪽 선택', title: '선택 (Ctrl+클릭과 같아요)', tabindex: '-1' },
+          icon('check')),
         h('div', { class: 'page-src' }),
         h('div', { class: 'card-tools' },
-          h('button', { type: 'button', 'data-act': 'rot', title: '오른쪽으로 90도 회전', 'aria-label': '회전' }, icon('rotate')),
+          h('button', { type: 'button', 'data-act': 'rotl', title: '왼쪽으로 90° 회전', 'aria-label': '왼쪽 회전' }, icon('rotate-left')),
+          h('button', { type: 'button', 'data-act': 'rot', title: '오른쪽으로 90° 회전', 'aria-label': '회전' }, icon('rotate')),
           h('button', { type: 'button', 'data-act': 'rep', title: '다른 쪽으로 교체', 'aria-label': '교체' }, icon('swap')),
           h('button', { type: 'button', 'data-act': 'del', class: 'del', title: '삭제 (다시 누르면 되돌리기)', 'aria-label': '삭제' }, icon('x'))));
       cards.set(p.key, el);
@@ -724,16 +735,18 @@
         if (grid.children[i] !== el) grid.insertBefore(el, grid.children[i] || null);
       });
       let n = 0;
+      // 파일이 하나뿐이면 "N쪽"만, 여러 개면 "파일이름 앞부분 · N쪽"
+      const multi = new Set(pages.map((p) => p.srcId)).size > 1;
       pages.forEach((p) => {
         const el = cards.get(p.key);
         const src = srcById(p.srcId);
         el.style.setProperty('--c', src.color);
         el.classList.toggle('deleted', p.deleted);
         el.querySelector('.page-no').textContent = p.deleted ? '–' : String(++n);
-        const label = `${src.name.replace(/\.pdf$/i, '')} · ${p.index + 1}쪽`;
+        const label = multi ? `${shortName(src.name)} · ${p.index + 1}쪽` : `${p.index + 1}쪽`;
         const s = el.querySelector('.page-src');
         s.textContent = label;
-        s.title = label;
+        s.title = `${src.name} · ${p.index + 1}쪽`;
         const del = el.querySelector('.card-tools [data-act="del"]');
         del.title = p.deleted ? '되돌리기' : '삭제 (다시 누르면 되돌리기)';
         del.setAttribute('aria-label', p.deleted ? '되돌리기' : '삭제');
@@ -742,9 +755,9 @@
       });
       const has = pages.length > 0 || sources.length > 0;
       bar.hidden = !has;
-      $('edit-hint').hidden = pages.length === 0;
       $('edit-empty').hidden = has;
       updateCount();
+      updateSelection();
     }
 
     function updateCount() {
@@ -762,6 +775,218 @@
       });
     }
 
+    // ── 되돌리기 기록 (옮기기 · 회전 · 삭제 · 교체, 최대 50단계) ──
+    const HISTORY_MAX = 50;
+    let undoStack = [];
+    let redoStack = [];
+    const snap = () => pages.map((p) => ({ key: p.key, srcId: p.srcId, index: p.index, rot: p.rot, deleted: p.deleted }));
+
+    /** fn이 pages를 바꾸면 바뀌기 전 상태를 label과 함께 기록한다. */
+    function record(label, fn) {
+      const before = snap();
+      fn();
+      if (JSON.stringify(before) !== JSON.stringify(snap())) {
+        undoStack.push({ label, pages: before });
+        if (undoStack.length > HISTORY_MAX) undoStack.shift();
+        redoStack = [];
+      }
+      render();
+    }
+    // 기록 뒤에 파일을 넣거나 뺐을 수 있다: 없는 파일의 쪽은 버리고, 기록에 없던 새 쪽은 뒤에 남긴다.
+    function restore(state) {
+      const alive = new Set(sources.map((s) => s.id));
+      const keys = new Set(state.map((p) => p.key));
+      const extra = pages.filter((p) => !keys.has(p.key));
+      pages = [...state.filter((p) => alive.has(p.srcId)).map((p) => ({ ...p })), ...extra];
+    }
+    function undo() {
+      const last = undoStack.pop();
+      if (!last) return toast('되돌릴 작업이 없어요.', '옮기기 · 회전 · 삭제 · 교체를 한 뒤에 되돌릴 수 있어요.', 'info');
+      redoStack.push({ label: last.label, pages: snap() });
+      restore(last.pages);
+      render();
+      toast(`되돌렸어요: ${last.label}`, 'Ctrl+Shift+Z(또는 Ctrl+Y)를 누르면 다시 해요.', 'info');
+    }
+    function redo() {
+      const next = redoStack.pop();
+      if (!next) return toast('다시 할 작업이 없어요.', '', 'info');
+      undoStack.push({ label: next.label, pages: snap() });
+      restore(next.pages);
+      render();
+      toast(`다시 했어요: ${next.label}`, '', 'info');
+    }
+    const byKey = () => new Map(pages.map((p) => [p.key, p]));
+    function applyOrder(keys) {
+      const m = byKey();
+      pages = keys.map((k) => m.get(k));
+    }
+
+    // ── 여러 쪽 선택: 쪽 key의 Set + 기준점(anchor) ──
+    let sel = new Set();
+    let anchor = null;
+    let selectMode = false; // 터치: 길게 눌러 켜는 선택 모드
+    const selbar = $('edit-selbar');
+    const selCount = $('sel-count');
+    const selDel = $('sel-del');
+    const selUndo = $('sel-undo');
+    const afterForm = $('sel-after');
+    const afterInput = $('sel-after-n');
+    const selMenu = $('sel-menu');
+    const selMore = $('sel-more');
+    const selectedPages = () => pages.filter((p) => sel.has(p.key));
+
+    function updateSelection() {
+      const alive = new Set(pages.map((p) => p.key));
+      for (const k of sel) if (!alive.has(k)) sel.delete(k);
+      if (anchor && !alive.has(anchor)) anchor = null;
+      if (!sel.size) selectMode = false;
+      for (const [k, el] of cards) {
+        const on = sel.has(k);
+        el.classList.toggle('selected', on);
+        el.setAttribute('aria-selected', on ? 'true' : 'false');
+        el.querySelector('.sel-check').setAttribute('aria-checked', on ? 'true' : 'false');
+      }
+      grid.classList.toggle('select-mode', selectMode);
+      const n = sel.size;
+      selbar.hidden = n === 0;
+      $('edit-hint').hidden = pages.length === 0 || n > 0;
+      if (!n) closeAfter();
+      selCount.textContent = `${n}쪽 선택됨`;
+      const allDeleted = n > 0 && selectedPages().every((p) => p.deleted);
+      selDel.textContent = allDeleted ? '복구' : '삭제';
+      selDel.title = allDeleted ? '선택한 쪽 되살리기' : '선택한 쪽 삭제 예정 (Delete)';
+      selUndo.disabled = isBusy() || undoStack.length === 0;
+    }
+    function setSelection(keys, anc = anchor) {
+      sel = new Set(keys);
+      anchor = anc;
+      updateSelection();
+    }
+    function clearSelection() {
+      selectMode = false;
+      setSelection([], null);
+    }
+    /** 클릭 규칙: 그냥 = 그 쪽만, Ctrl = 토글, Shift = 기준점부터 범위, Ctrl+Shift = 범위를 더하기 */
+    function clickSelect(key, { ctrl = false, shift = false } = {}) {
+      if (shift) {
+        const order = pages.map((p) => p.key);
+        const from = anchor && order.includes(anchor) ? anchor : key;
+        const a = order.indexOf(from);
+        const b = order.indexOf(key);
+        const range = order.slice(Math.min(a, b), Math.max(a, b) + 1);
+        setSelection(ctrl ? [...sel, ...range] : range, from);
+      } else if (ctrl) {
+        const next = new Set(sel);
+        if (next.has(key)) next.delete(key); else next.add(key);
+        setSelection(next, key);
+      } else {
+        setSelection([key], key);
+      }
+    }
+    const nPages = (n) => `${n}쪽`;
+
+    // ── 선택한 쪽 일괄 처리 ──
+    function moveSelected(kind, n) {
+      const ids = [...sel];
+      if (!ids.length) return false;
+      const order = pages.map((p) => p.key);
+      let next;
+      let label;
+      if (kind === 'front') { next = Core.moveToFront(order, ids); label = `${nPages(ids.length)} 맨 앞으로`; }
+      else if (kind === 'end') { next = Core.moveToEnd(order, ids); label = `${nPages(ids.length)} 맨 뒤로`; }
+      else {
+        const counted = keptPages().map((p) => p.key);
+        try {
+          next = Core.moveAfter(order, ids, n, counted);
+        } catch (e) {
+          showError(e);
+          return false;
+        }
+        label = Number(n) === 0 ? `${nPages(ids.length)} 맨 앞으로` : `${nPages(ids.length)} ${Number(n)}쪽 다음으로`;
+      }
+      record(label, () => applyOrder(next));
+      return true;
+    }
+    function rotateSelected(dir) {
+      const ps = selectedPages();
+      if (!ps.length) return;
+      record(`${nPages(ps.length)} ${dir === 'left' ? '왼쪽' : '오른쪽'} 90°`, () => {
+        ps.forEach((p) => (p.rot = Core.rotate(p.rot, dir)));
+      });
+    }
+    function toggleDeleteSelected() {
+      const ps = selectedPages();
+      if (!ps.length) return;
+      const restoreAll = ps.every((p) => p.deleted);
+      record(`${nPages(ps.length)} ${restoreAll ? '복구' : '삭제'}`, () => ps.forEach((p) => (p.deleted = !restoreAll)));
+    }
+    async function saveSelected() {
+      const ps = selectedPages().filter((p) => !p.deleted);
+      if (!ps.length) return toast('저장할 쪽이 없어요.', '고른 쪽이 모두 "삭제 예정"이에요. [복구]를 먼저 눌러 주세요.');
+      const first = srcById(ps[0].srcId);
+      try {
+        const bytes = await build(ps, '선택한 쪽 저장');
+        download(bytes, `${safeName(baseName(first.name))}_선택${ps.length}쪽.pdf`);
+      } catch (e) { showError(e); }
+    }
+
+    function openAfter() {
+      afterForm.hidden = false;
+      const max = keptPages().length;
+      afterInput.placeholder = `0~${max}`;
+      afterInput.value = '';
+      selbar.querySelectorAll('[data-sel="after"]').forEach((b) => b.setAttribute('aria-expanded', 'true'));
+      afterInput.focus();
+    }
+    function closeAfter() {
+      if (afterForm.hidden) return;
+      afterForm.hidden = true;
+      selbar.querySelectorAll('[data-sel="after"]').forEach((b) => b.setAttribute('aria-expanded', 'false'));
+    }
+    afterForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (moveSelected('after', afterInput.value)) closeAfter();
+      else afterInput.select();
+    });
+    afterInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeAfter(); }
+    });
+
+    function closeSelMenu() {
+      selMenu.hidden = true;
+      selMore.setAttribute('aria-expanded', 'false');
+    }
+    selMore.addEventListener('click', () => {
+      const open = selMenu.hidden;
+      selMenu.hidden = !open;
+      selMore.setAttribute('aria-expanded', String(open));
+      if (open) selMenu.querySelector('button')?.focus();
+    });
+    document.addEventListener('pointerdown', (e) => { if (!e.target.closest('.sel-more')) closeSelMenu(); });
+    selMenu.addEventListener('keydown', (e) => {
+      const items = [...selMenu.querySelectorAll('button')];
+      const i = items.indexOf(document.activeElement);
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeSelMenu(); selMore.focus(); }
+      if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length]?.focus(); }
+      if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length]?.focus(); }
+    });
+
+    selbar.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-sel]');
+      if (!b || isBusy()) return;
+      const act = b.dataset.sel;
+      if (b.closest('#sel-menu')) closeSelMenu();
+      if (act === 'rotl') rotateSelected('left');
+      else if (act === 'rotr') rotateSelected('right');
+      else if (act === 'front' || act === 'end') moveSelected(act);
+      else if (act === 'after') { if (afterForm.hidden) openAfter(); else closeAfter(); }
+      else if (act === 'after-close') closeAfter();
+      else if (act === 'save') saveSelected();
+      else if (act === 'del') toggleDeleteSelected();
+      else if (act === 'undo') undo();
+      else if (act === 'clear') clearSelection();
+    });
+
     // 카드 버튼
     grid.addEventListener('click', (e) => {
       const btn = e.target.closest('button[data-act]');
@@ -770,18 +995,21 @@
       const p = pages.find((x) => x.key === el.dataset.key);
       if (!p) return;
       const act = btn.dataset.act;
-      if (act === 'rot') {
-        p.rot = (p.rot + 90) % 360;
-        render();
+      const no = () => (p.deleted ? '삭제 예정 쪽' : `${keptPages().indexOf(p) + 1}번째 쪽`);
+      if (act === 'check') {
+        if (e.pointerType && e.pointerType !== 'mouse') selectMode = true;
+        clickSelect(p.key, { ctrl: true });
+      } else if (act === 'rot' || act === 'rotl') {
+        const dir = act === 'rotl' ? 'left' : 'right';
+        record(`${no()} ${dir === 'left' ? '왼쪽' : '오른쪽'} 90°`, () => (p.rot = Core.rotate(p.rot, dir)));
       } else if (act === 'del') {
-        p.deleted = !p.deleted;
-        render();
+        record(p.deleted ? `${no()} 복구` : `${no()} 삭제`, () => (p.deleted = !p.deleted));
       } else if (act === 'rep') {
         Replace.open(p);
       }
     });
 
-    // 카드를 탭하면 버튼을 보여 준다.
+    // 카드를 탭하면 버튼을 보여 준다(선택 모드가 아닐 때, 터치).
     function hideAllTools(except) {
       grid.querySelectorAll('.show-tools').forEach((c) => c !== except && c.classList.remove('show-tools'));
     }
@@ -789,33 +1017,258 @@
       if (!e.target.closest('#edit-grid .page-card')) hideAllTools(null);
     });
 
-    makeSortable(grid, {
-      itemSelector: '.page-card',
-      onMove(from, to) {
-        moveItem(pages, from, to);
-        render();
-      },
-      onTap(el) {
-        hideAllTools(el);
-        el.classList.toggle('show-tools');
-      },
+    // ── 누르기 · 끌기 · 네모 선택 (마우스 + 터치) ──
+    const LONG_PRESS = 450;
+    const EDGE = 60;
+    let ptr = null; // 지금 누르고 있는 손가락/마우스
+    let ghost = null;
+    let marker = null;
+    let box = null;
+    let raf = 0;
+
+    grid.addEventListener('pointerdown', (e) => {
+      if (ptr && ptr.id !== e.pointerId && ptr.mode !== 'drag' && ptr.mode !== 'box') endPointer(); // 놓친 pointerup 정리
+      if (ptr || isBusy()) return;
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      if (e.target.closest('button, input, select, a, textarea')) return;
+      const item = e.target.closest('.page-card');
+      ptr = {
+        id: e.pointerId, type: e.pointerType, item, key: item ? item.dataset.key : null,
+        x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY,
+        sx0: e.clientX + scrollX, sy0: e.clientY + scrollY,
+        ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey,
+        mode: item ? 'press' : 'empty', moved: false, longPressed: false, timer: 0,
+      };
+      if (!item) {
+        // 빈 곳: 마우스는 네모 선택, 터치는 스크롤에 맡긴다.
+        if (e.pointerType !== 'mouse') ptr = null;
+        else e.preventDefault();
+        return;
+      }
+      if (e.pointerType !== 'mouse' && !selectMode) {
+        ptr.timer = setTimeout(() => {
+          if (!ptr || ptr.moved) return;
+          ptr.longPressed = true;
+          selectMode = true;
+          hideAllTools(null);
+          setSelection([...sel, ptr.key], ptr.key);
+          navigator.vibrate?.(15);
+        }, LONG_PRESS);
+      }
     });
 
-    // 키보드: Alt+←/→ 로 옮기기
+    window.addEventListener('pointermove', (e) => {
+      if (!ptr || e.pointerId !== ptr.id) return;
+      ptr.x = e.clientX;
+      ptr.y = e.clientY;
+      if (ptr.mode === 'drag') { e.preventDefault(); updateDrag(); return; }
+      if (ptr.mode === 'box') { e.preventDefault(); updateBox(); return; }
+      if (Math.hypot(ptr.x - ptr.x0, ptr.y - ptr.y0) < 8) return;
+      ptr.moved = true;
+      clearTimeout(ptr.timer);
+      if (ptr.mode === 'empty') { startBox(); return; }
+      if (ptr.type === 'mouse' || ptr.longPressed || (selectMode && sel.has(ptr.key))) { e.preventDefault(); startDrag(); return; }
+      endPointer(); // 터치로 그냥 밀면 화면 스크롤
+    }, { passive: false });
+
+    window.addEventListener('pointerup', (e) => finish(e, false));
+    window.addEventListener('pointercancel', (e) => finish(e, true));
+    document.addEventListener('touchmove', (e) => {
+      if (ptr && (ptr.mode === 'drag' || ptr.longPressed)) e.preventDefault();
+    }, { passive: false });
+    grid.addEventListener('contextmenu', (e) => {
+      if (ptr || selectMode) e.preventDefault();
+    });
+
+    function startDrag() {
+      if (!sel.has(ptr.key)) setSelection([ptr.key], ptr.key); // 선택 안 된 쪽을 끌면 그 쪽만
+      ptr.mode = 'drag';
+      ptr.group = pages.filter((p) => sel.has(p.key)).map((p) => p.key);
+      const n = ptr.group.length;
+      // 커서 옆에 겹친 카드 + "N쪽" 배지
+      const face = ptr.item.querySelector('.paper').cloneNode(true);
+      const srcCanvas = ptr.item.querySelector('canvas');
+      const c2 = face.querySelector('canvas');
+      if (srcCanvas && c2 && srcCanvas.width) c2.getContext('2d').drawImage(srcCanvas, 0, 0);
+      face.querySelectorAll('.del-band').forEach((b) => b.remove());
+      ghost = h('div', { class: `drag-stack${n > 1 ? ' multi' : ''}` },
+        n > 2 ? h('div', { class: 'stack-back b2' }) : null,
+        n > 1 ? h('div', { class: 'stack-back b1' }) : null,
+        face,
+        h('span', { class: 'stack-badge' }, `${n}쪽`));
+      ghost.style.setProperty('--c', getComputedStyle(ptr.item).getPropertyValue('--c'));
+      document.body.append(ghost);
+      marker = h('div', { class: 'drop-marker' });
+      document.body.append(marker);
+      ptr.group.forEach((k) => cards.get(k)?.classList.add('dragging'));
+      document.body.classList.add('is-dragging');
+      if (ptr.type !== 'mouse') navigator.vibrate?.(12);
+      updateDrag();
+      autoScroll();
+    }
+
+    function updateDrag() {
+      if (!ptr || ptr.mode !== 'drag') return;
+      ghost.style.left = `${ptr.x + 14}px`;
+      ghost.style.top = `${ptr.y + 10}px`;
+      let best = null;
+      let bestD = Infinity;
+      pages.forEach((p, i) => {
+        const r = cards.get(p.key).getBoundingClientRect();
+        const cx = r.left + r.width / 2;
+        const cy = r.top + r.height / 2;
+        // 같은 줄을 먼저 고르도록 세로 거리에 가중치를 준다.
+        const d = Math.abs(ptr.x - cx) + Math.abs(ptr.y - cy) * 2;
+        if (d < bestD) { bestD = d; best = { i, r, after: ptr.x > cx }; }
+      });
+      if (!best) return;
+      ptr.target = best;
+      const gap = 7;
+      const x = best.after ? best.r.right + gap : best.r.left - gap;
+      marker.style.left = `${x - 2}px`;
+      marker.style.top = `${best.r.top}px`;
+      marker.style.height = `${best.r.height}px`;
+    }
+
+    function startBox() {
+      ptr.mode = 'box';
+      ptr.base = ptr.ctrl ? new Set(sel) : new Set();
+      box = h('div', { class: 'select-box' });
+      document.body.append(box);
+      document.body.classList.add('is-dragging');
+      updateBox();
+      autoScroll();
+    }
+    function updateBox() {
+      if (!ptr || ptr.mode !== 'box') return;
+      const x1 = Math.min(ptr.sx0, ptr.x + scrollX);
+      const y1 = Math.min(ptr.sy0, ptr.y + scrollY);
+      const x2 = Math.max(ptr.sx0, ptr.x + scrollX);
+      const y2 = Math.max(ptr.sy0, ptr.y + scrollY);
+      Object.assign(box.style, { left: `${x1}px`, top: `${y1}px`, width: `${x2 - x1}px`, height: `${y2 - y1}px` });
+      const hits = [];
+      for (const p of pages) {
+        const r = cards.get(p.key).getBoundingClientRect();
+        const l = r.left + scrollX;
+        const t = r.top + scrollY;
+        if (l < x2 && l + r.width > x1 && t < y2 && t + r.height > y1) hits.push(p.key);
+      }
+      const next = new Set([...ptr.base, ...hits]);
+      if (next.size !== sel.size || [...next].some((k) => !sel.has(k))) {
+        setSelection(next, hits.length ? hits[0] : anchor);
+      }
+    }
+
+    // 끄는 중 화면 위·아래 가장자리 60px 안이면 자동 스크롤(가까울수록 빠르게)
+    function autoScroll() {
+      cancelAnimationFrame(raf);
+      const step = () => {
+        if (!ptr || (ptr.mode !== 'drag' && ptr.mode !== 'box')) return;
+        const barRect = bar.hidden ? null : bar.getBoundingClientRect();
+        // 아래쪽은 저장 막대에 가려지므로 막대 위쪽을 화면 끝으로 본다.
+        const bottom = barRect && barRect.top > innerHeight / 2 ? Math.min(innerHeight, barRect.top) : innerHeight;
+        let dy = 0;
+        if (ptr.y < EDGE) dy = -Math.ceil(((EDGE - Math.max(0, ptr.y)) / EDGE) * 24);
+        else if (ptr.y > bottom - EDGE) dy = Math.ceil(((Math.min(bottom, ptr.y) - (bottom - EDGE)) / EDGE) * 24);
+        if (dy) {
+          const before = scrollY;
+          window.scrollBy(0, dy);
+          if (scrollY !== before) { if (ptr.mode === 'drag') updateDrag(); else updateBox(); }
+        }
+        raf = requestAnimationFrame(step);
+      };
+      raf = requestAnimationFrame(step);
+    }
+
+    function finish(e, cancelled) {
+      if (!ptr || e.pointerId !== ptr.id) return;
+      const s = ptr;
+      if (s.mode === 'drag') {
+        if (!cancelled && s.target) {
+          const gapIndex = s.target.i + (s.target.after ? 1 : 0);
+          const next = Core.moveGroup(pages.map((p) => p.key), s.group, gapIndex);
+          endPointer();
+          record(`${nPages(s.group.length)} 옮기기`, () => applyOrder(next));
+          return;
+        }
+      } else if (s.mode === 'empty' && !cancelled) {
+        // 빈 곳을 그냥 클릭하면 선택 해제
+        if (!s.ctrl && !s.shift) clearSelection();
+      } else if (s.mode === 'press' && !s.moved && !cancelled) {
+        if (s.type === 'mouse') {
+          clickSelect(s.key, { ctrl: s.ctrl, shift: s.shift });
+        } else if (s.longPressed) {
+          // 길게 눌러 이미 골랐다.
+        } else if (selectMode) {
+          clickSelect(s.key, { ctrl: true });
+          if (!sel.size) clearSelection();
+        } else {
+          hideAllTools(s.item);
+          s.item.classList.toggle('show-tools');
+        }
+      }
+      endPointer();
+    }
+
+    function endPointer() {
+      if (!ptr) return;
+      clearTimeout(ptr.timer);
+      cancelAnimationFrame(raf);
+      grid.querySelectorAll('.dragging').forEach((el) => el.classList.remove('dragging'));
+      ghost?.remove();
+      marker?.remove();
+      box?.remove();
+      ghost = marker = box = null;
+      document.body.classList.remove('is-dragging');
+      ptr = null;
+    }
+
+    // 키보드: 카드에서 Space = 선택 토글(Shift+Space = 범위), Alt+←/→ = 한 칸 옮기기
     grid.addEventListener('keydown', (e) => {
       const el = e.target.closest('.page-card');
-      if (!el || !e.altKey || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
+      if (!el || e.target !== el) return;
+      if (e.key === ' ' || e.key === 'Spacebar') {
+        e.preventDefault();
+        clickSelect(el.dataset.key, { ctrl: !e.shiftKey || e.ctrlKey || e.metaKey, shift: e.shiftKey });
+        return;
+      }
+      if (!e.altKey || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
       e.preventDefault();
       const i = pages.findIndex((p) => p.key === el.dataset.key);
       const j = e.key === 'ArrowLeft' ? i - 1 : i + 1;
       if (i < 0 || j < 0 || j >= pages.length) return;
-      moveItem(pages, i, j);
-      render();
+      record('1쪽 옮기기', () => moveItem(pages, i, j));
       el.focus();
     });
 
+    // 단축키 (입력칸에 포커스가 없을 때만)
+    document.addEventListener('keydown', (e) => {
+      if (activeView !== 'work' || activeTab !== 'edit' || isBusy() || e.defaultPrevented) return;
+      if (document.querySelector('dialog[open]')) return;
+      const t = e.target;
+      if (t && t.closest && t.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"]')) return;
+      const mod = e.ctrlKey || e.metaKey;
+      const k = e.key.toLowerCase();
+      if (mod && k === 'a') {
+        if (!pages.length) return;
+        e.preventDefault();
+        setSelection(pages.map((p) => p.key), anchor || pages[0].key);
+      } else if (mod && ((k === 'z' && e.shiftKey) || k === 'y')) {
+        e.preventDefault();
+        redo();
+      } else if (mod && k === 'z') {
+        e.preventDefault();
+        undo();
+      } else if ((e.key === 'Delete' || e.key === 'Backspace') && sel.size && !mod) {
+        e.preventDefault();
+        toggleDeleteSelected();
+      } else if (e.key === 'Escape' && sel.size) {
+        clearSelection();
+      }
+    });
+
     rangeInput.addEventListener('input', updateCount);
-    document.addEventListener('busyend', updateCount);
+    document.addEventListener('busyend', () => { updateCount(); updateSelection(); });
     rangeInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); saveRange(); }
     });
@@ -825,12 +1278,11 @@
       const kept = keptPages();
       if (!kept.length) return;
       let dropped = 0;
-      kept.forEach((p, i) => {
+      record(`${odd ? '홀수' : '짝수'}만 남기기`, () => kept.forEach((p, i) => {
         const isOdd = (i + 1) % 2 === 1;
         if (isOdd !== odd) { p.deleted = true; dropped++; }
-      });
-      render();
-      toast(`${odd ? '홀수' : '짝수'} 번호만 남겼어요.`, `${dropped}쪽이 "삭제 예정"이 됐어요. 카드의 "되돌리기"를 누르면 되살아나요.`, 'info');
+      }));
+      toast(`${odd ? '홀수' : '짝수'} 번호만 남겼어요.`, `${dropped}쪽이 "삭제 예정"이 됐어요. Ctrl+Z로 한 번에 되돌릴 수 있어요.`, 'info');
     }
     const menu = $('edit-menu');
     const more = $('edit-more');
@@ -857,8 +1309,7 @@
     $('edit-odd').addEventListener('click', () => keepParity(true));
     $('edit-even').addEventListener('click', () => keepParity(false));
     $('edit-reverse').addEventListener('click', () => {
-      pages.reverse();
-      render();
+      record('순서 뒤집기', () => pages.reverse());
       toast('순서를 거꾸로 바꿨어요.', '저장하려면 "합쳐서 PDF 저장"을 누르세요.', 'info');
     });
 
@@ -939,6 +1390,11 @@
       grid.replaceChildren();
       rangeInput.value = '';
       colorSeq = 0;
+      undoStack = [];
+      redoStack = [];
+      sel.clear();
+      anchor = null;
+      selectMode = false;
       render();
     }
 
@@ -949,10 +1405,11 @@
       get sources() { return sources; },
       getPdfjs, srcById,
       replacePage(p, srcId, index) {
-        p.srcId = srcId;
-        p.index = index;
-        p.rot = 0;
-        render();
+        record('쪽 교체', () => {
+          p.srcId = srcId;
+          p.index = index;
+          p.rot = 0;
+        });
       },
       unlockSource,
     };
@@ -1066,7 +1523,7 @@
     function close(apply) {
       if (apply && target && chosen) {
         Edit.replacePage(target, chosen, Number(pageSel.value));
-        toast('쪽을 바꿨어요.', '되돌리려면 다시 교체 버튼으로 원래 쪽을 고르세요.', 'ok');
+        toast('쪽을 바꿨어요.', 'Ctrl+Z(또는 선택 막대의 [되돌리기])로 되돌릴 수 있어요.', 'ok');
       }
       // 고르기만 하고 쓰지 않은 새 파일은 목록에서 뺀다.
       const used = new Set(apply && chosen ? [chosen] : []);
@@ -1871,6 +2328,301 @@
     return { route };
   })();
 
+  // ═══════════════════════════════════════════════════════════
+  // 편집 도구 오른쪽 "이렇게 써요" 패널 (1280px 미만에서는 오른쪽 서랍)
+  // ═══════════════════════════════════════════════════════════
+  const Guide = (() => {
+    const aside = $('edit-guide');
+    const layout = aside.parentElement;
+    const openBtn = $('guide-open');
+    const foldBtn = $('guide-fold');
+    const rail = $('guide-rail');
+    const backdrop = $('guide-backdrop');
+    const wide = matchMedia('(min-width: 1280px)');
+    const still = matchMedia('(prefers-reduced-motion: reduce)');
+    const KEY = 'pdfws.guideCollapsed';
+
+    let collapsed = false;
+    try { collapsed = localStorage.getItem(KEY) === '1'; } catch { /* 저장소를 못 써도 동작한다 */ }
+    let drawer = false;
+    let lastFocus = null;
+
+    const saveCollapsed = () => {
+      try { localStorage.setItem(KEY, collapsed ? '1' : '0'); } catch { /* 무시 */ }
+    };
+
+    // ── 움직이는 예시: DOM + CSS transition, 단계별 타임라인을 무한 반복 ──
+    const CURSOR = '<svg viewBox="0 0 16 22" aria-hidden="true"><path d="M1.5 1.5v16.2l4.3-4.1 2.9 6.6 2.8-1.2-2.9-6.5h5.9z"/></svg>';
+    function stageParts(stage) {
+      const inner = h('div', { class: 'demo-inner' });
+      const cursor = h('div', { class: 'demo-cursor' });
+      cursor.innerHTML = CURSOR;
+      const ripple = h('div', { class: 'demo-ripple' });
+      stage.replaceChildren(inner);
+      inner.append(ripple, cursor);
+      const at = (el, x, y) => { el.style.transform = `translate(${x}px, ${y}px)`; };
+      return {
+        inner,
+        moveCursor(x, y) { cursor.dataset.x = x; cursor.dataset.y = y; at(cursor, x, y); },
+        click() {
+          at(ripple, Number(cursor.dataset.x) - 14, Number(cursor.dataset.y) - 14);
+          ripple.classList.remove('go');
+          void ripple.offsetWidth; // 애니메이션을 처음부터 다시
+          ripple.classList.add('go');
+        },
+        at,
+      };
+    }
+    function timeline(stage, build) {
+      const d = build(stage);
+      let i = 0;
+      let timer = 0;
+      let playing = false;
+      const instant = (fn) => {
+        stage.classList.add('no-anim');
+        fn();
+        void stage.offsetWidth;
+        stage.classList.remove('no-anim');
+      };
+      function next() {
+        if (!playing) return;
+        if (i >= d.steps.length) { i = 0; instant(d.reset); }
+        const [delay, fn] = d.steps[i];
+        timer = setTimeout(() => { i++; fn(); next(); }, delay);
+      }
+      instant(d.reset);
+      return {
+        play() {
+          if (playing) return;
+          playing = true;
+          next();
+        },
+        pause() {
+          playing = false;
+          clearTimeout(timer);
+        },
+        /** 움직임 줄이기: 마지막 장면만 */
+        showLast() {
+          this.pause();
+          i = 0;
+          instant(() => { d.reset(); d.steps.forEach(([, fn]) => fn()); });
+        },
+        get playing() { return playing; },
+      };
+    }
+
+    const SLOT = (s) => 12 + s * 46;
+    const PAGE_Y = 58;
+    function minis(inner, n) {
+      return Array.from({ length: n }, (_, k) => {
+        const el = h('div', { class: 'mini' }, h('b', null, String(k + 1)));
+        inner.append(el);
+        return el;
+      });
+    }
+    const center = (slot) => [SLOT(slot) + 15, PAGE_Y + 22];
+
+    // ① 여러 쪽을 한꺼번에 옮기기
+    function demoMove(stage) {
+      const s = stageParts(stage);
+      const ps = minis(s.inner, 5);
+      const key = h('span', { class: 'demo-key' }, 'Ctrl');
+      const status = h('span', { class: 'demo-status' });
+      s.inner.append(key, status);
+      const place = (order, lift = []) => order.forEach((no, slot) => {
+        const el = ps[no - 1];
+        el.classList.toggle('lift', lift.includes(no));
+        s.at(el, SLOT(slot), PAGE_Y - (lift.includes(no) ? 8 : 0));
+      });
+      const reset = () => {
+        ps.forEach((el) => el.classList.remove('sel', 'lift'));
+        place([1, 2, 3, 4, 5]);
+        key.classList.remove('pressed');
+        status.classList.remove('show');
+        s.moveCursor(200, 118);
+      };
+      return {
+        reset,
+        steps: [
+          [500, () => s.moveCursor(...center(1))],
+          [650, () => { s.click(); ps[1].classList.add('sel'); }],
+          [450, () => key.classList.add('pressed')],
+          [400, () => s.moveCursor(...center(3))],
+          [650, () => { s.click(); ps[3].classList.add('sel'); status.textContent = '2쪽 선택됨'; status.classList.add('show'); }],
+          [550, () => { key.classList.remove('pressed'); place([1, 2, 3, 4, 5], [2, 4]); }],
+          [350, () => {
+            // 두 장이 살짝 들린 채 커서를 따라 맨 앞으로
+            s.moveCursor(SLOT(0) + 22, PAGE_Y + 10);
+            s.at(ps[1], SLOT(0) - 4, PAGE_Y - 12);
+            s.at(ps[3], SLOT(0) + 4, PAGE_Y - 6);
+          }],
+          [800, () => { s.click(); place([2, 4, 1, 3, 5]); status.textContent = '순서 2, 4, 1, 3, 5'; }],
+          [2400, () => {}],
+        ],
+      };
+    }
+
+    // ② 이어진 쪽을 범위로 고르기
+    function demoRange(stage) {
+      const s = stageParts(stage);
+      const ps = minis(s.inner, 5);
+      const key = h('span', { class: 'demo-key' }, 'Shift');
+      const del = h('b', { class: 'demo-del' }, '삭제');
+      const count = h('span', null, '4쪽 선택됨 → ');
+      const status = h('span', { class: 'demo-status' }, count, del);
+      s.inner.append(key, status);
+      const reset = () => {
+        ps.forEach((el, k) => { el.classList.remove('sel', 'gone'); s.at(el, SLOT(k), PAGE_Y); });
+        key.classList.remove('pressed');
+        status.classList.remove('show');
+        del.classList.remove('hit');
+        s.moveCursor(200, 118);
+      };
+      return {
+        reset,
+        steps: [
+          [500, () => s.moveCursor(...center(1))],
+          [650, () => { s.click(); ps[1].classList.add('sel'); }],
+          [450, () => key.classList.add('pressed')],
+          [400, () => s.moveCursor(...center(4))],
+          [650, () => s.click()],
+          [120, () => ps[2].classList.add('sel')],
+          [120, () => ps[3].classList.add('sel')],
+          [120, () => { ps[4].classList.add('sel'); status.classList.add('show'); }],
+          [500, () => { key.classList.remove('pressed'); s.moveCursor(del.offsetLeft + status.offsetLeft + 14, status.offsetTop + 12); }],
+          [650, () => { s.click(); del.classList.add('hit'); }],
+          [250, () => ps.slice(1).forEach((el) => el.classList.add('gone'))],
+          [2400, () => {}],
+        ],
+      };
+    }
+
+    // ③ 돌리기는 90°씩
+    function demoRotate(stage) {
+      const s = stageParts(stage);
+      const page = h('div', { class: 'mini big' }, h('b', null, 'A'));
+      const left = h('span', { class: 'demo-btn' }, '↺');
+      const right = h('span', { class: 'demo-btn' }, '↻');
+      const deg = h('span', { class: 'demo-deg' }, '0°');
+      s.inner.append(page, left, right, deg);
+      s.at(page, 42, 26);
+      s.at(left, 138, 36);
+      s.at(right, 186, 36);
+      s.at(deg, 138, 80);
+      let turn = 0; // 누적 각도(부드럽게 돌도록), 보여 주는 숫자는 0/90/180/270
+      const show = () => {
+        page.style.transform = `translate(42px, 26px) rotate(${turn}deg)`;
+        deg.textContent = `${Core.normAngle(turn)}°`;
+      };
+      const press = (btn, dir) => {
+        s.click();
+        btn.classList.remove('press');
+        void btn.offsetWidth;
+        btn.classList.add('press');
+        turn += dir * 90;
+        show();
+      };
+      const reset = () => {
+        turn = 0;
+        show();
+        s.moveCursor(120, 118);
+      };
+      return {
+        reset,
+        steps: [
+          [500, () => s.moveCursor(204, 52)],
+          [650, () => press(right, 1)],
+          [900, () => press(right, 1)],
+          [900, () => s.moveCursor(156, 52)],
+          [650, () => press(left, -1)],
+          [900, () => press(left, -1)],
+          [2200, () => {}],
+        ],
+      };
+    }
+
+    const demos = [
+      timeline(aside.querySelector('#demo-move .demo-stage'), demoMove),
+      timeline(aside.querySelector('#demo-range .demo-stage'), demoRange),
+      timeline(aside.querySelector('#demo-rotate .demo-stage'), demoRotate),
+    ];
+
+    /** 패널이 실제로 보이는가 (접힘 · 서랍 닫힘 · 다른 도구 · 백그라운드 탭이면 아니다) */
+    function isShown() {
+      if (document.hidden || activeView !== 'work' || activeTab !== 'edit') return false;
+      return wide.matches ? !collapsed : drawer;
+    }
+    function sync() {
+      if (still.matches) {
+        demos.forEach((d) => d.showLast());
+        return;
+      }
+      const on = isShown();
+      demos.forEach((d) => (on ? d.play() : d.pause()));
+    }
+
+    function apply() {
+      const isWide = wide.matches;
+      if (isWide) drawer = false;
+      layout.classList.toggle('guide-collapsed', isWide && collapsed);
+      aside.classList.toggle('collapsed', isWide && collapsed);
+      aside.classList.toggle('open', !isWide && drawer);
+      backdrop.hidden = isWide || !drawer;
+      foldBtn.textContent = isWide ? '접기' : '닫기';
+      foldBtn.setAttribute('aria-expanded', String(isWide ? !collapsed : drawer));
+      rail.setAttribute('aria-expanded', String(isWide && !collapsed));
+      openBtn.setAttribute('aria-expanded', String(!isWide && drawer));
+      if (!isWide) aside.setAttribute('aria-hidden', String(!drawer)); else aside.removeAttribute('aria-hidden');
+      sync();
+    }
+
+    function openDrawer() {
+      lastFocus = document.activeElement;
+      drawer = true;
+      apply();
+      foldBtn.focus();
+    }
+    function closeDrawer() {
+      if (!drawer) return;
+      drawer = false;
+      apply();
+      if (lastFocus && lastFocus.isConnected) lastFocus.focus();
+    }
+
+    openBtn.addEventListener('click', openDrawer);
+    backdrop.addEventListener('click', closeDrawer);
+    foldBtn.addEventListener('click', () => {
+      if (wide.matches) {
+        collapsed = true;
+        saveCollapsed();
+        apply();
+        rail.focus();
+      } else closeDrawer();
+    });
+    rail.addEventListener('click', () => {
+      collapsed = false;
+      saveCollapsed();
+      apply();
+      foldBtn.focus();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && drawer && !wide.matches) {
+        e.preventDefault();
+        closeDrawer();
+      }
+    }, true);
+    wide.addEventListener('change', apply);
+    still.addEventListener('change', sync);
+    document.addEventListener('visibilitychange', sync);
+
+    apply();
+    guideSync = sync;
+    return {
+      sync,
+      state: () => ({ wide: wide.matches, collapsed, drawer, playing: demos.map((d) => d.playing) }),
+    };
+  })();
+
   // 검증용으로 상태를 살짝 드러낸다(개인 정보 없음).
   // 배포된 커밋을 화면 구석에 작게 보여 준다(옛 버전이 떠 있는지 바로 알 수 있게).
   fetch('/version', { cache: 'no-store' })
@@ -1884,5 +2636,5 @@
     })
     .catch(() => { /* 버전 표시는 없어도 쓰는 데 지장 없다 */ });
 
-  window.__pdfWorkshop = { version: 2, ready: true };
+  window.__pdfWorkshop = { version: 3, ready: true, guide: Guide.state };
 })();

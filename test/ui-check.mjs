@@ -1,6 +1,6 @@
 // 헤드리스 브라우저 점검 (playwright가 있을 때만).
 // 실행: node test/ui-check.mjs            점검만
-//       node test/ui-check.mjs --screens  점검 + docs/screens/ 에 스크린샷 3장 저장
+//       node test/ui-check.mjs --screens  점검 + docs/screens/ 에 스크린샷 5장 저장
 //   playwright를 프로젝트 밖에 설치했다면 PLAYWRIGHT_DIR=그 폴더 로 알려 준다.
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
@@ -443,8 +443,9 @@ try {
     title: document.getElementById('home-title').getBoundingClientRect().width,
     cols: new Set([...document.querySelectorAll('.tool-card')].map((c) => Math.round(c.getBoundingClientRect().left))).size,
     bg: getComputedStyle(document.body).backgroundColor,
+    desc: getComputedStyle(document.querySelector('.tool-desc')).display,
   }));
-  check('400px 처음 화면: 가로 스크롤 없음, 카드 1칸', mh.sw <= 400 && mh.title > 0 && mh.cols === 1, `scrollWidth ${mh.sw}, 카드 열 ${mh.cols}개`);
+  check('400px 처음 화면: 가로 스크롤 없음, 작은 카드 2칸(설명 숨김)', mh.sw <= 400 && mh.title > 0 && mh.cols === 2 && mh.desc === 'none', `scrollWidth ${mh.sw}, 카드 열 ${mh.cols}개, 설명 ${mh.desc}`);
   await m.setInputFiles('#home-input', [fileA, fileB]);
   await until(m, () => document.querySelectorAll('#edit-grid .page-card canvas').length >= 4, undefined, { timeout: 15000 });
   const sw = {};
@@ -466,7 +467,228 @@ try {
   check('휴대폰 화면 콘솔 에러 0개', merr.length === 0, merr.length ? merr.join(' | ').slice(0, 200) : '0개');
   await mctx.close();
 
-  // ── 10. 스크린샷 ──
+  // ── 10. 여러 쪽 선택 · 선택 막대 · 되돌리기 · 사용법 패널 (1440px) ──
+  {
+    const fileMany = await writePdf('수업자료.pdf', await samplePdf(30, 'P'));
+    const wctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, acceptDownloads: true, colorScheme: 'light' });
+    const w = await wctx.newPage();
+    const werr = [];
+    watch(w, werr);
+    await w.goto(BASE, { waitUntil: 'networkidle' });
+    await w.setInputFiles('#home-input', [fileMany]);
+    await until(w, () => document.querySelectorAll('#edit-grid .page-card').length === 30);
+    const cardsW = w.locator('#edit-grid .page-card');
+    const srcLabels = () => w.$$eval('#edit-grid .page-src', (els) => els.map((e) => e.textContent));
+    const selected = () => w.$$eval('#edit-grid .page-card', (els) => els.map((e, i) => (e.classList.contains('selected') ? i : -1)).filter((i) => i >= 0));
+    const lastToast = () => w.locator('.toast .toast-title').first().textContent();
+    // 좁으면 덜 쓰는 버튼이 "더보기" 안에 있다.
+    const selAct = async (act) => {
+      const direct = w.locator(`#edit-selbar .sel-extra[data-sel="${act}"]`);
+      if (await direct.isVisible()) return direct.click();
+      await w.click('#sel-more');
+      return w.click(`#sel-menu [data-sel="${act}"]`);
+    };
+
+    const cap = await srcLabels();
+    check('파일 1개일 때 캡션은 "N쪽"', cap[0] === '1쪽' && cap[29] === '30쪽', `"${cap[0]}", "${cap[29]}"`);
+
+    const guideW = await w.evaluate(() => {
+      const g = document.getElementById('edit-guide').getBoundingClientRect();
+      const grid = document.getElementById('edit-grid').getBoundingClientRect();
+      return { gw: Math.round(g.width), gh: Math.round(g.height), open: getComputedStyle(document.getElementById('guide-open')).display, gridRight: Math.round(grid.right), gLeft: Math.round(g.left), st: window.__pdfWorkshop.guide() };
+    });
+    check('1440px: 오른쪽 사용법 패널 보임(움직임 재생)', guideW.gw === 320 && guideW.gh > 300 && guideW.open === 'none' && guideW.gridRight <= guideW.gLeft && guideW.st.playing.every(Boolean),
+      `패널 ${guideW.gw}×${guideW.gh}, 그리드 오른쪽 ${guideW.gridRight} ≤ 패널 왼쪽 ${guideW.gLeft}, 예시 재생 ${guideW.st.playing.join('/')}`);
+
+    // Ctrl+클릭 2개
+    await cardsW.nth(1).click();
+    await cardsW.nth(3).click({ modifiers: ['Control'] });
+    const s1 = await selected();
+    const barText = await w.textContent('#sel-count');
+    check('Ctrl+클릭으로 2쪽 선택 + 선택 막대', s1.join(',') === '1,3' && barText === '2쪽 선택됨' && await visible(w, '#edit-selbar'),
+      `선택 ${s1.map((i) => i + 1).join(',')}쪽, "${barText}"`);
+
+    // Shift 범위
+    await cardsW.nth(2).click();
+    await cardsW.nth(5).click({ modifiers: ['Shift'] });
+    const s2 = await selected();
+    await cardsW.nth(8).click({ modifiers: ['Control', 'Shift'] });
+    const s3 = await selected();
+    check('Shift+클릭 범위 (+Ctrl+Shift로 더하기)', s2.join(',') === '2,3,4,5' && s3.join(',') === '2,3,4,5,6,7,8',
+      `3쪽→Shift 6쪽: ${s2.map((i) => i + 1).join(',')} / 이어서 Ctrl+Shift 9쪽: ${s3.map((i) => i + 1).join(',')}`);
+
+    // 네모 선택: 1·2번 카드 사이 틈에서 시작해 둘째 줄 2번째 카드 가운데까지
+    const cols = await w.evaluate(() => getComputedStyle(document.getElementById('edit-grid')).gridTemplateColumns.split(' ').length);
+    const b0 = await cardsW.nth(0).boundingBox();
+    const b1 = await cardsW.nth(1).boundingBox();
+    const bT = await cardsW.nth(cols + 1).boundingBox();
+    await w.mouse.move((b0.x + b0.width + b1.x) / 2, b0.y + 30);
+    await w.mouse.down();
+    await w.mouse.move(bT.x + bT.width / 2, bT.y + bT.height / 2, { steps: 8 });
+    const boxShown = await w.$('.select-box') !== null;
+    await w.mouse.up();
+    const s4 = await selected();
+    check('네모 선택 (빈 곳에서 끌기)', boxShown && s4.join(',') === `1,${cols + 1}`, `네모 ${boxShown ? '보임' : '없음'}, 한 줄 ${cols}칸, 선택 ${s4.map((i) => i + 1).join(',')}쪽`);
+
+    // 떨어진 2쪽·4쪽을 골라 4쪽을 끌어 맨 앞(1쪽 왼쪽)에 놓기
+    await cardsW.nth(1).click();
+    await cardsW.nth(3).click({ modifiers: ['Control'] });
+    const d3 = await cardsW.nth(3).boundingBox();
+    const d0 = await cardsW.nth(0).boundingBox();
+    await w.mouse.move(d3.x + d3.width / 2, d3.y + d3.height / 2);
+    await w.mouse.down();
+    await w.mouse.move(d3.x + d3.width / 2 - 30, d3.y + d3.height / 2, { steps: 4 });
+    const stack = await w.evaluate(() => {
+      const s = document.querySelector('.drag-stack');
+      return s ? { badge: s.querySelector('.stack-badge').textContent, backs: s.querySelectorAll('.stack-back').length } : null;
+    });
+    await w.mouse.move(d0.x + d0.width * 0.2, d0.y + d0.height / 2, { steps: 10 });
+    await w.mouse.up();
+    const moved = await srcLabels();
+    check('선택한 2쪽을 끌어 맨 앞으로 (상대 순서 유지)', stack && stack.badge === '2쪽' && stack.backs === 1 && moved.slice(0, 5).join(',') === '2쪽,4쪽,1쪽,3쪽,5쪽',
+      `끄는 모양 ${stack ? `"${stack.badge}" 배지 + 겹친 카드` : '없음'} → ${moved.slice(0, 5).join(', ')}`);
+
+    // Delete → 삭제 예정, Ctrl+Z → 복구, 한 번 더 → 순서 복구
+    await w.keyboard.press('Delete');
+    const delState = await w.evaluate(() => ({
+      del: [...document.querySelectorAll('#edit-grid .page-card')].map((e, i) => (e.classList.contains('deleted') ? i : -1)).filter((i) => i >= 0),
+      count: document.getElementById('edit-count').textContent,
+      btn: document.getElementById('sel-del').textContent,
+    }));
+    check('Delete 키로 선택한 쪽 삭제 예정 (+버튼이 "복구"로)', delState.del.join(',') === '0,1' && /28쪽 저장 예정/.test(delState.count) && delState.btn === '복구',
+      `삭제 예정 ${delState.del.map((i) => i + 1).join(',')}번 카드, ${delState.count}, 버튼 "${delState.btn}"`);
+    await w.keyboard.press('Control+z');
+    const undo1 = await w.evaluate(() => document.querySelectorAll('#edit-grid .page-card.deleted').length);
+    const t1 = await lastToast();
+    await w.keyboard.press('Control+z');
+    const t2 = await lastToast();
+    const back = await srcLabels();
+    await w.keyboard.press('Control+Shift+z');
+    const redo = await srcLabels();
+    check('Ctrl+Z 되돌리기 · Ctrl+Shift+Z 다시 하기', undo1 === 0 && t1 === '되돌렸어요: 2쪽 삭제' && t2 === '되돌렸어요: 2쪽 옮기기' && back.slice(0, 4).join(',') === '1쪽,2쪽,3쪽,4쪽' && redo.slice(0, 2).join(',') === '2쪽,4쪽',
+      `"${t1}" → "${t2}" → ${back.slice(0, 4).join(',')} → 다시 하기 ${redo.slice(0, 2).join(',')}`);
+
+    // 선택 막대: 몇 쪽 뒤로…, 범위 오류, 회전, 선택한 쪽만 저장
+    await w.keyboard.press('Escape');
+    const cleared = await w.$eval('#edit-selbar', (e) => e.hidden);
+    await cardsW.nth(0).click(); // 지금 순서: 2,4,1,3,5,…
+    await cardsW.nth(1).click({ modifiers: ['Control'] });
+    await selAct('after');
+    await w.fill('#sel-after-n', '99');
+    await w.click('#sel-after button[type="submit"]');
+    const rangeErr = await lastToast();
+    await w.fill('#sel-after-n', '3');
+    await w.click('#sel-after button[type="submit"]');
+    const after = await srcLabels();
+    check('Esc 해제 · "몇 쪽 뒤로…" (범위 오류 안내)', cleared && rangeErr === '1~30 사이 숫자를 넣어 주세요.' && after.slice(0, 5).join(',') === '1쪽,2쪽,4쪽,3쪽,5쪽',
+      `"${rangeErr}" / 3쪽 다음으로 → ${after.slice(0, 5).join(',')}`);
+    await w.click('#edit-selbar [data-sel="rotl"]');
+    const rotLabel = await cardsW.nth(1).getAttribute('aria-label');
+    const [dlSel] = await Promise.all([w.waitForEvent('download'), selAct('save')]);
+    const selDoc = await PDFDocument.load(fs.readFileSync(await dlSel.path()));
+    const selRot = selDoc.getPages().map((p) => p.getRotation().angle);
+    check('왼쪽 90° · 선택한 쪽만 저장', /270도 회전/.test(rotLabel) && dlSel.suggestedFilename() === '수업자료_선택2쪽.pdf' && selDoc.getPageCount() === 2 && selRot.join(',') === '270,270' &&
+      Math.round(selDoc.getPage(0).getWidth()) === 596 && Math.round(selDoc.getPage(1).getWidth()) === 598,
+    `${dlSel.suggestedFilename()} · ${selDoc.getPageCount()}쪽(2쪽, 4쪽 순서) · 회전 ${selRot.join(',')}`);
+
+    // 스크롤해도 선택 막대가 보임
+    await w.evaluate(() => window.scrollTo(0, 1600));
+    await w.waitForTimeout(150);
+    const sticky = await w.evaluate(() => {
+      const r = document.getElementById('edit-selbar').getBoundingClientRect();
+      return { top: Math.round(r.top), bottom: Math.round(r.bottom), sy: Math.round(scrollY) };
+    });
+    check('스크롤 후에도 선택 막대가 위에 보임', sticky.sy > 500 && sticky.top >= 0 && sticky.top <= 16 && sticky.bottom < 900,
+      `scrollY ${sticky.sy}, 막대 top ${sticky.top}px`);
+
+    // 끄는 중 아래 가장자리 → 자동 스크롤
+    await w.evaluate(() => window.scrollTo(0, 0));
+    const a0 = await cardsW.nth(0).boundingBox();
+    await w.mouse.move(a0.x + a0.width / 2, a0.y + a0.height / 2);
+    await w.mouse.down();
+    await w.mouse.move(a0.x + a0.width / 2, 700, { steps: 5 });
+    const barTop = await w.evaluate(() => document.getElementById('edit-bar').getBoundingClientRect().top);
+    await w.mouse.move(a0.x + a0.width / 2, barTop - 5, { steps: 3 });
+    await w.waitForTimeout(600);
+    const scrolled = await w.evaluate(() => Math.round(scrollY));
+    await w.mouse.move(a0.x + a0.width / 2, a0.y + a0.height / 2, { steps: 2 });
+    await w.evaluate(() => window.dispatchEvent(new PointerEvent('pointercancel', { pointerId: 1 })));
+    await w.mouse.up();
+    check('끄는 중 화면 아래 가장자리에서 자동 스크롤', scrolled > 50, `0.6초 동안 ${scrolled}px 내려감`);
+
+    // Ctrl+A
+    await w.evaluate(() => window.scrollTo(0, 0));
+    await w.keyboard.press('Control+a');
+    const all = (await selected()).length;
+    await w.keyboard.press('Escape');
+    check('Ctrl+A 전체 선택', all === 30, `${all}쪽 선택`);
+
+    // 접기 → 새로고침해도 접힘 유지
+    await w.click('#guide-fold');
+    const folded = await w.evaluate(() => ({ st: window.__pdfWorkshop.guide(), rail: document.getElementById('guide-rail').getBoundingClientRect().width }));
+    await w.reload({ waitUntil: 'networkidle' });
+    await w.click('.tool-card[data-open="edit"]');
+    const afterReload = await w.evaluate(() => ({ st: window.__pdfWorkshop.guide(), rail: document.getElementById('guide-rail').getBoundingClientRect().width, body: document.querySelector('#edit-guide .guide-body').getBoundingClientRect().width }));
+    await w.click('#guide-rail');
+    const unfolded = await w.evaluate(() => window.__pdfWorkshop.guide());
+    check('접기 → 새로고침해도 접힘 유지 (접히면 움직임 멈춤)', folded.st.collapsed && folded.rail > 30 && folded.st.playing.every((p) => !p) &&
+      afterReload.st.collapsed && afterReload.rail > 30 && afterReload.body === 0 && !unfolded.collapsed && unfolded.playing.every(Boolean),
+    `접힘 막대 ${Math.round(afterReload.rail)}px, 새로고침 후 collapsed=${afterReload.st.collapsed}, 펼치면 재생 ${unfolded.playing.every(Boolean)}`);
+    check('1440px 흐름 콘솔 에러 0개', werr.length === 0, werr.length ? werr.join(' | ').slice(0, 300) : '0개');
+    await wctx.close();
+
+    // 1000px: 패널 숨김 + "사용법" 버튼으로 서랍
+    const nctx = await browser.newContext({ viewport: { width: 1000, height: 800 }, colorScheme: 'light' });
+    const n = await nctx.newPage();
+    const nerr = [];
+    watch(n, nerr);
+    await n.goto(BASE, { waitUntil: 'networkidle' });
+    await n.click('.tool-card[data-open="edit"]');
+    const hiddenState = await n.evaluate(() => ({
+      w: document.getElementById('edit-guide').getBoundingClientRect().width,
+      btn: document.getElementById('guide-open').getBoundingClientRect().width,
+      st: window.__pdfWorkshop.guide(),
+    }));
+    await n.click('#guide-open');
+    await n.waitForTimeout(300);
+    const drawer = await n.evaluate(() => {
+      const r = document.getElementById('edit-guide').getBoundingClientRect();
+      return { w: Math.round(r.width), right: Math.round(r.right), st: window.__pdfWorkshop.guide(), backdrop: !document.getElementById('guide-backdrop').hidden };
+    });
+    await n.keyboard.press('Escape');
+    const closed = await n.evaluate(() => document.getElementById('edit-guide').getBoundingClientRect().width);
+    check('1000px: 패널 숨김 → "사용법" 버튼으로 서랍 열기 · Esc로 닫기',
+      hiddenState.w === 0 && hiddenState.btn > 0 && hiddenState.st.playing.every((p) => !p) && drawer.w >= 300 && drawer.right === 1000 && drawer.backdrop && drawer.st.playing.every(Boolean) && closed === 0,
+      `숨김(폭 ${hiddenState.w}) → 서랍 ${drawer.w}px, 재생 ${drawer.st.playing.every(Boolean)} → Esc 닫힘`);
+    check('1000px 콘솔 에러 0개', nerr.length === 0, nerr.length ? nerr.join(' | ').slice(0, 200) : '0개');
+    await nctx.close();
+
+    // 400px 터치: 길게 누르기 → 선택 모드, 탭으로 더하기, 가로 스크롤 없음
+    const tctx = await browser.newContext({ viewport: { width: 400, height: 860 }, isMobile: true, hasTouch: true, colorScheme: 'light', deviceScaleFactor: 2 });
+    const t = await tctx.newPage();
+    const terr = [];
+    watch(t, terr);
+    await t.goto(BASE, { waitUntil: 'networkidle' });
+    await t.setInputFiles('#home-input', [fileMany]);
+    await until(t, () => document.querySelectorAll('#edit-grid .page-card').length === 30);
+    const tb = await t.locator('#edit-grid .page-card').nth(1).boundingBox();
+    const cdp = await tctx.newCDPSession(t);
+    const pt = { x: tb.x + tb.width / 2, y: tb.y + tb.height / 2 };
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [pt] });
+    await t.waitForTimeout(650);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    const lp = await t.evaluate(() => ({ mode: document.getElementById('edit-grid').classList.contains('select-mode'), n: document.querySelectorAll('#edit-grid .page-card.selected').length }));
+    await t.locator('#edit-grid .page-card').nth(2).tap(); // 첫 줄(아래쪽 카드는 저장 막대에 가려짐)
+    await t.waitForTimeout(100);
+    const lp2 = await t.evaluate(() => ({ n: document.querySelectorAll('#edit-grid .page-card.selected').length, sw: document.documentElement.scrollWidth, bar: !document.getElementById('edit-selbar').hidden }));
+    await t.click('#edit-selbar [data-sel="clear"]');
+    const lp3 = await t.evaluate(() => document.getElementById('edit-grid').classList.contains('select-mode'));
+    check('400px 터치: 길게 누르면 선택 모드 → 탭으로 추가 · 가로 스크롤 없음', lp.mode && lp.n === 1 && lp2.n === 2 && lp2.bar && lp2.sw <= 400 && !lp3 && terr.length === 0,
+      `길게 누름 → 선택 ${lp.n}쪽, 탭 → ${lp2.n}쪽, ✕ → 선택 모드 꺼짐, scrollWidth ${lp2.sw}${terr.length ? `, 에러 ${terr.join(' | ').slice(0, 120)}` : ''}`);
+    await tctx.close();
+  }
+
+  // ── 11. 스크린샷 ──
   if (SCREENS) {
     const out = path.join(root, 'docs', 'screens');
     fs.mkdirSync(out, { recursive: true });
@@ -494,6 +716,35 @@ try {
     await mp.evaluate(() => document.fonts.ready);
     await mp.screenshot({ path: path.join(out, 'mobile-home.png') });
     await mo.close();
+
+    // 여러 쪽 선택 + 사용법 패널 (1440px)
+    const sMany = await writePdf('수업자료.pdf', await samplePdf(12, 'Lesson'));
+    const wd = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: 'light', deviceScaleFactor: 1 });
+    const wp = await wd.newPage();
+    await wp.goto(BASE, { waitUntil: 'networkidle' });
+    await wp.evaluate(() => document.fonts.ready);
+    await wp.setInputFiles('#home-input', [sMany]);
+    await until(wp, () => document.querySelectorAll('#edit-grid .page-card canvas').length >= 10, undefined, { timeout: 15000 });
+    const wc = wp.locator('#edit-grid .page-card');
+    await wc.nth(1).click();
+    await wc.nth(3).click({ modifiers: ['Control'] });
+    await wc.nth(6).click({ modifiers: ['Control'] });
+    await wp.mouse.move(5, 5);
+    await wp.waitForTimeout(4200); // 예시가 "2쪽 선택됨" 장면쯤 오도록
+    await wp.screenshot({ path: path.join(out, 'multiselect.png') });
+    await wd.close();
+
+    // 1000px: 사용법 서랍
+    const nd = await browser.newContext({ viewport: { width: 1000, height: 800 }, colorScheme: 'light', deviceScaleFactor: 1 });
+    const np = await nd.newPage();
+    await np.goto(BASE, { waitUntil: 'networkidle' });
+    await np.evaluate(() => document.fonts.ready);
+    await np.setInputFiles('#home-input', [sMany]);
+    await until(np, () => document.querySelectorAll('#edit-grid .page-card canvas').length >= 6, undefined, { timeout: 15000 });
+    await np.click('#guide-open');
+    await np.waitForTimeout(4200);
+    await np.screenshot({ path: path.join(out, 'guide-drawer.png') });
+    await nd.close();
     console.log(`스크린샷: ${out}`);
   }
 } catch (e) {

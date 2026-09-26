@@ -273,6 +273,56 @@ await step('이미지 → PDF (배치·비율)', async () => {
     `A4 세로 이미지 ${Math.round(L.w)}×${Math.round(L.h)}pt 가운데, 원본 크기 800×600px→${orig.pageW}×${orig.pageH}pt`);
 });
 
+// 8. 여러 쪽 순서 조작 (선택 막대 · 끌어 옮기기)
+const ten = Array.from({ length: 10 }, (_, i) => i + 1); // 1~10쪽
+await step('여러 쪽 맨 앞/맨 뒤 (상대 순서 유지)', async () => {
+  const f = Core.moveToFront(ten, [7, 3]);
+  const e = Core.moveToEnd(ten, [4, 2]);
+  check('여러 쪽 맨 앞/맨 뒤 (상대 순서 유지)',
+    same(f, [3, 7, 1, 2, 4, 5, 6, 8, 9, 10]) && same(e, [1, 3, 5, 6, 7, 8, 9, 10, 2, 4]) && same(ten, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
+    `3,7 맨 앞 → ${f.join(',')} / 2,4 맨 뒤 → ${e.join(',')} (원래 배열 그대로)`);
+});
+await step('떨어진 쪽(2,5,9)을 N쪽 다음으로', async () => {
+  const a = Core.moveAfter(ten, [2, 5, 9], 6);
+  const b = Core.moveAfter(ten, [9, 5, 2], 0); // 넘기는 순서와 상관없이 지금 순서대로
+  const c = Core.moveAfter(ten, [2, 5, 9], 10);
+  const d = Core.moveAfter(ten, [2, 5, 9], 5); // 기준 쪽이 고른 쪽이어도 된다
+  check('떨어진 쪽(2,5,9)을 N쪽 다음으로',
+    same(a, [1, 3, 4, 6, 2, 5, 9, 7, 8, 10]) && same(b, [2, 5, 9, 1, 3, 4, 6, 7, 8, 10]) &&
+    same(c, [1, 3, 4, 6, 7, 8, 10, 2, 5, 9]) && same(d, [1, 3, 4, 2, 5, 9, 6, 7, 8, 10]),
+    `6쪽 뒤 → ${a.join(',')} / 0 → ${b.join(',')} / 5쪽 뒤 → ${d.join(',')}`);
+});
+await step('끌어 놓기 틈 번호(moveGroup)', async () => {
+  const a = Core.moveGroup(ten, [2, 5, 9], 7); // 7쪽 앞 틈
+  const b = Core.moveGroup([1, 2, 3, 4, 5], [2, 4], 0);
+  const same1 = Core.moveGroup([1, 2, 3], [2], 2); // 제자리
+  check('끌어 놓기 틈 번호(moveGroup)',
+    same(a, [1, 3, 4, 6, 7, 2, 5, 9, 8, 10]) && same(b, [2, 4, 1, 3, 5]) && same(same1, [1, 2, 3]),
+    `2,5,9 → 8쪽 앞 ${a.join(',')} / 2,4 맨 앞 ${b.join(',')}`);
+});
+await step('N쪽 다음으로: 범위 오류', async () => {
+  const msgs = [11, -1, 2.5, '', 'abc'].map((n) => {
+    try { Core.moveAfter(ten, [1], n); return null; } catch (e) { return e.title; }
+  });
+  const counted = Core.moveAfter([1, 2, 3, 4], [4], 1, [1, 3]); // 삭제 예정 2쪽은 번호에서 뺌
+  check('N쪽 다음으로: 범위 오류', msgs.every((m) => m === '1~10 사이 숫자를 넣어 주세요.') && same(counted, [1, 4, 2, 3]),
+    `11·-1·2.5·빈칸·글자 → "${msgs[0]}" / 번호 셀 때 삭제 예정 쪽 제외 OK`);
+});
+await step('회전 90° 단위 정규화', async () => {
+  const r = [Core.rotate(0, 'left'), Core.rotate(270, 'right'), Core.rotate(90, 'right'), Core.rotate(180, 'left'), Core.rotate(-450, 'right')];
+  check('회전 90° 단위 정규화', same(r, [270, 0, 180, 90, 0]), `0↺=${r[0]}, 270↻=${r[1]}, 90↻=${r[2]}, 180↺=${r[3]}, -450↻=${r[4]}`);
+});
+await step('선택한 쪽만 저장 (쪽수·순서)', async () => {
+  // 지금 순서가 B4, A1, B1, A3, B2 … 일 때 A3, B4, B1을 고르면 지금 순서대로 B4, B1, A3
+  const order = [6, 0, 3, 2, 4, 1, 5];
+  const picked = Core.pickInOrder(order, [2, 6, 3]);
+  const out = await Core.assemble(picked.map((i) => all[i]));
+  const back = await PDFDocument.load(await out.save());
+  const w = widthsOf(back);
+  check('선택한 쪽만 저장 (쪽수·순서)', back.getPageCount() === 3 && same(w, [603, 600, 502]),
+    `${back.getPageCount()}쪽, 폭 ${w.join(',')} (B4, B1, A3)`);
+});
+
 // ── 결과 표 ─────────────────────────────────────────
 const width = (s) => [...s].reduce((n, ch) => n + (/[ᄀ-ᇿ㄰-㆏가-힣]/.test(ch) ? 2 : 1), 0);
 const padR = (s, n) => s + ' '.repeat(Math.max(0, n - width(s)));

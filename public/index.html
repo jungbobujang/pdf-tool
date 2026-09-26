@@ -25,6 +25,10 @@
       <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
       <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
       <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="i-rotate-left" viewBox="0 0 24 24"><path d="M4 11.5A8 8 0 1 0 6.3 6"/><path d="M4 4v5h5"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+      <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></symbol>
+      <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.3a2.5 2.5 0 0 1 4.8 1c0 1.7-2.4 2.2-2.4 3.7"/><path d="M12 17.2v.1"/></symbol>
     </defs>
   </svg>
 
@@ -126,10 +130,15 @@
 
     <main class="work">
       <!-- 편집 · 합치기 · 자르기 -->
-      <section class="panel" id="panel-edit" role="tabpanel" aria-labelledby="tab-edit">
-        <header class="tool-head">
-          <h1>편집 · 합치기 · 자르기</h1>
-          <p>여러 PDF를 한 화면에 펼쳐 순서를 바꾸고, 필요 없는 쪽을 빼고, 합쳐서 저장해요.</p>
+      <section class="panel panel-edit" id="panel-edit" role="tabpanel" aria-labelledby="tab-edit">
+       <div class="edit-layout">
+       <div class="edit-main">
+        <header class="tool-head with-guide">
+          <div>
+            <h1>편집 · 합치기 · 자르기</h1>
+            <p>여러 PDF를 한 화면에 펼쳐 순서를 바꾸고, 필요 없는 쪽을 빼고, 합쳐서 저장해요.</p>
+          </div>
+          <button type="button" class="btn guide-open" id="guide-open" aria-controls="edit-guide" aria-expanded="false"><svg class="ic sm" aria-hidden="true"><use href="#i-help"/></svg>사용법</button>
         </header>
         <input type="file" id="edit-input" accept="application/pdf,.pdf" multiple hidden>
 
@@ -149,8 +158,38 @@
 
         <div class="locks" id="edit-locks"></div>
         <ul class="chips" id="edit-chips" aria-label="넣은 파일"></ul>
-        <p class="hint" id="edit-hint" hidden>카드를 끌어서 순서를 바꾸세요. 카드에 마우스를 올리거나 탭하면 회전 · 교체 · 삭제 버튼이 나와요.</p>
-        <div class="grid pages" id="edit-grid" aria-label="쪽 목록"></div>
+        <p class="hint" id="edit-hint" hidden>카드를 끌어서 순서를 바꾸세요. Ctrl(⌘)·Shift를 누른 채 클릭하거나 빈 곳에서 끌어 네모를 그리면 여러 쪽을 한꺼번에 고를 수 있어요. 휴대폰에서는 쪽을 길게 누르세요.</p>
+
+        <div class="selbar" id="edit-selbar" role="toolbar" aria-label="선택한 쪽" hidden>
+          <div class="selbar-in">
+            <strong class="sel-count" id="sel-count" aria-live="polite">0쪽 선택됨</strong>
+            <button type="button" class="sb" data-sel="rotl" title="왼쪽으로 90° (선택한 쪽 모두)"><svg class="ic sm" aria-hidden="true"><use href="#i-rotate-left"/></svg>왼쪽 90°</button>
+            <button type="button" class="sb" data-sel="rotr" title="오른쪽으로 90° (선택한 쪽 모두)"><svg class="ic sm" aria-hidden="true"><use href="#i-rotate"/></svg>오른쪽 90°</button>
+            <button type="button" class="sb sel-extra" data-sel="front">맨 앞으로</button>
+            <button type="button" class="sb sel-extra" data-sel="end">맨 뒤로</button>
+            <button type="button" class="sb sel-extra" data-sel="after" aria-expanded="false" aria-controls="sel-after">몇 쪽 뒤로…</button>
+            <button type="button" class="sb sel-extra" data-sel="save">선택한 쪽만 저장</button>
+            <div class="menu-wrap sel-more">
+              <button type="button" class="sb" id="sel-more" aria-haspopup="true" aria-expanded="false" aria-controls="sel-menu">더보기<svg class="ic sm" aria-hidden="true"><use href="#i-chevron"/></svg></button>
+              <div class="menu down" id="sel-menu" role="menu" hidden>
+                <button role="menuitem" data-sel="front">맨 앞으로</button>
+                <button role="menuitem" data-sel="end">맨 뒤로</button>
+                <button role="menuitem" data-sel="after">몇 쪽 뒤로…</button>
+                <button role="menuitem" data-sel="save">선택한 쪽만 저장</button>
+              </div>
+            </div>
+            <button type="button" class="sb danger" data-sel="del" id="sel-del">삭제</button>
+            <button type="button" class="sb" data-sel="undo" id="sel-undo" title="되돌리기 (Ctrl+Z)"><svg class="ic sm" aria-hidden="true"><use href="#i-undo"/></svg>되돌리기</button>
+            <button type="button" class="sb sel-x" data-sel="clear" title="선택 해제 (Esc)" aria-label="선택 해제">선택 해제<svg class="ic sm" aria-hidden="true"><use href="#i-x"/></svg></button>
+            <form class="sel-after" id="sel-after" hidden>
+              <label><input type="text" id="sel-after-n" inputmode="numeric" autocomplete="off" aria-label="몇 쪽 다음으로"><span>쪽 다음으로</span></label>
+              <button type="submit" class="sb solid">옮기기</button>
+              <button type="button" class="sb" data-sel="after-close">취소</button>
+            </form>
+          </div>
+        </div>
+
+        <div class="grid pages" id="edit-grid" aria-label="쪽 목록" aria-multiselectable="true"></div>
 
         <div class="savebar" id="edit-bar" hidden>
           <span class="count" id="edit-count"><b>0</b>쪽 저장 예정</span>
@@ -170,6 +209,44 @@
           </div>
           <button class="btn primary" id="edit-save">합쳐서 저장</button>
         </div>
+       </div>
+
+       <aside class="guide" id="edit-guide" aria-labelledby="guide-title">
+        <button type="button" class="guide-rail" id="guide-rail" aria-controls="edit-guide" aria-expanded="false" title="사용법 펼치기"><svg class="ic sm" aria-hidden="true"><use href="#i-help"/></svg><span>사용법</span></button>
+        <div class="guide-body">
+          <div class="guide-head">
+            <h2 id="guide-title">이렇게 써요</h2>
+            <button type="button" class="guide-fold" id="guide-fold" aria-controls="edit-guide" aria-expanded="true">접기</button>
+          </div>
+          <figure class="demo" id="demo-move">
+            <div class="demo-stage" aria-hidden="true"></div>
+            <figcaption><strong>여러 쪽을 한꺼번에 옮기기</strong>Ctrl을 누른 채 쪽을 하나씩 클릭한 뒤, 고른 쪽 하나를 끌면 함께 움직여요.</figcaption>
+          </figure>
+          <figure class="demo" id="demo-range">
+            <div class="demo-stage" aria-hidden="true"></div>
+            <figcaption><strong>이어진 쪽을 범위로 고르기</strong>첫 쪽을 클릭하고 Shift를 누른 채 마지막 쪽을 클릭하면 그 사이가 모두 선택돼요.</figcaption>
+          </figure>
+          <figure class="demo" id="demo-rotate">
+            <div class="demo-stage" aria-hidden="true"></div>
+            <figcaption><strong>돌리기는 90°씩</strong>↻는 오른쪽, ↺는 왼쪽으로 90°씩 돌아가요. 두 번 누르면 거꾸로(180°) 돼요.</figcaption>
+          </figure>
+          <table class="keys">
+            <caption>단축키</caption>
+            <tbody>
+              <tr><th scope="row"><kbd>클릭</kbd></th><td>그 쪽만 선택</td></tr>
+              <tr><th scope="row"><kbd>Ctrl</kbd>+<kbd>클릭</kbd></th><td>하나씩 더하기 · 빼기</td></tr>
+              <tr><th scope="row"><kbd>Shift</kbd>+<kbd>클릭</kbd></th><td>사이를 모두 선택</td></tr>
+              <tr><th scope="row"><kbd>Ctrl</kbd>+<kbd>A</kbd></th><td>전체 선택</td></tr>
+              <tr><th scope="row"><kbd>Delete</kbd></th><td>삭제 예정 표시</td></tr>
+              <tr><th scope="row"><kbd>Esc</kbd></th><td>선택 해제</td></tr>
+              <tr><th scope="row"><kbd>Ctrl</kbd>+<kbd>Z</kbd></th><td>되돌리기 (<kbd>Ctrl</kbd>+<kbd>Y</kbd> 다시 하기)</td></tr>
+            </tbody>
+          </table>
+          <p class="guide-note">휴대폰에서는 쪽을 길게 누르면 선택 모드가 켜지고, 그다음부터는 탭으로 여러 개를 고를 수 있어요.</p>
+        </div>
+       </aside>
+       </div>
+       <div class="guide-backdrop" id="guide-backdrop" hidden></div>
       </section>
 
       <!-- 사진 → PDF -->
