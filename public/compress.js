@@ -35,7 +35,8 @@
   const MAX_PIXELS = 40e6; // 이보다 큰 사진은 메모리를 아끼려고 건너뛴다
 
   /** t(0~1) → 크기 비율과 JPEG 품질. t가 작을수록 더 줄인다. */
-  const params = (t) => ({ scale: 0.35 + 0.65 * t, q: 0.4 + 0.5 * t });
+  // t가 1보다 크면(최대 1.16) 원래 크기 그대로 품질만 0.95~0.98로 더 높인다(목표에 가깝게 채울 때)
+  const params = (t) => ({ scale: Math.min(1, 0.35 + 0.65 * t), q: Math.min(0.98, 0.4 + 0.5 * t) });
   /** 쪽 전체를 사진으로 바꿀 때: t → dpi, 품질 */
   const rasterParams = (t) => ({ dpi: Math.round(60 + 90 * t), q: 0.4 + 0.45 * t });
   /** 화면에 보여 줄 예상 화질 */
@@ -628,6 +629,7 @@
         }
         if (!moved) {
           if (t < 1) t = Math.min(1, Math.round((t + (1 - t) / 2) * 1000) / 1000);
+          else if (t < 1.16) t = Math.min(1.16, Math.round((t + 0.08) * 1000) / 1000);
           else break;
         }
       } else break;
@@ -665,6 +667,15 @@
    * type: 결과 형식('image/jpeg' | 'image/webp' | 'image/png')
    */
   async function compressImage(handle, originalSize, target, codec, { type = 'image/jpeg', signal } = {}) {
+    // 가장 선명하게 해도 목표의 85%에 못 미치면 품질을 더 올려 본다
+    const fill = async (r) => {
+      if (type === 'image/png' || r.bytes.length >= target * 0.85) return r;
+      for (const t2 of [1.1, 1.16]) {
+        const x = await enc(t2);
+        if (x.bytes.length <= target && x.bytes.length < originalSize) r = { ...x, t: t2, reached: true, quality: '선명' };
+      }
+      return r;
+    };
     const memo = new Map();
     const enc = async (t) => {
       if (!memo.has(t)) {
@@ -675,7 +686,7 @@
       return memo.get(t);
     };
     const top = await enc(1);
-    if (top.bytes.length <= target) return { ...top, t: 1, reached: true, quality: qualityLabel(1) };
+    if (top.bytes.length <= target) return fill({ ...top, t: 1, reached: true, quality: qualityLabel(1) });
     const s = await searchT(async (t) => (await enc(t)).bytes.length, target * 0.99, { signal });
     const r = await enc(s.t);
     return { ...r, t: s.t, reached: r.bytes.length <= target, quality: qualityLabel(s.t) };

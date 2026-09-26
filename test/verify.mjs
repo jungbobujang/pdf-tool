@@ -583,6 +583,158 @@ const { colorSamplesPdf } = await import('./node-codec.mjs');
   });
 }
 
+// 13. HEIC 판별 · 쪽 크기 맞추기 · 양면 스캔 · 빈 쪽 · 파일 정보 · 일괄 · zip 한글 이름
+{
+  await step('사진 형식 판별(HEIC 시그니처 · 지원 안 하는 형식)', async () => {
+    const box = (brands) => {
+      const b = new Uint8Array(8 + brands.length * 4);
+      b.set([0, 0, 0, b.length], 0);
+      b.set([...'ftyp'].map((c) => c.charCodeAt(0)), 4);
+      brands.forEach((br, i) => b.set([...br].map((c) => c.charCodeAt(0)), 8 + i * 4));
+      return b;
+    };
+    const cases = [
+      [box(['heic', '\0\0\0\0', 'mif1', 'heic']), 'IMG_0001.HEIC', 'heic'],
+      [box(['mif1', '\0\0\0\0', 'mif1', 'heic']), 'photo.bin', 'heic'],
+      [box(['heix', '\0\0\0\0']), 'a', 'heic'],
+      [box(['avif', '\0\0\0\0', 'avif', 'mif1']), 'a.avif', 'avif'],
+      [new Uint8Array([0x49, 0x49, 0x2a, 0, 8, 0]), 'scan.tif', 'tiff'],
+      [new Uint8Array([0x42, 0x4d, 0, 0]), 'a.bmp', 'bmp'],
+      [new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]), 'a.gif', 'gif'],
+      [new Uint8Array([0xff, 0xd8, 0xff]), 'a.jpg', 'jpeg'],
+      [new Uint8Array([0, 1, 2, 3]), 'IMG_2.heif', 'heic'],
+      [new Uint8Array([0, 1, 2, 3]), 'x.tiff', 'tiff'],
+    ];
+    const got = cases.map(([b, n]) => Core.detectImageKind(b, n));
+    check('사진 형식 판별(HEIC 시그니처 · 지원 안 하는 형식)', same(got, cases.map((c) => c[2])), got.join(', '));
+  });
+
+  // 크기가 섞인 문서: A4 세로(글자) · A4 가로 · B5 · Letter · /Rotate 90으로 눕힌 A4
+  async function mixedPdf() {
+    const doc = await PDFDocument.create();
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const specs = [[595.28, 841.89, 0, 'Portrait A4'], [841.89, 595.28, 0, 'Landscape A4'], [515.91, 728.5, 0, 'B5 page'], [612, 792, 0, 'Letter page'], [595.28, 841.89, 90, 'Rotated A4']];
+    for (const [w, h, rot, t] of specs) {
+      const p = doc.addPage([w, h]);
+      p.drawText(t, { x: 50, y: h - 80, size: 22, font });
+      if (rot) p.setRotation(degrees(rot));
+    }
+    return doc;
+  }
+  await step('쪽 크기 분류 · 모두 A4 세로로(글자 유지)', async () => {
+    const doc = await mixedPdf();
+    const sizes = doc.getPages().map((p) => { const f = Core.pageFrame(p); return { w: f.visW, h: f.visH }; });
+    const sum = Core.sizeSummary(sizes).map(([k, n]) => `${k} ${n}`).join(' · ');
+    const fit = await Core.normalizePages(doc, { paper: 'a4', mode: 'fit' });
+    const rot = await Core.normalizePages(doc, { paper: 'letter', mode: 'rotate' });
+    const fitBytes = await fit.save();
+    const back = await PDFDocument.load(fitBytes);
+    const dims = back.getPages().map((p) => `${Math.round(p.getWidth())}×${Math.round(p.getHeight())}`);
+    const rdims = (await PDFDocument.load(await rot.save())).getPages().map((p) => `${Math.round(p.getWidth())}×${Math.round(p.getHeight())}`);
+    let texts = ['pdf.js 없음'];
+    let textOk = true;
+    if (pdfjs) {
+      texts = [];
+      for (let i = 1; i <= 5; i++) texts.push(await pdfjsText(fitBytes, i));
+      textOk = same(texts, ['Portrait A4', 'Landscape A4', 'B5 page', 'Letter page', 'Rotated A4']);
+    }
+    check('쪽 크기 분류 · 모두 A4 세로로(글자 유지)', sum === 'A4 가로 2 · A4 세로 1 · B5 세로 1 · Letter 세로 1' &&
+      dims.every((d) => d === '595×842') && rdims.every((d) => d === '612×792') && textOk,
+    `${sum} → A4 ${[...new Set(dims)].join()} · Letter(돌려서) ${[...new Set(rdims)].join()} · 글자 "${texts.join('", "')}"`);
+  });
+
+  await step('양면 스캔 짝 맞추기(interleave)', async () => {
+    const F = (n) => Array.from({ length: n }, (_, i) => `F${i + 1}`);
+    const B = (n) => Array.from({ length: n }, (_, i) => `B${i + 1}`);
+    const seq = (r) => r.order.map((o) => o.item).join(',');
+    const a = Core.interleave(F(12), B(12));
+    const b = Core.interleave(F(12), B(11));
+    const c = Core.interleave(F(12), B(13));
+    const d = Core.interleave(F(3), B(3), { reverseBack: false });
+    const ok = seq(a).startsWith('F1,B12,F2,B11') && seq(a).endsWith('F12,B1') && a.diff === 0 && a.order.length === 24 &&
+      b.diff === -1 && b.order.length === 23 && seq(b).endsWith('F11,B1,F12') &&
+      c.diff === 1 && c.order.length === 25 && seq(c).startsWith('F1,B13') && seq(c).endsWith('F12,B2,B1') &&
+      seq(d) === 'F1,B1,F2,B2,F3,B3';
+    check('양면 스캔 짝 맞추기(interleave)', ok,
+      `12+12 역순 ${seq(a).slice(0, 18)}… / 12+11 끝 …${seq(b).slice(-10)} / 12+13 끝 …${seq(c).slice(-10)} / 그대로 ${seq(d)}`);
+  });
+
+  await step('빈 쪽 판정 4종', async () => {
+    const W = 200;
+    const H = 283;
+    const page = (bg) => { const a = new Uint8ClampedArray(W * H * 4).fill(bg); for (let i = 3; i < a.length; i += 4) a[i] = 255; return a; };
+    const dot = (a, x, y, s = 2) => { for (let yy = y; yy < y + s; yy++) for (let xx = x; xx < x + s; xx++) { const o = (yy * W + xx) * 4; a[o] = a[o + 1] = a[o + 2] = 30; } };
+    let sd = 3;
+    const rnd = () => ((sd = (sd * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+    const white = page(255);
+    const specks = page(252);
+    for (let i = 0; i < 20; i++) dot(specks, Math.floor(rnd() * (W - 3)), Math.floor(rnd() * (H - 3)));
+    for (let y = 0; y < H; y += 20) dot(specks, 2, y, 3); // 구멍 자국 같은 가장자리 잡티(제외 영역)
+    const line = page(255);
+    for (let x = 30; x < 170; x++) for (let y = 60; y < 68; y++) if ((x >> 2) % 2) dot(line, x, y, 1);
+    const gray = page(215);
+    const r = [white, specks, line, gray].map((a) => Core.whiteRatio(a, W, H));
+    // 글자 레이어가 있으면 흰 쪽이어도 빈 쪽이 아니다
+    const verdict = [Core.isBlankPage(r[0], false), Core.isBlankPage(r[1], false), Core.isBlankPage(r[2], false), Core.isBlankPage(r[3], false), Core.isBlankPage(r[0], true)];
+    check('빈 쪽 판정 4종', same(verdict, [true, true, false, false, false]),
+      `흰 쪽 ${(r[0] * 100).toFixed(1)}% → 빈 쪽 / 잡티 20개 ${(r[1] * 100).toFixed(2)}% → 빈 쪽 / 글자 한 줄 ${(r[2] * 100).toFixed(1)}% → 아님 / 회색 배경(215) ${(r[3] * 100).toFixed(1)}% → 아님 / 흰데 글자 레이어 있음 → 아님`);
+  });
+
+  await step('파일 정보(PDF/A · 잠금 · Producer)', async () => {
+    const doc = await PDFDocument.load(A);
+    doc.setProducer('한글 2022');
+    doc.setCreator('Hwp 2022');
+    doc.setCreationDate(new Date(Date.UTC(2025, 2, 4, 9, 30)));
+    const xmp = '<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/"><pdfaid:part>1</pdfaid:part><pdfaid:conformance>B</pdfaid:conformance></rdf:Description></rdf:RDF></x:xmpmeta>';
+    doc.catalog.set(PDFLib.PDFName.of('Metadata'), doc.context.register(doc.context.stream(new TextEncoder().encode(xmp), { Type: 'Metadata', Subtype: 'XML' })));
+    const plain = await doc.save({ useObjectStreams: false, updateMetadata: false });
+    const info = await Core.pdfInfo(plain);
+    const lockedDoc = await PDFDocument.load(A);
+    Core.encrypt(lockedDoc, { userPassword: 'x1' });
+    const lockInfo = await Core.pdfInfo(await lockedDoc.save({ useObjectStreams: false }));
+    check('파일 정보(PDF/A · 잠금 · Producer)', info.pdfa === 'PDF/A-1b' && info.producer === '한글 2022' && info.creator === 'Hwp 2022' && info.pages === 3 &&
+      info.created && info.created.getUTCFullYear() === 2025 && info.sizes.length === 1 && lockInfo.restrictions.needsPassword && lockInfo.pages === 3,
+    `${info.pdfa} · ${info.producer} / ${info.creator} · ${info.created && info.created.toISOString().slice(0, 10)} · PDF ${info.version} · 잠긴 파일 needsPassword=${lockInfo.restrictions.needsPassword}`);
+  });
+
+  await step('일괄 처리: 하나 실패해도 나머지 완료 · 멈춤 · 합계 목표 배분', async () => {
+    const items = ['a', 'b', 'c', 'd'];
+    const log = [];
+    const res = await Core.runBatch(items, async (x) => { if (x === 'b') throw new Error('비밀번호가 달라요'); return x.toUpperCase(); }, { onProgress: (p) => log.push(`${p.done}/${p.total}`) });
+    let stopAfter = 2;
+    const res2 = await Core.runBatch(items, async (x) => x, { shouldStop: () => stopAfter-- <= 0 });
+    const alloc = Core.allocateTotal([30, 10, 20], 12);
+    check('일괄 처리: 하나 실패해도 나머지 완료 · 멈춤 · 합계 목표 배분',
+      res.map((r) => r.ok).join() === 'true,false,true,true' && res[2].value === 'C' && res2.filter((r) => r.ok).length === 2 && res2[3].skipped && same(alloc, [6, 2, 4]),
+    `결과 ${res.map((r) => (r.ok ? r.value : `실패(${r.error.message})`)).join(' ')} · 멈춤 → 2개 뒤 정지 · 12MB를 30/10/20에 ${alloc.join('/')}`);
+  });
+
+  await step('zip 한글 파일 이름 (윈도우 Expand-Archive · .NET ZipFile)', async () => {
+    if (process.platform !== 'win32') return check('zip 한글 파일 이름 (윈도우 Expand-Archive · .NET ZipFile)', true, '윈도우가 아니라 건너뜀');
+    const os = require('node:os');
+    const path = require('node:path');
+    const { execFileSync } = require('node:child_process');
+    const JSZip = require('jszip');
+    const names = ['수업자료_01_1-10쪽.pdf', '회의록_p001.png', '풀림_한글 파일 (1).pdf'];
+    const zip = new JSZip();
+    names.forEach((n) => zip.file(n, 'x'));
+    // 화면과 같은 옵션
+    const buf = await zip.generateAsync({ type: 'nodebuffer', compression: 'STORE' });
+    const flagOk = (() => { const i = buf.indexOf(Buffer.from([0x50, 0x4b, 0x03, 0x04])); return (buf.readUInt16LE(i + 6) & 0x0800) !== 0; })();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zip-ko-'));
+    const zipPath = path.join(dir, '한글.zip');
+    fs.writeFileSync(zipPath, buf);
+    const ps = (cmd) => execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `[Console]::OutputEncoding=[Text.Encoding]::UTF8; ${cmd}`], { encoding: 'utf8' }).trim();
+    const outA = path.join(dir, 'a');
+    ps(`Expand-Archive -LiteralPath '${zipPath}' -DestinationPath '${outA}' -Force; (Get-ChildItem -LiteralPath '${outA}' | Sort-Object Name | ForEach-Object { $_.Name }) -join '|'`);
+    const gotA = fs.readdirSync(outA).sort();
+    const gotB = ps(`Add-Type -AssemblyName System.IO.Compression.FileSystem; $z=[IO.Compression.ZipFile]::OpenRead('${zipPath}'); ($z.Entries | ForEach-Object { $_.FullName } | Sort-Object) -join '|'; $z.Dispose()`).split('|').sort();
+    const want = [...names].sort();
+    check('zip 한글 파일 이름 (윈도우 Expand-Archive · .NET ZipFile)', flagOk && same(gotA, want) && same(gotB, want),
+      `UTF-8 플래그 ${flagOk ? '켜짐' : '꺼짐'} · Expand-Archive: ${gotA.join(' / ')} · ZipFile: ${gotB.join(' / ')}`);
+  });
+}
+
 // ── 결과 표 ─────────────────────────────────────────
 const width = (s) => [...s].reduce((n, ch) => n + (/[ᄀ-ᇿ㄰-㆏가-힣]/.test(ch) ? 2 : 1), 0);
 const padR = (s, n) => s + ' '.repeat(Math.max(0, n - width(s)));

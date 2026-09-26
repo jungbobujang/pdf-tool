@@ -19,6 +19,7 @@
     "@cantoo/fontkit": "2.0.12",
     "@cantoo/pdf-lib": "2.11.1",
     "express": "4.21.2",
+    "heic-to": "1.5.2",
     "jpeg-js": "0.4.4",
     "jszip": "3.10.1",
     "pako": "2.1.0",

@@ -55,7 +55,7 @@
     </header>
 
     <main class="home-main">
-      <input type="file" id="home-input" accept="application/pdf,.pdf,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" multiple hidden>
+      <input type="file" id="home-input" accept="application/pdf,.pdf,image/*,.jpg,.jpeg,.png,.webp,.heic,.heif,.gif,.bmp,.avif" multiple hidden>
       <div class="home-drop" id="home-drop">
         <span class="home-drop-icon" aria-hidden="true"><svg class="ic"><use href="#i-upload"/></svg></span>
         <div class="home-drop-text">
@@ -176,6 +176,22 @@
 
         <div class="locks" id="edit-locks"></div>
         <ul class="chips" id="edit-chips" aria-label="넣은 파일"></ul>
+        <div class="notice size-note" id="edit-sizes" hidden>
+          <p id="edit-sizes-text"></p>
+          <fieldset class="seg compact"><legend class="sr-only">쪽 크기</legend>
+            <label><input type="radio" name="sizefix" value="keep" checked><span>그대로 두기</span></label>
+            <label><input type="radio" name="sizefix" value="fit"><span>모두 A4 세로로</span></label>
+            <label><input type="radio" name="sizefix" value="rotate"><span>가로 쪽은 돌려서</span></label>
+          </fieldset>
+          <label class="paper-sel">기준 <select id="sizefix-paper" aria-label="기준 종이"><option value="a4" selected>A4</option><option value="letter">Letter</option></select></label>
+        </div>
+        <div class="notice blank-note" id="edit-blank" hidden>
+          <p id="edit-blank-text"></p>
+          <div class="btn-row" id="edit-blank-acts">
+            <button type="button" class="btn sm" id="blank-mark">삭제 예정으로 표시</button>
+            <button type="button" class="btn sm" id="blank-review">하나씩 보기</button>
+          </div>
+        </div>
         <p class="hint" id="edit-hint" hidden>카드를 끌어서 순서를 바꾸세요. Ctrl(⌘)·Shift를 누른 채 클릭하거나 빈 곳에서 끌어 네모를 그리면 여러 쪽을 한꺼번에 고를 수 있어요. 휴대폰에서는 쪽을 길게 누르세요.</p>
 
         <div class="selbar" id="edit-selbar" role="toolbar" aria-label="선택한 쪽" hidden>
@@ -234,6 +250,51 @@
           </div>
         </section>
 
+        <section class="split-panel duplex-panel" id="duplex-panel" aria-labelledby="duplex-title" hidden>
+          <div class="split-head">
+            <h2 id="duplex-title"><svg class="ic sm" aria-hidden="true"><use href="#i-layers"/></svg>양면 스캔 짝 맞추기</h2>
+            <button type="button" class="icon-btn" id="duplex-close" aria-label="양면 스캔 닫기" title="닫기 (Esc)"><svg class="ic sm" aria-hidden="true"><use href="#i-x"/></svg></button>
+          </div>
+          <p class="sub">스캐너로 앞면만 한 번, 뒤집어서 뒷면만 한 번 스캔한 두 파일을 한 장씩 번갈아(앞1 · 뒤1 · 앞2 · 뒤2 …) 맞춰요.</p>
+          <div class="dx-slots">
+            <div class="dx-slot" data-side="front">
+              <strong>앞면 파일</strong>
+              <input type="file" id="dx-front-input" accept="application/pdf,.pdf" hidden>
+              <label class="drop-mini" id="dx-front-drop" for="dx-front-input">
+                <svg class="ic" aria-hidden="true"><use href="#i-upload"/></svg>
+                <strong id="dx-front-file">앞면 PDF 고르기</strong>
+                <span>끌어다 놓아도 돼요</span>
+              </label>
+              <label class="field"><span>넣어 둔 파일에서</span><select id="dx-front-sel" data-side="front"></select></label>
+            </div>
+            <div class="dx-slot" data-side="back">
+              <strong>뒷면 파일</strong>
+              <input type="file" id="dx-back-input" accept="application/pdf,.pdf" hidden>
+              <label class="drop-mini" id="dx-back-drop" for="dx-back-input">
+                <svg class="ic" aria-hidden="true"><use href="#i-upload"/></svg>
+                <strong id="dx-back-file">뒷면 PDF 고르기</strong>
+                <span>끌어다 놓아도 돼요</span>
+              </label>
+              <label class="field"><span>넣어 둔 파일에서</span><select id="dx-back-sel" data-side="back"></select></label>
+            </div>
+          </div>
+          <fieldset class="seg compact"><legend>뒷면 순서</legend>
+            <label><input type="radio" name="dx-order" value="reverse" checked><span>역순(기본) · 마지막 장부터 스캔됨</span></label>
+            <label><input type="radio" name="dx-order" value="same"><span>그대로</span></label>
+          </fieldset>
+          <p class="dx-status" id="dx-status" role="status" aria-live="polite"></p>
+          <div class="notice dx-warn" id="dx-warn" hidden>
+            <p id="dx-warn-text"></p>
+            <div class="btn-row"><button type="button" class="btn sm" id="dx-go-anyway">그대로 진행</button><button type="button" class="btn sm" id="dx-cancel">취소</button></div>
+          </div>
+          <div class="split-preview"><div class="split-strip dx-strip" id="dx-strip" aria-hidden="true"></div></div>
+          <div class="split-foot">
+            <span class="grow"></span>
+            <button type="button" class="btn" id="dx-expand" disabled>편집 화면에 펼치기</button>
+            <button type="button" class="btn primary" id="dx-save" disabled>짝 맞춰서 저장</button>
+          </div>
+        </section>
+
         <div class="grid pages" id="edit-grid" aria-label="쪽 목록" aria-multiselectable="true"></div>
 
         <div class="savebar" id="edit-bar" hidden>
@@ -244,6 +305,7 @@
           </label>
           <button class="btn dark" id="edit-save-range">범위만 저장</button>
           <button class="btn dark" id="edit-split" aria-expanded="false" aria-controls="split-panel">나눠 저장<svg class="ic sm" aria-hidden="true"><use href="#i-chevron"/></svg></button>
+          <button class="btn dark" id="edit-duplex" aria-expanded="false" aria-controls="duplex-panel" title="앞면 · 뒷면을 따로 스캔한 파일을 한 장씩 번갈아 맞춰요">양면 스캔<svg class="ic sm" aria-hidden="true"><use href="#i-chevron"/></svg></button>
           <div class="menu-wrap">
             <button class="btn dark" id="edit-more" aria-haspopup="true" aria-expanded="false" aria-controls="edit-menu">홀수·짝수·역순<svg class="ic sm" aria-hidden="true"><use href="#i-chevron"/></svg></button>
             <div class="menu" id="edit-menu" role="menu" hidden>
@@ -268,13 +330,13 @@
           </div>
           <button type="button" class="btn guide-open" aria-controls="edit-guide" aria-expanded="false"><svg class="ic sm" aria-hidden="true"><use href="#i-help"/></svg>사용법</button>
         </header>
-        <input type="file" id="img-input" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" multiple hidden>
+        <input type="file" id="img-input" accept="image/*,.jpg,.jpeg,.png,.webp,.heic,.heif,.gif,.bmp,.avif" multiple hidden>
 
         <div class="empty" id="img-empty">
           <div class="drop-card" id="img-drop">
             <div class="papers" aria-hidden="true"><i></i><i></i><i></i></div>
             <strong>사진을 끌어다 놓으세요</strong>
-            <span>JPG · PNG · WEBP. 휴대폰 사진은 방향도 맞춰 드려요.</span>
+            <span>JPG · PNG · WEBP · 아이폰 HEIC · GIF · BMP. 휴대폰 사진은 방향도 맞춰 드려요.</span>
             <label class="btn primary" for="img-input">파일 고르기</label>
           </div>
           <ol class="steps">
@@ -387,7 +449,7 @@
             <span class="card-icon" aria-hidden="true"><svg class="ic"><use href="#i-lock"/></svg></span>
             <h2>암호 풀기</h2>
             <p class="sub">열기 암호를 알고 있는 PDF에서 암호를 없애요.</p>
-            <input type="file" id="unlock-input" accept="application/pdf,.pdf" hidden>
+            <input type="file" id="unlock-input" accept="application/pdf,.pdf" multiple hidden>
             <label class="drop-mini" id="unlock-drop" for="unlock-input">
               <svg class="ic" aria-hidden="true"><use href="#i-upload"/></svg>
               <strong id="unlock-file">PDF 고르기</strong>
@@ -408,7 +470,7 @@
             <span class="card-icon" aria-hidden="true"><svg class="ic"><use href="#i-shield"/></svg></span>
             <h2>암호 걸기</h2>
             <p class="sub">AES-256으로 암호화해요.</p>
-            <input type="file" id="lock-input" accept="application/pdf,.pdf" hidden>
+            <input type="file" id="lock-input" accept="application/pdf,.pdf" multiple hidden>
             <label class="drop-mini" id="lock-drop" for="lock-input">
               <svg class="ic" aria-hidden="true"><use href="#i-upload"/></svg>
               <strong id="lock-file">PDF 고르기</strong>
@@ -436,6 +498,7 @@
             </div>
           </form>
         </div>
+        <div id="sec-batch"></div>
         <section class="card lock-card restrict-card" id="restrict-card" aria-labelledby="restrict-title">
           <span class="card-icon" aria-hidden="true"><svg class="ic"><use href="#i-shield"/></svg></span>
           <h2 id="restrict-title">이 파일에 걸린 제한 보기</h2>
@@ -463,7 +526,7 @@
           </div>
           <button type="button" class="btn guide-open" aria-controls="edit-guide" aria-expanded="false"><svg class="ic sm" aria-hidden="true"><use href="#i-help"/></svg>사용법</button>
         </header>
-        <input type="file" id="decor-input" accept="application/pdf,.pdf" hidden>
+        <input type="file" id="decor-input" accept="application/pdf,.pdf" multiple hidden>
         <div class="empty" id="decor-empty">
           <div class="drop-card" id="decor-drop">
             <div class="papers" aria-hidden="true"><i></i><i></i><i></i></div>
@@ -486,6 +549,7 @@
           <div class="decor-options" id="decor-options"></div>
           <div class="decor-preview" id="decor-preview"></div>
         </div>
+        <div id="decor-batch"></div>
         <div class="savebar" id="decor-bar" hidden>
           <span class="count" id="decor-count">꾸밀 것을 켜 주세요</span>
           <button class="btn light" id="decor-save-opts" title="암호 · 용량 목표까지 (Ctrl+Shift+S)">설정하고 저장…</button>
@@ -502,12 +566,12 @@
           </div>
           <button type="button" class="btn guide-open" aria-controls="edit-guide" aria-expanded="false"><svg class="ic sm" aria-hidden="true"><use href="#i-help"/></svg>사용법</button>
         </header>
-        <input type="file" id="cmp-input" accept="application/pdf,.pdf,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" multiple hidden>
+        <input type="file" id="cmp-input" accept="application/pdf,.pdf,image/*,.jpg,.jpeg,.png,.webp,.heic,.heif,.gif,.bmp,.avif" multiple hidden>
         <div class="empty" id="cmp-empty">
           <div class="drop-card" id="cmp-drop">
             <div class="papers" aria-hidden="true"><i></i><i></i><i></i></div>
             <strong>PDF나 사진을 끌어다 놓으세요</strong>
-            <span>PDF 여러 개, 또는 JPG · PNG · WEBP 사진 여러 장을 한 번에 줄일 수 있어요.</span>
+            <span>PDF 여러 개, 또는 JPG · PNG · WEBP · 아이폰 HEIC 사진 여러 장을 한 번에 줄일 수 있어요.</span>
             <label class="btn primary" for="cmp-input">파일 고르기</label>
           </div>
           <ol class="steps">
@@ -523,9 +587,9 @@
             <label class="cmp-num"><input type="text" id="cmp-mb" inputmode="decimal" autocomplete="off" aria-label="목표 용량(MB)"><span>MB 이하로</span></label>
           </div>
           <fieldset class="seg" id="cmp-basis" hidden>
-            <legend>사진 기준</legend>
-            <label><input type="radio" name="cmp-basis" value="each" checked><span>한 장당</span></label>
-            <label><input type="radio" name="cmp-basis" value="total"><span>전체 합쳐서</span></label>
+            <legend>여러 파일 목표</legend>
+            <label><input type="radio" name="cmp-basis" value="each" checked><span>파일마다 이하</span></label>
+            <label><input type="radio" name="cmp-basis" value="total"><span>전체 합쳐서 이하</span></label>
           </fieldset>
           <div class="vol" id="cmp-vol">
             <div class="vol-track" id="cmp-track">
@@ -544,6 +608,11 @@
         <div class="card cmp-result" id="cmp-result" hidden>
           <p class="cmp-summary" id="cmp-summary"></p>
           <div id="cmp-advice"></div>
+          <div class="batch-foot" id="cmp-bfoot" hidden>
+            <label class="check"><input type="checkbox" id="cmp-zip" checked><span>zip 하나로 묶기</span></label>
+            <label class="prefix"><span>앞에 붙일 말</span><input type="text" id="cmp-prefix" placeholder="예: 줄임_" autocomplete="off"></label>
+            <button type="button" class="btn sm" id="cmp-copyfail" hidden>실패 목록 복사</button>
+          </div>
           <div class="btn-row">
             <button class="btn" id="cmp-compare"><svg class="ic sm" aria-hidden="true"><use href="#i-filecheck"/></svg>비교해 보기</button>
             <span class="grow"></span>
@@ -586,6 +655,7 @@
             </tbody>
           </table>
           <p class="guide-note">휴대폰에서는 쪽을 길게 누르면 선택 모드가 켜지고, 그다음부터는 탭으로 여러 개를 고를 수 있어요.</p>
+          <p class="guide-note"><b>스캔본 정리</b> 쪽 크기가 섞이면 노란 안내줄에서 A4로 맞출 수 있고, 거의 흰 쪽은 "빈 쪽?"으로 알려 줘요. 앞 · 뒤를 따로 스캔했다면 저장 막대의 [양면 스캔 ▾]으로 번갈아 맞춰요.</p>
           <p class="guide-note"><b>저장</b> [바로 저장](<kbd>Ctrl</kbd>+<kbd>S</kbd>)은 묻지 않고 합쳐 저장하고, [설정하고 저장…](<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>)은 쪽번호 · 워터마크 · 도장 · 암호 · 용량 목표를 고른 뒤 저장해요.</p>
           </div>
           <div class="guide-sec" data-guide="img2pdf" hidden>
@@ -648,6 +718,15 @@
             <span class="name-box"><input type="text" id="sd-name" autocomplete="off" spellcheck="false"><span class="ext">.pdf</span></span>
           </label>
           <p class="sd-name-note" id="sd-name-note" role="status" hidden></p>
+          <div class="sd-sizefix" id="sd-sizefix" hidden>
+            <span class="sd-sizefix-label">쪽 크기</span>
+            <fieldset class="seg compact"><legend class="sr-only">쪽 크기</legend>
+            <label><input type="radio" name="sd-sizefix" value="keep" checked><span>그대로 두기</span></label>
+            <label><input type="radio" name="sd-sizefix" value="fit"><span>모두 A4 세로로</span></label>
+            <label><input type="radio" name="sd-sizefix" value="rotate"><span>가로 쪽은 돌려서</span></label>
+          </fieldset>
+          <label class="paper-sel">기준 <select id="sd-paper" aria-label="기준 종이"><option value="a4" selected>A4</option><option value="letter">Letter</option></select></label>
+          </div>
           <div class="acc-list" id="sd-items"></div>
         </div>
         <div class="sd-preview" id="sd-preview"></div>
@@ -684,6 +763,32 @@
       </div>
     </form>
   </dialog>
+
+  <!-- 빈 쪽 하나씩 보기 -->
+  <dialog id="blank-dialog" class="dialog blank-dialog" aria-labelledby="bk-title">
+    <form method="dialog" id="bk-form">
+      <header class="sd-head">
+        <h2 id="bk-title">빈 쪽 후보 하나씩 보기</h2>
+        <span class="sd-meta" id="bk-meta"></span>
+        <button type="submit" class="icon-btn" value="close" aria-label="닫기"><svg class="ic sm" aria-hidden="true"><use href="#i-x"/></svg></button>
+      </header>
+      <div class="bk-view" id="bk-view"></div>
+      <div class="bk-acts">
+        <button type="button" class="icon-btn" id="bk-prev" aria-label="이전 후보">◀</button>
+        <button type="button" class="btn" id="bk-keep">남기기</button>
+        <button type="button" class="btn danger" id="bk-del">삭제 예정으로</button>
+        <button type="button" class="icon-btn" id="bk-next" aria-label="다음 후보">▶</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- 파일 정보 -->
+  <div class="info-pop" id="info-pop" role="dialog" aria-labelledby="ip-title" hidden>
+    <div class="ip-head"><h2 id="ip-title">파일 정보</h2><button type="button" class="icon-btn" id="ip-close" aria-label="파일 정보 닫기"><svg class="ic sm" aria-hidden="true"><use href="#i-x"/></svg></button></div>
+    <dl class="ip-list" id="ip-list"></dl>
+    <p class="ip-note" id="ip-note" hidden></p>
+  </div>
+  <div class="info-backdrop" id="info-backdrop" hidden></div>
 
   <!-- 확인 창 -->
   <dialog id="confirm-dialog" class="dialog confirm-dialog" aria-labelledby="cf-title">

@@ -103,6 +103,18 @@ app.get('/vendor/fonts/Pretendard-Bold.otf', (req, res) => {
 });
 app.use('/vendor/pretendard/woff2', express.static(nm('pretendard', 'dist', 'web', 'variable', 'woff2'), { maxAge: '7d' }));
 
+// 아이폰 HEIC → JPEG 변환기 (heic-to, libheif 1.22.2 · LGPL-3.0). HEIC 사진이 들어올 때만 불러온다.
+// CSP 빌드(eval · new Function 없음)를 ES 모듈로 제공한다.
+app.get('/vendor/heic/heic-to.js', (req, res) => {
+  res.set('Cache-Control', 'public, max-age=604800');
+  res.type('application/javascript');
+  res.sendFile(nm('heic-to', 'dist', 'csp', 'heic-to.js'));
+});
+app.get('/vendor/heic/LICENSE', (req, res) => {
+  res.type('text/plain; charset=utf-8');
+  res.sendFile(nm('heic-to', 'LICENSE'));
+});
+
 // CMYK JPEG 등을 성분 값으로 풀 JS 디코더 (용량 줄이기에서 필요할 때만 불러온다)
 const jpegDecoder = require('./lib/jpeg-decoder');
 app.get('/vendor/jpeg-decoder.js', (req, res) => {

@@ -520,7 +520,245 @@
     };
   }
 
+  // ── 쪽 크기 분류 · 맞추기 ──
+  const PAPERS = {
+    a4: { w: 595.28, h: 841.89, label: 'A4' },
+    letter: { w: 612, h: 792, label: 'Letter' },
+    b5: { w: 515.91, h: 728.5, label: 'B5' }, // JIS B5 182×257mm
+    b5iso: { w: 498.9, h: 708.66, label: 'B5' }, // ISO B5 176×250mm
+  };
+  /** 보이는 크기(pt) → "A4 세로" · "A4 가로" · "Letter 세로" · "B5 가로" · "기타" (±2%) */
+  function classifySize(w, h) {
+    const near = (a, b) => Math.abs(a - b) <= b * 0.02;
+    for (const p of Object.values(PAPERS)) {
+      if (near(w, p.w) && near(h, p.h)) return `${p.label} 세로`;
+      if (near(w, p.h) && near(h, p.w)) return `${p.label} 가로`;
+    }
+    return '기타';
+  }
+  /** 크기 목록 → [[분류, 개수], …] 많은 순 */
+  function sizeSummary(sizes) {
+    const m = new Map();
+    for (const s of sizes) {
+      const k = classifySize(s.w, s.h);
+      m.set(k, (m.get(k) || 0) + 1);
+    }
+    return [...m].sort((a, b) => b[1] - a[1]);
+  }
+
+  /**
+   * 모든 쪽을 한 종이(A4 · Letter 세로)에 맞춘 새 문서. 원본 쪽은 embedPage로 비율 유지 · 가운데 배치.
+   * mode: 'fit'(가로 쪽도 그대로 줄여 넣음) | 'rotate'(가로 쪽은 90° 돌려 세로에 맞춤)
+   * 글자는 그대로 남는다(쪽이 폼 XObject로 들어감). 쪽의 주석 · 링크는 빠진다.
+   */
+  async function normalizePages(src, { paper = 'a4', mode = 'fit' } = {}, onProgress) {
+    const P = PAPERS[paper] || PAPERS.a4;
+    const out = await PDFDocument.create();
+    const pages = src.getPages();
+    const boxes = pages.map((pg) => {
+      const b = pg.getCropBox();
+      return { left: b.x, bottom: b.y, right: b.x + b.width, top: b.y + b.height };
+    });
+    const embedded = await out.embedPages(pages, boxes);
+    for (let i = 0; i < pages.length; i++) {
+      const f = pageFrame(pages[i]);
+      const e = embedded[i];
+      const landscape = f.visW > f.visH * 1.02;
+      // 원래 쪽 회전(시계 방향) + 가로 쪽 돌리기(반시계 90° = 시계 270°)
+      const T = normAngle(f.rot + (mode === 'rotate' && landscape ? 270 : 0));
+      const side = T === 90 || T === 270;
+      const vw = side ? e.height : e.width;
+      const vh = side ? e.width : e.height;
+      const s = Math.min(P.w / vw, P.h / vh);
+      const w = e.width * s;
+      const h = e.height * s;
+      const ox = (P.w - vw * s) / 2;
+      const oy = (P.h - vh * s) / 2;
+      // 시계 방향 T° 돌린 뒤 왼쪽 아래가 (ox, oy)에 오도록 옮긴다
+      const off = T === 90 ? [0, w] : T === 180 ? [w, h] : T === 270 ? [h, 0] : [0, 0];
+      const page = out.addPage([P.w, P.h]);
+      page.drawPage(e, { x: ox + off[0], y: oy + off[1], xScale: s, yScale: s, rotate: degrees(-T) });
+      if (onProgress) await onProgress(i + 1, pages.length);
+    }
+    return out;
+  }
+
+  // ── 양면 스캔 짝 맞추기 ──
+  /**
+   * 앞면 목록과 뒷면 목록을 번갈아 끼운다. 뒷면은 보통 거꾸로(마지막 장부터) 스캔된다.
+   * 개수가 다르면 남는 쪽은 끝에 붙인다.
+   * @returns {{order: Array<{side:'front'|'back', item}>, diff:number}} diff = 뒷면 - 앞면
+   */
+  function interleave(front, back, { reverseBack = true } = {}) {
+    const b = reverseBack ? [...back].reverse() : [...back];
+    const order = [];
+    const n = Math.max(front.length, b.length);
+    const common = Math.min(front.length, b.length);
+    for (let i = 0; i < common; i++) {
+      order.push({ side: 'front', item: front[i] });
+      order.push({ side: 'back', item: b[i] });
+    }
+    for (let i = common; i < n; i++) {
+      if (i < front.length) order.push({ side: 'front', item: front[i] });
+      if (i < b.length) order.push({ side: 'back', item: b[i] });
+    }
+    return { order, diff: back.length - front.length };
+  }
+
+  // ── 빈 쪽 찾기 ──
+  /**
+   * RGBA 그림에서 가장자리(edge 비율)를 뺀 가운데의 "거의 흰색"(밝기 thr 이상) 화소 비율
+   */
+  function whiteRatio(rgba, w, h, { edge = 0.04, thr = 235 } = {}) {
+    const x0 = Math.floor(w * edge);
+    const x1 = Math.ceil(w * (1 - edge));
+    const y0 = Math.floor(h * edge);
+    const y1 = Math.ceil(h * (1 - edge));
+    let white = 0;
+    let all = 0;
+    for (let y = y0; y < y1; y++) {
+      for (let x = x0; x < x1; x++) {
+        const o = (y * w + x) * 4;
+        const lum = 0.299 * rgba[o] + 0.587 * rgba[o + 1] + 0.114 * rgba[o + 2];
+        if (lum >= thr) white++;
+        all++;
+      }
+    }
+    return all ? white / all : 1;
+  }
+  /** 빈 쪽 후보: 흰 화소 99.3% 이상이고 글자 레이어가 없음 */
+  const isBlankPage = (ratio, hasText) => ratio >= 0.993 && !hasText;
+
+  // ── 파일 정보 ──
+  const dictStr = (ctx, d, key) => {
+    const v = d && d.get(PDFLib.PDFName.of(key));
+    const o = v && ctx.lookup(v);
+    if (!o) return '';
+    if (typeof o.decodeText === 'function') { try { return o.decodeText(); } catch { /* 아래로 */ } }
+    return typeof o.asString === 'function' ? o.asString() : String(o);
+  };
+  function pdfDate(s) {
+    const m = /D:(\d{4})(\d{2})?(\d{2})?(\d{2})?(\d{2})?/.exec(s || '');
+    if (!m) return null;
+    return new Date(Date.UTC(+m[1], (+m[2] || 1) - 1, +m[3] || 1, +m[4] || 0, +m[5] || 0));
+  }
+  /**
+   * 파일 정보: 쪽수 · 크기 분포 · 만든 프로그램 · 잠금 · 형식(PDF 버전, PDF/A, 태그) · 만든 날짜
+   * (글자 유무는 pdf.js가 필요해 화면 쪽에서 채운다)
+   */
+  async function pdfInfo(bytes) {
+    if (!looksLikePdf(bytes)) throw new UserError('PDF 파일이 아니에요.', 'PDF로 저장된 파일만 넣을 수 있어요.');
+    const head = new TextDecoder('latin1').decode(bytes.subarray(0, 16));
+    const version = (/%PDF-(\d\.\d)/.exec(head) || [])[1] || '?';
+    const restr = await readRestrictions(bytes);
+    const doc = await PDFDocument.load(copy(bytes), { ignoreEncryption: true, updateMetadata: false });
+    const ctx = doc.context;
+    const infoRef = ctx.trailerInfo.Info;
+    const info = infoRef ? ctx.lookup(infoRef) : null;
+    const cat = doc.catalog;
+    let pdfa = null;
+    const metaRef = cat.get(PDFLib.PDFName.of('Metadata'));
+    if (metaRef && !restr.needsPassword) {
+      try {
+        const st = ctx.lookup(metaRef);
+        let raw = st.getContents();
+        const f = st.dict.get(PDFLib.PDFName.of('Filter'));
+        if (f && String(f) === '/FlateDecode' && typeof PDFLib.decodePDFRawStream === 'function') raw = PDFLib.decodePDFRawStream(st).decode();
+        const xml = new TextDecoder('utf-8').decode(raw);
+        const part = /pdfaid:part(?:>|=["'])\s*(\d)/.exec(xml);
+        const conf = /pdfaid:conformance(?:>|=["'])\s*([A-Za-z])/.exec(xml);
+        if (part) pdfa = `PDF/A-${part[1]}${conf ? conf[1].toLowerCase() : ''}`;
+      } catch { /* 메타데이터를 못 읽어도 된다 */ }
+    }
+    const mark = cat.get(PDFLib.PDFName.of('MarkInfo'));
+    const markDict = mark && ctx.lookup(mark);
+    const marked = markDict && markDict.get ? String(markDict.get(PDFLib.PDFName.of('Marked'))) === 'true' : false;
+    const tagged = marked || !!cat.get(PDFLib.PDFName.of('StructTreeRoot'));
+    let sizes = [];
+    if (!restr.needsPassword) sizes = doc.getPages().map((p) => { const f = pageFrame(p); return { w: f.visW, h: f.visH }; });
+    return {
+      pages: doc.getPageCount(),
+      size: bytes.length,
+      version,
+      pdfa,
+      tagged,
+      producer: restr.needsPassword ? '' : dictStr(ctx, info, 'Producer'),
+      creator: restr.needsPassword ? '' : dictStr(ctx, info, 'Creator'),
+      created: restr.needsPassword ? null : pdfDate(dictStr(ctx, info, 'CreationDate')),
+      sizes: sizeSummary(sizes),
+      restrictions: restr,
+    };
+  }
+
+  // ── 여러 파일 일괄: 합계 목표를 크기에 비례해 나눈다 ──
+  function allocateTotal(sizes, total) {
+    const sum = sizes.reduce((a, b) => a + b, 0);
+    return sizes.map((s) => (sum ? Math.floor((total * s) / sum) : 0));
+  }
+
+  /**
+   * 여러 파일을 한 개씩 차례로 처리한다(메모리). 하나가 실패해도 나머지는 계속한다.
+   * shouldStop()이 true면 지금 파일까지만 끝내고 멈춘다.
+   * @returns {Promise<Array<{ok:boolean, value?, error?, skipped?:boolean}>>}
+   */
+  async function runBatch(items, fn, { onProgress, shouldStop } = {}) {
+    const results = items.map(() => ({ ok: false, skipped: true }));
+    let done = 0;
+    let failed = 0;
+    for (let i = 0; i < items.length; i++) {
+      if (shouldStop && shouldStop()) break;
+      if (onProgress) await onProgress({ index: i, done, failed, total: items.length, state: 'start' });
+      try {
+        results[i] = { ok: true, value: await fn(items[i], i) };
+      } catch (error) {
+        results[i] = { ok: false, error };
+        failed++;
+      }
+      done++;
+      if (onProgress) await onProgress({ index: i, done, failed, total: items.length, state: results[i].ok ? 'done' : 'failed' });
+    }
+    return results;
+  }
+
+  // ── 사진 형식 판별 (이름 + 파일 시그니처) ──
+  /**
+   * @returns {'jpeg'|'png'|'webp'|'gif'|'bmp'|'heic'|'tiff'|'avif'|'unknown'}
+   */
+  function detectImageKind(bytes, name = '') {
+    const b = bytes || new Uint8Array(0);
+    const at = (i, s) => [...s].every((c, k) => b[i + k] === c.charCodeAt(0));
+    if (b[0] === 0xff && b[1] === 0xd8) return 'jpeg';
+    if (b[0] === 0x89 && at(1, 'PNG')) return 'png';
+    if (at(0, 'RIFF') && at(8, 'WEBP')) return 'webp';
+    if (at(0, 'GIF8')) return 'gif';
+    if (at(0, 'BM')) return 'bmp';
+    if (at(0, 'II*\u0000') || at(0, 'MM\u0000*')) return 'tiff';
+    if (at(4, 'ftyp')) {
+      const brands = [];
+      const boxLen = (b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3];
+      for (let i = 8; i + 4 <= Math.min(boxLen || 32, 64, b.length); i += 4) {
+        brands.push(String.fromCharCode(b[i], b[i + 1], b[i + 2], b[i + 3]));
+      }
+      if (brands.some((x) => /^(heic|heix|heim|heis|hevc|hevx|mif1|msf1)$/.test(x))) return brands.includes('avif') && !brands.includes('heic') ? 'avif' : 'heic';
+      if (brands.includes('avif')) return 'avif';
+    }
+    if (/\.(heic|heif)$/i.test(name)) return 'heic';
+    if (/\.tiff?$/i.test(name)) return 'tiff';
+    return 'unknown';
+  }
+
   return {
+    PAPERS,
+    classifySize,
+    sizeSummary,
+    normalizePages,
+    interleave,
+    whiteRatio,
+    isBlankPage,
+    pdfInfo,
+    allocateTotal,
+    runBatch,
+    detectImageKind,
     pageFrame,
     embedFont,
     watermarkLayout,

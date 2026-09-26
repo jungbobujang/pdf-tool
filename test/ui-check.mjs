@@ -679,6 +679,9 @@ try {
     await t.goto(BASE, { waitUntil: 'networkidle' });
     await t.setInputFiles('#home-input', [fileMany]);
     await until(t, () => document.querySelectorAll('#edit-grid .page-card').length === 30);
+    // 위 안내줄 · 아래 저장 막대에 가리지 않는 곳으로 카드를 올린다
+    await t.evaluate(() => { const c = document.querySelectorAll('#edit-grid .page-card')[1]; window.scrollTo(0, c.getBoundingClientRect().top + scrollY - 150); });
+    await t.waitForTimeout(200);
     const tb = await t.locator('#edit-grid .page-card').nth(1).boundingBox();
     const cdp = await tctx.newCDPSession(t);
     const pt = { x: tb.x + tb.width / 2, y: tb.y + tb.height / 2 };
@@ -1104,6 +1107,240 @@ try {
     await sctx.close();
   }
 
+  // ── 13. 쪽 크기 · 빈 쪽 · 양면 스캔 · 파일 정보 · 일괄 처리 · HEIC ──
+  {
+    const { rgb: rgbC, degrees: degC } = PDFLib;
+    async function mk(name, specs) {
+      const d = await PDFDocument.create();
+      const f = await d.embedFont(StandardFonts.Helvetica);
+      for (const s of specs) {
+        const w = s.w || 595.28;
+        const hh = s.h || 841.89;
+        const pg = d.addPage([w, hh]);
+        if (s.text) pg.drawText(s.text, { x: 50, y: hh - 80, size: 22, font: f });
+        if (s.lines) for (let k = 0; k < 18; k++) pg.drawRectangle({ x: 50, y: hh - 130 - k * 30, width: Math.min(420, w - 100), height: 8, color: rgbC(0.72, 0.74, 0.8) });
+        if (s.specks) for (let k = 0; k < 20; k++) pg.drawRectangle({ x: 60 + ((k * 97) % 450), y: 80 + ((k * 131) % 650), width: 1.5, height: 1.5, color: rgbC(0.2, 0.2, 0.2) });
+        if (s.rot) pg.setRotation(degC(s.rot));
+      }
+      return writePdf(name, d);
+    }
+    const mixedFile = await mk('자료모음.pdf', [
+      { text: 'Page 1', lines: 1 }, { text: 'Page 2', lines: 1 }, { w: 841.89, h: 595.28, text: 'Landscape 3', lines: 1 },
+      { w: 515.91, h: 728.5, text: 'B5 page 4', lines: 1 }, {}, { specks: 1 }, { text: 'Page 7', lines: 1 },
+    ]);
+    const frontFile = await mk('앞면.pdf', [1, 2, 3, 4].map((i) => ({ text: `Front ${i}`, lines: 1 })));
+    const backFile = await mk('뒷면.pdf', [4, 3, 2, 1].map((i) => ({ text: `Back ${i}`, lines: 1 })));
+    const back3File = await mk('뒷면3.pdf', [3, 2, 1].map((i) => ({ text: `Back ${i}`, lines: 1 })));
+
+    const xctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, acceptDownloads: true, colorScheme: 'light', permissions: ['clipboard-read', 'clipboard-write'] });
+    const x = await xctx.newPage();
+    const xerr = [];
+    watch(x, xerr);
+    await x.goto(`${BASE}/#edit`, { waitUntil: 'networkidle' });
+    await x.setInputFiles('#edit-input', [mixedFile]);
+    await until(x, () => document.querySelectorAll('#edit-grid .page-card').length === 7);
+    // 크기 안내줄
+    await until(x, () => !document.getElementById('edit-sizes').hidden);
+    const sizeText = await x.textContent('#edit-sizes-text');
+    // 빈 쪽 안내줄 (썸네일 렌더를 재사용해 찾는다)
+    await until(x, () => !document.getElementById('edit-blank').hidden && /빈 쪽으로 보이는 쪽이/.test(document.getElementById('edit-blank-text').textContent), undefined, { timeout: 20000 });
+    const blankText = await x.textContent('#edit-blank-text');
+    const badges = await x.$$eval('#edit-grid .page-card.blank', (els) => els.length);
+    if (SCREENS) {
+      await x.evaluate(() => { document.getElementById('toasts').replaceChildren(); window.scrollTo(0, 0); });
+      await x.waitForTimeout(300);
+      await x.screenshot({ path: path.join(root, 'docs', 'screens', 'blank-pages.png') });
+    }
+    await x.click('#blank-mark');
+    const afterMark = await x.evaluate(() => ({ del: document.querySelectorAll('#edit-grid .page-card.deleted').length, count: document.getElementById('edit-count').textContent, hidden: document.getElementById('edit-blank').hidden }));
+    check('빈 쪽 찾기 → 안내줄 · "빈 쪽?" 배지 · 삭제 예정 표시', /2개 있어요 \(5, 6쪽\)/.test(blankText) && badges === 2 && afterMark.del === 2 && /5쪽 저장 예정/.test(afterMark.count) && afterMark.hidden,
+      `"${blankText}" · 배지 ${badges}개 → 삭제 예정 ${afterMark.del}쪽, ${afterMark.count}`);
+    // 크기 맞추기: 모두 A4 세로로 → 바로 저장
+    await x.click('#edit-sizes label:has(> input[value="fit"])');
+    if (SCREENS) {
+      await x.evaluate(() => { document.getElementById('toasts').replaceChildren(); window.scrollTo(0, 0); });
+      await x.waitForTimeout(200);
+      await x.screenshot({ path: path.join(root, 'docs', 'screens', 'page-size.png') });
+    }
+    let [dlx] = await Promise.all([x.waitForEvent('download'), x.click('#edit-save')]);
+    const fitDoc = await PDFDocument.load(fs.readFileSync(await dlx.path()));
+    const fitDims = [...new Set(fitDoc.getPages().map((pg) => `${Math.round(pg.getWidth())}×${Math.round(pg.getHeight())}`))];
+    const fitText = await x.evaluate(async (b64) => {
+      const d = await pdfjsLib.getDocument({ data: Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)) }).promise;
+      const out = [];
+      for (let i = 1; i <= d.numPages; i++) out.push((await (await d.getPage(i)).getTextContent()).items.map((it) => it.str).join(''));
+      return out;
+    }, fs.readFileSync(await dlx.path()).toString('base64'));
+    check('쪽 크기가 섞이면 안내줄 → "모두 A4 세로로" 저장(글자 유지)', /A4 세로 5 · A4 가로 1 · B5 세로 1/.test(sizeText) && fitDoc.getPageCount() === 5 && fitDims.join() === '595×842' && fitText.join('|') === 'Page 1|Page 2|Landscape 3|B5 page 4|Page 7',
+      `"${sizeText.slice(0, 44)}…" → ${fitDoc.getPageCount()}쪽 모두 ${fitDims.join()} · 글자 ${fitText.join(', ')}`);
+    await x.click('#edit-sizes label:has(> input[value="keep"])');
+
+    // ⓘ 팝오버: 열기 · Esc · 바깥 클릭
+    await x.locator('#edit-chips .info-btn').first().click();
+    await until(x, () => !document.getElementById('info-pop').hidden && document.querySelectorAll('#ip-list dt').length >= 6, undefined, { timeout: 10000 });
+    const info = await x.evaluate(() => [...document.querySelectorAll('#ip-list dt')].map((dt) => `${dt.textContent}=${dt.nextElementSibling.textContent}`));
+    if (SCREENS) {
+      await x.evaluate(() => document.getElementById('toasts').replaceChildren());
+      await x.screenshot({ path: path.join(root, 'docs', 'screens', 'file-info.png') });
+    }
+    await x.keyboard.press('Escape');
+    const closedEsc = await x.$eval('#info-pop', (e) => e.hidden);
+    await x.locator('#edit-chips .info-btn').first().click();
+    await until(x, () => !document.getElementById('info-pop').hidden);
+    await x.mouse.click(700, 600);
+    const closedOut = await x.$eval('#info-pop', (e) => e.hidden);
+    check('파일 정보 ⓘ: 쪽수 · 크기 분포 · 프로그램 · 잠금 · 형식 · 글자 · 날짜, Esc · 바깥 클릭으로 닫힘', info.length === 7 && info.some((r) => /^쪽 크기=A4 세로 5/.test(r)) && info.some((r) => /^글자=있음/.test(r)) && closedEsc && closedOut,
+      info.join(' / ').slice(0, 230));
+
+    // 양면 스캔: 4쪽 + 4쪽 → 짝 확인 → 저장, 4 + 3 → 경고 → 그대로 진행
+    await x.setInputFiles('#edit-input', [frontFile, backFile, back3File]);
+    await until(x, () => document.querySelectorAll('#edit-chips .chip:not(.add)').length === 4);
+    await x.click('#edit-duplex');
+    await x.selectOption('#dx-front-sel', { label: '앞면.pdf (4쪽)' });
+    await x.selectOption('#dx-back-sel', { label: '뒷면.pdf (4쪽)' });
+    const dxOk = await x.evaluate(() => ({ st: document.getElementById('dx-status').textContent, strip: document.querySelectorAll('#dx-strip i').length, save: !document.getElementById('dx-save').disabled }));
+    if (SCREENS) {
+      await x.evaluate(() => document.getElementById('toasts').replaceChildren());
+      await x.locator('#duplex-panel').scrollIntoViewIfNeeded();
+      await x.waitForTimeout(200);
+      await x.screenshot({ path: path.join(root, 'docs', 'screens', 'duplex.png') });
+    }
+    [dlx] = await Promise.all([x.waitForEvent('download'), x.click('#dx-save')]);
+    const dxName = dlx.suggestedFilename();
+    const dxText = await x.evaluate(async (b64) => {
+      const d = await pdfjsLib.getDocument({ data: Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)) }).promise;
+      const out = [];
+      for (let i = 1; i <= d.numPages; i++) out.push((await (await d.getPage(i)).getTextContent()).items.map((it) => it.str).join(''));
+      return out;
+    }, fs.readFileSync(await dlx.path()).toString('base64'));
+    await x.selectOption('#dx-back-sel', { label: '뒷면3.pdf (3쪽)' });
+    const dxWarn = await x.evaluate(() => ({ warn: !document.getElementById('dx-warn').hidden && document.getElementById('dx-warn-text').textContent, save: document.getElementById('dx-save').disabled }));
+    await x.click('#dx-go-anyway');
+    await x.click('#dx-expand');
+    const expanded = await x.$$eval('#edit-grid .page-src', (els) => els.map((e) => e.textContent).slice(-7));
+    check('양면 스캔: 짝 확인 → 저장(앞1·뒤1…) · 쪽수 다르면 경고 → 그대로 진행 → 펼치기', /✓ 앞면 4쪽 · 뒷면 4쪽, 짝이 맞아요/.test(dxOk.st) && dxOk.strip === 8 && dxOk.save &&
+      dxName === '앞면_양면.pdf' && dxText.join(',') === 'Front 1,Back 1,Front 2,Back 2,Front 3,Back 3,Front 4,Back 4' &&
+      /뒷면이 1쪽 모자라요/.test(dxWarn.warn || '') && dxWarn.save && expanded.length === 7,
+    `${dxOk.st} → ${dxName}: ${dxText.join(' ')} · 4+3: "${String(dxWarn.warn).slice(0, 30)}…" → 펼침 ${expanded.join(' ')}`);
+
+    // 일괄 처리: 보안(풀기) 3개 중 1개 비밀번호 다름 → 따로 처리
+    const lockedSample = async (name, pwd, n) => {
+      const d = await samplePdf(n, name);
+      d.encrypt({ userPassword: pwd, ownerPassword: pwd });
+      return writePdf(`${name}.pdf`, d, { useObjectStreams: false });
+    };
+    const l1 = await lockedSample('가정통신문1', 'aaa', 2);
+    const l2 = await lockedSample('가정통신문2', 'aaa', 3);
+    const l3 = await lockedSample('가정통신문3', 'bbb', 1);
+    await x.click('#tab-security');
+    await x.setInputFiles('#unlock-input', [l1, l2, l3]);
+    await x.fill('#unlock-pw', 'aaa');
+    await x.click('#unlock-save');
+    await until(x, () => document.querySelectorAll('#sec-batch .br-badge.done, #sec-batch .br-badge.fail').length === 3, undefined, { timeout: 20000 });
+    const b1 = await x.evaluate(() => ({ badges: [...document.querySelectorAll('#sec-batch .br-badge')].map((e) => e.textContent), prog: document.querySelector('#sec-batch .batch-progress span').textContent }));
+    if (SCREENS) {
+      await x.evaluate(() => document.getElementById('toasts').replaceChildren());
+      await x.locator('#sec-batch .batch:not([hidden])').scrollIntoViewIfNeeded();
+      await x.waitForTimeout(200);
+      await x.screenshot({ path: path.join(root, 'docs', 'screens', 'batch.png') });
+    }
+    await x.fill('#sec-batch .batch-row.fail input[type="password"]', 'bbb');
+    await x.click('#sec-batch .batch-row.fail button:has-text("다시")');
+    await until(x, () => document.querySelectorAll('#sec-batch .br-badge.done').length === 3, undefined, { timeout: 10000 });
+    await x.fill('#sec-batch .prefix input', '풀림_');
+    [dlx] = await Promise.all([x.waitForEvent('download'), x.click('#sec-batch [data-b="save"]')]);
+    const bz = await JSZip.loadAsync(fs.readFileSync(await dlx.path()));
+    const bnames = Object.keys(bz.files).sort();
+    const bdocs = await Promise.all(bnames.map(async (n) => (await PDFDocument.load(await bz.files[n].async('uint8array'))).getPageCount()));
+    check('일괄 처리(보안): 목록 모드 · 진행 · 실패 줄 따로 처리 · 접두어 zip', b1.badges.join() === '완료,완료,실패' && /3 \/ 3 처리 · 실패 1/.test(b1.prog) &&
+      bnames.join() === '풀림_가정통신문1_암호해제.pdf,풀림_가정통신문2_암호해제.pdf,풀림_가정통신문3_암호해제.pdf' && bdocs.join() === '2,3,1',
+    `${b1.prog} → 따로 처리 → ${dlx.suggestedFilename()}: ${bnames.join(', ')}`);
+
+    // 일괄 처리(꾸미기): 쪽번호를 두 파일에
+    await x.click('#tab-decorate');
+    await x.setInputFiles('#decor-input', [frontFile, back3File]);
+    await until(x, () => !document.querySelector('#decor-batch .batch').hidden && !document.getElementById('decor-layout').hidden, undefined, { timeout: 10000 });
+    await x.click('#decor-batch [data-b="run"]');
+    await until(x, () => document.querySelectorAll('#decor-batch .br-badge.done').length === 2, undefined, { timeout: 20000 });
+    [dlx] = await Promise.all([x.waitForEvent('download'), x.click('#decor-batch [data-b="save"]')]);
+    const dz = await JSZip.loadAsync(fs.readFileSync(await dlx.path()));
+    const dnames = Object.keys(dz.files).sort();
+    const d2 = await dz.files[dnames[1]].async('uint8array');
+    const dText = await x.evaluate(async (b64) => {
+      const d = await pdfjsLib.getDocument({ data: Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)) }).promise;
+      return (await (await d.getPage(1)).getTextContent()).items.map((it) => it.str).join(' ');
+    }, Buffer.from(d2).toString('base64'));
+    check('일괄 처리(꾸미기): 같은 설정을 파일마다(쪽번호 1부터)', dnames.join() === '뒷면3_꾸미기.pdf,앞면_꾸미기.pdf' && /\b1\b/.test(dText),
+      `${dnames.join(', ')} · 뒷면3 1쪽 글자 "${dText.slice(0, 30)}"`);
+
+    // 일괄 처리(용량 줄이기): 합계 목표를 크기에 비례해 나눔
+    await x.click('#tab-compress');
+    const heavyA = await PDFDocument.create();
+    for (let i = 0; i < 3; i++) heavyA.addPage([595, 842]).drawImage(await heavyA.embedJpg(photoJpeg(1000, 800, 30 + i)), { x: 40, y: 250, width: 515, height: 412 });
+    const heavyB = await PDFDocument.create();
+    heavyB.addPage([595, 842]).drawImage(await heavyB.embedJpg(photoJpeg(1000, 800, 40)), { x: 40, y: 250, width: 515, height: 412 });
+    const hA = await writePdf('사진A.pdf', heavyA);
+    const hB = await writePdf('사진B.pdf', heavyB);
+    await x.setInputFiles('#cmp-input', [hA, hB]);
+    await x.waitForSelector('#cmp-target:not([hidden])', { timeout: 60000 });
+    await x.click('#cmp-basis label:has(> input[value="total"])');
+    const totalMB = ((fs.statSync(hA).size + fs.statSync(hB).size) / 1024 / 1024) * 0.6;
+    await x.fill('#cmp-mb', totalMB.toFixed(2));
+    await x.click('#cmp-go');
+    await x.waitForSelector('#cmp-result:not([hidden])', { timeout: 120000 });
+    const cst = await x.evaluate(() => window.__pdfWorkshop.compress());
+    const sumOut = cst.files.reduce((a, f) => a + (f.result || 0), 0) / 1024 / 1024;
+    const badgesC = await x.$$eval('#cmp-files .br-badge', (els) => els.map((e) => e.textContent));
+    check('일괄 처리(용량 줄이기): "전체 합쳐서" 목표를 비례 배분 · 상태 배지', badgesC.join() === '완료,완료' && sumOut <= totalMB + 0.01 && sumOut >= totalMB * 0.8,
+      `합계 목표 ${totalMB.toFixed(2)}MB → 결과 합 ${sumOut.toFixed(2)}MB · ${cst.files.map((f) => `${(f.size / 1048576).toFixed(1)}→${(f.result / 1048576).toFixed(2)}MB`).join(', ')}`);
+
+    // HEIC (아이폰 사진) — 샘플이 있을 때만
+    const heicSamples = String(process.env.HEIC_SAMPLES || '').split(';').filter((f) => f && fs.existsSync(f));
+    if (heicSamples.length) {
+      await x.click('#tab-img2pdf');
+      await x.click('#img-clear').catch(() => {});
+      const t0 = Date.now();
+      await x.setInputFiles('#img-input', heicSamples);
+      await until(x, () => document.getElementById('busy').hidden && document.querySelectorAll('#img-grid .img-card').length > 0, undefined, { timeout: 60000 });
+      const heicMs = Date.now() - t0;
+      const heicNames = await x.$$eval('#img-grid .page-src', (els) => els.map((e) => e.textContent));
+      const tiff = path.join(tmp, '스캔.tif');
+      fs.writeFileSync(tiff, Buffer.from([0x49, 0x49, 0x2a, 0, 8, 0, 0, 0]));
+      await x.setInputFiles('#img-input', [tiff]);
+      const tiffToast = await x.locator('.toast', { hasText: 'TIFF는 아직 지원하지 않아요' }).first().textContent({ timeout: 5000 }).catch(() => '');
+      check('HEIC(아이폰) → JPEG 변환 · TIFF 안내', heicNames.length === heicSamples.length && heicNames.every((n) => /\.jpg$/.test(n)) && /TIFF는 아직 지원하지 않아요/.test(tiffToast),
+        `${heicSamples.length}장 → ${heicNames.join(', ')} · 변환기 첫 로딩 포함 ${(heicMs / 1000).toFixed(1)}초 · TIFF 알림 OK`);
+      uiMeasures.push(`HEIC ${heicSamples.length}장 변환(변환기 첫 로딩 포함): ${(heicMs / 1000).toFixed(1)}초`);
+    } else {
+      rows.push({ name: 'HEIC(아이폰) → JPEG 변환 · TIFF 안내', ok: true, detail: '건너뜀: HEIC 샘플 없음(HEIC_SAMPLES로 경로를 알려 주세요)', skip: true });
+    }
+    check('쪽 크기 · 빈 쪽 · 양면 · 정보 · 일괄 흐름 콘솔 에러 0개', xerr.length === 0, xerr.length ? xerr.join(' | ').slice(0, 300) : '0개');
+    await xctx.close();
+
+    // 400px: 새 패널도 가로 스크롤 없음
+    const mx = await browser.newContext({ viewport: { width: 400, height: 860 }, isMobile: true, hasTouch: true, colorScheme: 'light' });
+    const mp2 = await mx.newPage();
+    const mxerr = [];
+    watch(mp2, mxerr);
+    await mp2.goto(`${BASE}/#edit`, { waitUntil: 'networkidle' });
+    await mp2.setInputFiles('#edit-input', [mixedFile, frontFile, backFile]);
+    await until(mp2, () => document.querySelectorAll('#edit-grid .page-card').length === 15);
+    await until(mp2, () => !document.getElementById('edit-sizes').hidden);
+    await mp2.click('#edit-duplex');
+    const sw1 = await mp2.evaluate(() => document.documentElement.scrollWidth);
+    await mp2.locator('#edit-chips .info-btn').first().tap();
+    await until(mp2, () => !document.getElementById('info-pop').hidden);
+    await mp2.waitForTimeout(400); // 올라오는 움직임이 끝난 뒤
+    const sheet = await mp2.evaluate(() => ({ sheet: document.getElementById('info-pop').classList.contains('sheet'), bottom: Math.round(document.getElementById('info-pop').getBoundingClientRect().bottom), vh: innerHeight }));
+    await mp2.keyboard.press('Escape');
+    await mp2.goto(`${BASE}/#security`, { waitUntil: 'networkidle' });
+    await mp2.setInputFiles('#unlock-input', [l1, l2, l3]);
+    const sw2 = await mp2.evaluate(() => document.documentElement.scrollWidth);
+    check('400px: 양면 패널 · 크기 안내 · 일괄 목록 가로 스크롤 없음, ⓘ는 아래 시트', sw1 <= 400 && sw2 <= 400 && sheet.sheet && Math.abs(sheet.bottom - sheet.vh) <= 1 && mxerr.length === 0,
+      `scrollWidth ${sw1} / ${sw2} · 시트 아래 끝 ${sheet.bottom}/${sheet.vh}${mxerr.length ? ` · 에러 ${mxerr.join(' | ').slice(0, 100)}` : ''}`);
+    await mx.close();
+  }
+
   // ── 12. 스크린샷 ──
   if (SCREENS) {
     const out = path.join(root, 'docs', 'screens');
@@ -1176,8 +1413,9 @@ const padR = (s, n) => s + ' '.repeat(Math.max(0, n - wide(s)));
 const c1 = Math.max(...rows.map((r) => wide(r.name)));
 console.log(`\n| ${padR('항목', c1)} | 결과 | 세부`);
 console.log(`|${'-'.repeat(c1 + 2)}|------|${'-'.repeat(40)}`);
-for (const r of rows) console.log(`| ${padR(r.name, c1)} | ${r.ok ? '통과' : '실패'} | ${r.detail}`);
+for (const r of rows) console.log(`| ${padR(r.name, c1)} | ${r.skip ? '건너뜀' : r.ok ? '통과' : '실패'} | ${r.detail}`);
 const failed = rows.filter((r) => !r.ok).length;
 if (uiMeasures.length) console.log(`\n용량 줄이기 실측(브라우저)\n- ${uiMeasures.join('\n- ')}`);
-console.log(`\n${rows.length}개 중 ${rows.length - failed}개 통과${failed ? `, ${failed}개 실패` : ''}`);
+const skipped = rows.filter((r) => r.skip).length;
+console.log(`\n${rows.length}개 중 ${rows.length - failed - skipped}개 통과${skipped ? `, ${skipped}개 건너뜀` : ""}${failed ? `, ${failed}개 실패` : ""}`);
 process.exit(failed ? 1 : 0);
