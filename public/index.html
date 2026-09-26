@@ -120,8 +120,56 @@
           <span class="tool-open">열기 →</span>
         </button>
       </div>
-      <p class="app-version" id="home-version" aria-label="배포 버전"></p>
+
+      <section class="home-sec trust" aria-labelledby="trust-h">
+        <div class="home-sec-head">
+          <h2 id="trust-h">정말 밖으로 안 나가나요?</h2>
+          <a class="btn" href="/check">직접 확인하는 법 →</a>
+        </div>
+        <ol class="trust-steps">
+          <li><b aria-hidden="true">1</b><strong>브라우저 안에서만 고쳐요</strong><span>파일은 이 컴퓨터의 브라우저가 직접 처리해요. 서버에는 파일을 받는 기능이 아예 없어요.</span></li>
+          <li><b aria-hidden="true">2</b><strong>인터넷을 꺼도 돼요</strong><span>한 번 열어 두면 와이파이를 꺼도 그대로 작동해요. 파일을 보낼 곳이 없다는 뜻이에요.</span></li>
+          <li><b aria-hidden="true">3</b><strong>브라우저가 연결을 막아요</strong><span>이 사이트 말고는 어디로도 데이터를 못 보내도록 브라우저에 규칙(CSP)을 걸어 뒀어요.</span></li>
+        </ol>
+      </section>
+
+      <section class="home-sec" aria-labelledby="quick-h">
+        <h2 id="quick-h">자주 하는 작업</h2>
+        <div class="quick-cards">
+          <button type="button" class="quick-card" data-quick="compress10" data-open-tool="compress">
+            <span class="quick-icon" aria-hidden="true"><svg class="ic"><use href="#i-filedown"/></svg></span>
+            <span class="quick-text"><strong>공문 첨부용 10MB 만들기</strong><span>용량 줄이기 · 목표를 10MB로 맞춰 둬요</span></span>
+          </button>
+          <button type="button" class="quick-card" data-quick="scan" data-open-tool="edit">
+            <span class="quick-icon" aria-hidden="true"><svg class="ic"><use href="#i-layers"/></svg></span>
+            <span class="quick-text"><strong>스캔본 정리해서 합치기</strong><span>편집 · 합치기 · 빈 쪽과 크기가 다른 쪽을 알려 줘요</span></span>
+          </button>
+          <button type="button" class="quick-card" data-quick="photos" data-open-tool="img2pdf">
+            <span class="quick-icon" aria-hidden="true"><svg class="ic"><use href="#i-image"/></svg></span>
+            <span class="quick-text"><strong>학습지 사진을 PDF로</strong><span>사진 → PDF · 휴대폰 사진 방향도 맞춰요</span></span>
+          </button>
+        </div>
+      </section>
+
+      <section class="home-sec" aria-labelledby="news-h" id="home-news" hidden>
+        <div class="home-sec-head">
+          <h2 id="news-h">새 소식</h2>
+        </div>
+        <ul class="news-list" id="news-list"></ul>
+      </section>
     </main>
+
+    <footer class="site-foot">
+      <div class="site-foot-in">
+        <p class="site-foot-links">
+          <span class="app-version" id="home-version" aria-label="배포 버전"></span>
+          <a href="/check">직접 확인하는 법</a>
+          <a href="/privacy">개인정보 안내</a>
+          <a href="/licenses">사용한 라이브러리</a>
+        </p>
+        <p class="site-foot-limit">이 도구는 원본 파일을 바꾸지 않습니다. 결과물은 저장 후 열어서 확인해 주세요.</p>
+      </div>
+    </footer>
   </div>
 
   <!-- ② 작업 화면 -->

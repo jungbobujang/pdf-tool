@@ -585,6 +585,83 @@
         ],
       };
     },
+
+    // ══ 직접 확인하는 법(/check) ══
+    // ① 와이파이를 꺼도 합치기가 된다
+    'chk-wifi'(stage) {
+      const s = stageParts(stage);
+      const wifi = s.put(el('span', 'demo-wifi', '와이파이 켜짐'), 136, 38);
+      const a = s.put(el('div', 'demo-file demo-doc', 'A'), 16, 44, 36, 46);
+      const b = s.put(el('div', 'demo-file demo-doc', 'B'), 58, 44, 36, 46);
+      const merged = s.put(el('div', 'demo-file demo-doc ok merged', 'A+B'), 36, 44, 44, 56);
+      const save = s.pill('바로 저장', 146, 72, 'primary');
+      const toast = s.put(el('div', 'demo-toast'), 26, 132, 200);
+      const name = el('span', 'demo-toast-name', '');
+      toast.append(el('i', null, '✓'), name);
+      const status = s.badge('', 'wide');
+      return {
+        reset() {
+          wifi.classList.remove('off');
+          wifi.textContent = '와이파이 켜짐';
+          s.at(a, 16, 44);
+          s.at(b, 58, 44);
+          [a, b].forEach((x) => x.classList.remove('gone'));
+          merged.classList.remove('show');
+          name.textContent = `합본_${today()}.pdf`;
+          toast.classList.remove('show');
+          s.at(toast, 26, 136);
+          status.hide();
+          s.moveCursor(120, 124);
+        },
+        steps: [
+          [500, () => s.moveCursor(182, 46)],
+          [500, () => { s.click(); wifi.classList.add('off'); wifi.textContent = '와이파이 꺼짐'; }],
+          [700, () => { s.at(a, 36, 44); s.at(b, 44, 44); }],
+          [450, () => { [a, b].forEach((x) => x.classList.add('gone')); merged.classList.add('show'); }],
+          [500, () => s.moveCursor(176, 82)],
+          [500, () => { s.click(); s.press(save); }],
+          [350, () => { toast.classList.add('show'); s.at(toast, 26, 102); }],
+          [500, () => status.show('인터넷 없이도 합쳐졌어요')],
+          [2600, noop],
+        ],
+      };
+    },
+    // ② Network 탭에 새 줄이 생기지 않는다
+    'chk-network'(stage) {
+      const s = stageParts(stage);
+      const zone = s.put(el('div', 'demo-zone'), 8, 36, 96, 70);
+      zone.append(el('span', 'demo-zone-text', '끌어다 놓기'));
+      const file = s.put(el('div', 'demo-file demo-doc', 'PDF'), 30, 132, 34, 42);
+      const dt = s.put(el('div', 'demo-devtools'), 112, 34, 124, 90);
+      const tabs = el('div', 'demo-dt-tabs');
+      tabs.append(el('span', null, 'Console'), el('span', 'on', 'Network'));
+      const rec = el('i', 'demo-rec');
+      const rows = el('div', 'demo-dt-rows');
+      const count = el('div', 'demo-dt-count', '요청 0건');
+      dt.append(tabs, rec, rows, count);
+      const status = s.badge('', 'wide');
+      return {
+        reset() {
+          zone.classList.remove('over', 'filled');
+          s.at(file, 30, 136);
+          file.classList.remove('ok');
+          rec.classList.remove('blink');
+          count.classList.remove('hit');
+          rows.textContent = '';
+          status.hide();
+          s.moveCursor(60, 124);
+        },
+        steps: [
+          [400, () => rec.classList.add('blink')],
+          [400, () => { s.at(file, 36, 92); s.moveCursor(56, 110); }],
+          [600, () => { s.at(file, 38, 52); s.moveCursor(58, 72); zone.classList.add('over'); }],
+          [500, () => { zone.classList.remove('over'); zone.classList.add('filled'); file.classList.add('ok'); }],
+          [600, () => { count.classList.add('hit'); rows.textContent = '파일을 넣어도 새 줄 없음'; }],
+          [500, () => status.show('파일이 나가지 않았어요 · 요청 0건')],
+          [2800, noop],
+        ],
+      };
+    },
   };
 
   root.GuideAnim = {

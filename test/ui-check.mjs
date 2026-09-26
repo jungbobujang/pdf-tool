@@ -1656,6 +1656,103 @@ try {
     await stopped(s1);
   }
 
+  // ── 11-d. 안내 페이지 · 처음 화면 아래쪽 ──
+  {
+    const pctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: 'light' });
+    const pg = await pctx.newPage();
+    const perr = [];
+    watch(pg, perr);
+    const pages = [];
+    for (const u of ['/check', '/privacy', '/licenses']) {
+      const r = await pg.goto(BASE + u, { waitUntil: 'networkidle' });
+      await pg.waitForTimeout(u === '/check' ? 1200 : 100);
+      const info = await pg.evaluate(() => ({
+        h1: document.querySelector('h1').textContent,
+        ver: (document.querySelector('.site-foot .app-version') || {}).textContent,
+        csp: document.querySelectorAll('.csp-list li').length,
+        libs: [...document.querySelectorAll('.lib')].map((l) => l.dataset.lib),
+        limit: /원본 파일을 바꾸지 않습니다/.test(document.body.textContent),
+        updated: /마지막 갱신: \d{4}년/.test(document.body.textContent),
+        playing: window.__pdfPages ? window.__pdfPages.playing() : [],
+        sw: document.documentElement.scrollWidth,
+      }));
+      pages.push({ u, status: r.status(), ...info });
+      if (SCREENS) {
+        await pg.evaluate(() => document.fonts.ready);
+        await pg.waitForTimeout(u === '/check' ? 2400 : 100);
+        await pg.screenshot({ path: path.join(root, 'docs', 'screens', `${u.slice(1)}.png`), fullPage: true });
+      }
+    }
+    const pk = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+    const deps = [...Object.keys(pk.dependencies), ...Object.keys(pk.devDependencies || {})];
+    const [pc, pp, pl] = pages;
+    check('/check: 세 단계 + 움직이는 예시 2개 재생 + CSP 규칙 목록(서버 헤더와 같음)', pc.status === 200 && pc.playing.length === 2 && pc.playing.some(Boolean) && pc.csp === 11 && pc.limit,
+      `${pc.h1} · 예시 재생 ${pc.playing.join('/')} · CSP ${pc.csp}줄`);
+    check('/privacy: 수집 없음 · 마지막 갱신일 · 책임 한계 한 줄', pp.status === 200 && pp.updated && pp.limit, pp.h1);
+    check('/licenses: package.json 의존성 모두(이름@버전)', pl.status === 200 && deps.every((d) => pl.libs.some((l) => l.startsWith(`${d}@`))) && pl.libs.length === deps.length,
+      `${pl.libs.length}개: ${pl.libs.join(', ').slice(0, 160)}`);
+    check('안내 페이지 3곳 콘솔 에러 0 · 가로 넘침 없음 · 푸터 버전', perr.length === 0 && pages.every((x) => x.sw <= 1280 && /^v /.test(x.ver || '')),
+      perr.length ? perr.join(' | ').slice(0, 200) : pages.map((x) => `${x.u} ${x.ver}`).join(' · '));
+
+    // 처음 화면 아래쪽: 요약 카드 · 자주 하는 작업 · 새 소식 · 푸터
+    await pg.goto(BASE, { waitUntil: 'networkidle' });
+    await until(pg, () => !document.getElementById('home-news').hidden);
+    const home = await pg.evaluate(() => {
+      const r = (sel) => { const e = document.querySelector(sel); if (!e) return null; const b = e.getBoundingClientRect(); return { w: Math.round(b.width), h: Math.round(b.height), l: Math.round(b.left) }; };
+      return {
+        trust: document.querySelectorAll('.trust-steps li').length,
+        quick: document.querySelectorAll('.quick-card').length,
+        news: document.querySelectorAll('#news-list > li').length,
+        sec: r('.home-sec'),
+        foot: [...document.querySelectorAll('.site-foot a')].map((a) => a.getAttribute('href')),
+        limit: /원본 파일을 바꾸지 않습니다/.test(document.querySelector('.site-foot').textContent),
+      };
+    });
+    check('처음 화면 아래: 믿을 이유 3단계 · 자주 하는 작업 3개 · 새 소식 3개 · 푸터(개인정보 · 라이브러리 · 책임 한계)',
+      home.trust === 3 && home.quick === 3 && home.news === 3 && home.sec.w <= 1100 && home.foot.includes('/privacy') && home.foot.includes('/licenses') && home.foot.includes('/check') && home.limit,
+      `카드 ${home.trust}/${home.quick}/${home.news} · 폭 ${home.sec.w}px · 푸터 ${home.foot.join(' ')}`);
+    if (SCREENS) {
+      await pg.evaluate(() => document.fonts.ready);
+      await pg.screenshot({ path: path.join(root, 'docs', 'screens', 'home-full.png'), fullPage: true });
+    }
+
+    // "공문 첨부용 10MB 만들기" → 용량 줄이기 + 목표 10MB
+    const heavy2 = await PDFDocument.create();
+    for (let i = 0; i < 8; i++) {
+      const img = await heavy2.embedJpg(photoJpeg(1200, 1000, i + 11));
+      heavy2.addPage([595, 842]).drawImage(img, { x: 40, y: 250, width: 515, height: 430 });
+    }
+    const heavy2File = await writePdf('공문첨부.pdf', heavy2);
+    await pg.click('.quick-card[data-quick="compress10"]');
+    const qTab = await pg.evaluate(() => ({ tab: document.querySelector('.tab[aria-selected="true"]').dataset.tab, toast: document.getElementById('toasts').textContent }));
+    await pg.setInputFiles('#cmp-input', [heavy2File]);
+    await pg.waitForSelector('#cmp-target:not([hidden])', { timeout: 60000 });
+    const qTarget = await pg.$eval('#cmp-mb', (e) => e.value);
+    const hMB = fs.statSync(heavy2File).size / 1024 / 1024;
+    // 로고 → 스캔본 · 사진 바로가기
+    await pg.click('#logo');
+    await pg.click('.quick-card[data-quick="scan"]');
+    const qScan = await pg.evaluate(() => ({ tab: document.querySelector('.tab[aria-selected="true"]').dataset.tab, toast: document.getElementById('toasts').textContent }));
+    await pg.click('#logo');
+    await pg.click('.quick-card[data-quick="photos"]');
+    const qPhoto = await pg.evaluate(() => document.querySelector('.tab[aria-selected="true"]').dataset.tab);
+    check('자주 하는 작업: 10MB(용량 줄이기 · 목표 10) · 스캔본(편집 + 안내) · 사진(사진→PDF)',
+      qTab.tab === 'compress' && /10MB/.test(qTab.toast) && Number(qTarget) === 10 && qScan.tab === 'edit' && /빈 쪽/.test(qScan.toast) && qPhoto === 'img2pdf' && perr.length === 0,
+      `${hMB.toFixed(1)}MB 파일 → 목표 ${qTarget}MB · 스캔본 → ${qScan.tab} · 사진 → ${qPhoto}`);
+    await pctx.close();
+
+    // 400px에서도 가로 넘침 없음
+    const mctx2 = await browser.newContext({ viewport: { width: 400, height: 860 }, isMobile: true, hasTouch: true, colorScheme: 'light', deviceScaleFactor: 2 });
+    const mp3 = await mctx2.newPage();
+    const msw = [];
+    for (const u of ['/', '/check', '/privacy', '/licenses']) {
+      await mp3.goto(BASE + u, { waitUntil: 'networkidle' });
+      msw.push(`${u} ${await mp3.evaluate(() => document.documentElement.scrollWidth)}`);
+    }
+    check('400px: 처음 화면 전체 · 안내 페이지 3곳 가로 스크롤 없음', msw.every((x) => Number(x.split(' ')[1]) <= 400), msw.join(' · '));
+    await mctx2.close();
+  }
+
   // ── 12. 스크린샷 ──
   if (SCREENS) {
     const out = path.join(root, 'docs', 'screens');

@@ -4766,6 +4766,7 @@
     let files = [];
     let seq = 0;
     let target = 0; // 바이트
+    let preset = 0; // 처음 화면 바로가기로 정해 둔 목표(바이트)
     let range = { min: 0, max: 0 };
 
     const isPdf = (f) => f.kind === 'pdf';
@@ -4952,7 +4953,8 @@
       thumb.setAttribute('aria-disabled', String(locked));
       $('cmp-step').textContent = `한 칸 ${stepMB}MB`;
       // 기본 목표: 10MB 넘으면 10MB, 아니면 원래의 70%
-      const def = range.max > 10 * MB ? 10 * MB : range.max * 0.7;
+      // (처음 화면 "공문 첨부용 10MB 만들기"로 왔으면 그 목표)
+      const def = preset || (range.max > 10 * MB ? 10 * MB : range.max * 0.7);
       setTarget(Math.max(range.min, Math.min(range.max, snapV(def) || def)), false);
       // 눈금 칩: 원래 용량보다 작은 것만
       const ticks = TICKS.filter(([, v]) => v * MB < range.max);
@@ -5298,6 +5300,7 @@
       files.forEach((f) => f.handle && Squeeze.codec().release(f.handle));
       files = [];
       target = 0;
+      preset = 0;
       render();
       $('cmp-target').hidden = true;
       $('cmp-result').hidden = true;
@@ -5305,6 +5308,11 @@
     return {
       addFiles,
       reset,
+      /** 목표를 미리 정해 둔다(MB). 파일이 이미 있으면 바로 반영 */
+      presetTarget(mb) {
+        preset = mb * MB;
+        if (readyFiles().length) setupTarget();
+      },
       shortcutSave: (withOpts) => (withOpts ? openDialog() : saveNow()),
       state: () => ({ target, range, files: files.map((f) => ({ name: f.name, size: f.size, min: f.min, result: f.result && f.result.size, stage: f.result && f.result.stage })) }),
     };
@@ -5331,6 +5339,46 @@
     if (isBusy()) return;
     resetAll();
   }));
+
+  // ═══════════════════════════════════════════════════════════
+  // 처음 화면 아래: 자주 하는 작업 바로가기 · 새 소식
+  // ═══════════════════════════════════════════════════════════
+  document.querySelectorAll('.quick-card').forEach((b) => b.addEventListener('click', () => {
+    const q = b.dataset.quick;
+    if (q === 'compress10') {
+      Shrink.presetTarget(10);
+      openTool('compress');
+      toast('목표를 10MB로 맞춰 둘게요.', 'PDF를 넣으면 10MB 이하로 줄여요. 막대로 바꿀 수도 있어요.', 'info');
+    } else if (q === 'scan') {
+      openTool('edit');
+      toast('스캔한 PDF를 넣으세요.', '빈 쪽과 크기가 다른 쪽을 찾아 노란 줄로 알려 드려요. 앞 · 뒤를 따로 스캔했다면 저장 막대의 [양면 스캔]을 쓰세요.', 'info');
+    } else if (q === 'photos') {
+      openTool('img2pdf');
+    }
+  }));
+
+  const News = (() => {
+    let entries = [];
+    const ready = fetch('/changelog.json', { cache: 'no-cache' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        entries = (j && Array.isArray(j.entries)) ? j.entries : [];
+        renderHome();
+        return entries;
+      })
+      .catch(() => entries);
+    const fmtDate = (d) => { const [y, m, dd] = d.split('-').map(Number); return `${y}. ${m}. ${dd}.`; };
+    const entryEl = (e) => h('li', { class: 'news-item' },
+      h('p', { class: 'news-date' }, fmtDate(e.date)),
+      h('strong', null, e.title),
+      h('ul', null, ...e.items.map((t) => h('li', null, t))));
+    function renderHome() {
+      if (!entries.length) return;
+      $('news-list').replaceChildren(...entries.slice(0, 3).map(entryEl));
+      $('home-news').hidden = false;
+    }
+    return { ready, entryEl, all: () => entries };
+  })();
 
   // ═══════════════════════════════════════════════════════════
   // 처음 화면: 파일을 넣으면 알맞은 도구로 보낸다

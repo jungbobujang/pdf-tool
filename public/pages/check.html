@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>직접 확인하는 법 · PDF 작업실</title>
+  <meta name="description" content="PDF 작업실이 파일을 밖으로 보내지 않는다는 것을 직접 확인하는 세 가지 방법.">
+  <meta name="app-version" content="">
+  <meta name="theme-color" content="#141B2E">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icons/logo.svg" type="image/svg+xml">
+  <link rel="icon" href="/icons/favicon-32.png" sizes="32x32" type="image/png">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="/vendor/pretendard/pretendardvariable.min.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="doc-body">
+  <header class="doc-head">
+    <div class="doc-bar">
+      <a href="/" class="logo"><span class="logo-mark" aria-hidden="true"></span>PDF 작업실</a>
+      <a class="btn dark sm" href="/">← 작업실로 돌아가기</a>
+    </div>
+    <div class="doc-hero">
+      <h1>직접 확인하는 법</h1>
+      <p>"파일이 밖으로 안 나간다"는 말을 믿지 않아도 돼요. 아래 세 가지로 누구나 직접 확인할 수 있어요.</p>
+    </div>
+  </header>
+
+  <main class="doc">
+    <section class="doc-card check-step" aria-labelledby="c1">
+      <div class="check-text">
+        <p class="check-no" aria-hidden="true">1</p>
+        <h2 id="c1">와이파이를 끄고 해 보기</h2>
+        <ol>
+          <li>이 사이트를 한 번 열어 둡니다(처음 열 때 필요한 파일을 브라우저에 받아 둬요).</li>
+          <li>와이파이를 끄거나 랜선을 뽑습니다.</li>
+          <li>PDF 두 개를 넣고 [바로 저장]을 누르세요. 그대로 합쳐져서 저장돼요.</li>
+        </ol>
+        <p class="doc-note">인터넷이 없으면 화면 아래 안심 문구 옆에 <b>"지금 인터넷 없이 작동 중"</b>이 켜져요. 인터넷이 없는데도 된다는 건, 파일을 보낼 곳이 없다는 뜻이에요.</p>
+      </div>
+      <figure class="demo" data-demo="chk-wifi">
+        <div class="demo-stage" aria-hidden="true"></div>
+        <figcaption><strong>와이파이를 꺼도 합쳐져요</strong>와이파이를 끈 뒤 PDF 두 개를 합쳐 저장하는 모습이에요.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-card check-step" aria-labelledby="c2">
+      <div class="check-text">
+        <p class="check-no" aria-hidden="true">2</p>
+        <h2 id="c2">F12 → Network 탭에서 보기</h2>
+        <ol>
+          <li>이 사이트에서 <kbd>F12</kbd>(맥은 <kbd>⌘</kbd>+<kbd>Option</kbd>+<kbd>I</kbd>)를 눌러 개발자 도구를 엽니다.</li>
+          <li>위쪽의 <b>Network</b>(네트워크) 탭을 누르고, 목록을 비웁니다(🚫 단추).</li>
+          <li>PDF를 넣고 편집 · 저장해 보세요. 파일을 보내는 새 줄이 생기지 않아요.</li>
+        </ol>
+        <p class="doc-note">처음 열 때는 화면 · 글꼴 · 라이브러리를 받는 줄이 보여요. 모두 이 사이트에서 받는 것이고, 파일을 넣은 뒤에는 새 줄이 없어요(한글 워터마크를 처음 쓸 때 글꼴 한 개를 받는 것 말고는).</p>
+      </div>
+      <figure class="demo" data-demo="chk-network">
+        <div class="demo-stage" aria-hidden="true"></div>
+        <figcaption><strong>Network 탭은 조용해요</strong>파일을 넣어도 Network 탭에 새 요청이 생기지 않는 모습이에요.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-card" aria-labelledby="c3">
+      <p class="check-no" aria-hidden="true">3</p>
+      <h2 id="c3">이 사이트가 브라우저에 거는 규칙(CSP)</h2>
+      <p>이 사이트는 화면을 보낼 때 브라우저에게 "이 규칙을 지켜라"라는 약속(Content-Security-Policy)을 함께 보내요. 브라우저가 직접 지키는 규칙이라 사이트 코드가 어기려 해도 막혀요.</p>
+      <ul class="csp-list">
+        <!-- CSP_LIST -->
+      </ul>
+      <p class="doc-note">확인하는 법: F12 → Network 탭 → 맨 위 문서(주소) 줄을 누르고 → Headers의 <code>content-security-policy</code>를 보세요. 위 목록과 같아요.</p>
+    </section>
+
+    <p class="doc-limit">이 도구는 원본 파일을 바꾸지 않습니다. 결과물은 저장 후 열어서 확인해 주세요.</p>
+  </main>
+
+  <footer class="site-foot">
+    <div class="site-foot-in">
+      <p class="site-foot-links">
+        <span class="app-version" aria-label="배포 버전"></span>
+        <a href="/check">직접 확인하는 법</a>
+        <a href="/privacy">개인정보 안내</a>
+        <a href="/licenses">사용한 라이브러리</a>
+        <a href="/#feedback">의견 보내기</a>
+      </p>
+      <p class="site-foot-limit">이 도구는 원본 파일을 바꾸지 않습니다. 결과물은 저장 후 열어서 확인해 주세요.</p>
+    </div>
+  </footer>
+  <script src="guide-anim.js"></script>
+  <script src="pages.js"></script>
+</body>
+</html>

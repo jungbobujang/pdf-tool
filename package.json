@@ -7,6 +7,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "build": "node scripts/gen-licenses.mjs && node scripts/gen-changelog.mjs",
     "verify": "node test/verify.mjs",
     "test:ui": "node test/ui-check.mjs",
     "screens": "node test/ui-check.mjs --screens",

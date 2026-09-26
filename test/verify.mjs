@@ -735,6 +735,15 @@ const { colorSamplesPdf } = await import('./node-codec.mjs');
   });
 }
 
+// ── 만들어 둔 페이지가 원본과 맞는지 (사용한 라이브러리 · 새 소식) ──
+{
+  const { spawnSync } = await import('node:child_process');
+  for (const [name, script] of [['사용한 라이브러리 페이지가 package.json과 일치', 'scripts/gen-licenses.mjs'], ['새 소식 JSON이 CHANGELOG.md와 일치', 'scripts/gen-changelog.mjs']]) {
+    const r = spawnSync(process.execPath, [script, '--check'], { cwd: new URL('..', import.meta.url), encoding: 'utf8' });
+    check(name, r.status === 0, (r.stdout || r.stderr || '').trim());
+  }
+}
+
 // ── 결과 표 ─────────────────────────────────────────
 const width = (s) => [...s].reduce((n, ch) => n + (/[ᄀ-ᇿ㄰-㆏가-힣]/.test(ch) ? 2 : 1), 0);
 const padR = (s, n) => s + ' '.repeat(Math.max(0, n - width(s)));

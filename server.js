@@ -43,11 +43,12 @@ const COMMIT = VERSION.commit;
 // 커밋이 바뀌면 주소가 바뀌므로 브라우저나 중간 캐시에 옛 파일이 남지 않는다.
 const ASSETS = ['style.css', 'pdf-core.js', 'compress.js', 'guide-anim.js', 'app.js'];
 // 안내 페이지(/check · /privacy · /licenses)가 쓰는 파일
-const PAGE_ASSETS = [];
+const PAGE_ASSETS = ['pages.js'];
 function renderHtml(file) {
   let html = fs.readFileSync(file, 'utf8');
   html = html.replace('<meta name="app-version" content="">', `<meta name="app-version" content="${COMMIT}">`);
-  for (const a of ASSETS) {
+  html = html.replace('<!-- CSP_LIST -->', () => CSP_LIST_HTML);
+  for (const a of [...ASSETS, ...PAGE_ASSETS]) {
     html = html.replace(new RegExp(`(href|src)="${a.replace('.', '\.')}"`, 'g'), `$1="${a}?v=${COMMIT}"`);
   }
   return html;
@@ -70,6 +71,22 @@ const CSP_RULES = [
   "base-uri 'self'",
 ];
 const CSP = CSP_RULES.join('; ');
+// /check 페이지에 보여 줄 규칙 설명
+const CSP_WHY = {
+  'default-src': '따로 정하지 않은 것은 모두 이 사이트에서만 받아요.',
+  'script-src': '실행되는 코드는 이 사이트 것뿐이에요. 다른 곳 스크립트 · 페이지 안에 끼워 넣은 코드 · eval은 막혀요.',
+  'style-src': '화면 모양(CSS)도 이 사이트 것만 써요.',
+  'img-src': '그림은 이 사이트와 브라우저 안에서 만든 것(blob · data)만 보여요.',
+  'font-src': '글꼴도 이 사이트에서만 받아요.',
+  'worker-src': '뒤에서 도는 작업(PDF 그리기 · 용량 줄이기)도 이 사이트 코드로만 돌아요.',
+  'connect-src': '가장 중요한 규칙: 이 사이트 말고는 어디로도 데이터를 보낼 수 없어요. 코드가 파일을 보내려 해도 브라우저가 막아요.',
+  'object-src': '플러그인(옛 플래시 같은 것)은 쓰지 않아요.',
+  'frame-ancestors': '다른 사이트가 이 화면을 몰래 틀 안에 넣어 보여 줄 수 없어요.',
+  'form-action': '양식을 다른 곳으로 제출할 수 없어요.',
+  'base-uri': '페이지의 기준 주소를 바꿔 다른 곳을 가리키게 할 수 없어요.',
+};
+const escHtml = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const CSP_LIST_HTML = CSP_RULES.map((r) => `<li><code>${escHtml(r)}</code><span>${escHtml(CSP_WHY[r.split(' ')[0]] || '')}</span></li>`).join('\n        ');
 
 // 오프라인용 서비스 워커가 설치 때 미리 받아 둘 파일 (커밋이 바뀌면 캐시 이름도 바뀐다)
 const listDir = (dir, prefix) => {
@@ -84,6 +101,7 @@ function precacheList() {
     '/manifest.webmanifest',
     ...listDir(path.join(PUBLIC, 'icons'), '/icons'),
     ...PAGES,
+    '/changelog.json',
     ...PAGE_ASSETS.map((a) => `/${a}?v=${COMMIT}`),
     '/vendor/pdf-lib.min.js', '/vendor/pdf.min.js', '/vendor/pdf.worker.min.js', '/vendor/jszip.min.js', '/vendor/pako.min.js', '/vendor/fontkit.min.js',
     '/vendor/jpeg-decoder.js', '/vendor/heic/heic-to.js',
@@ -183,6 +201,14 @@ app.get('/manifest.webmanifest', (req, res) => {
   res.type('application/manifest+json');
   res.sendFile(path.join(PUBLIC, 'manifest.webmanifest'));
 });
+
+// 안내 페이지: 직접 확인하는 법 · 개인정보 안내 · 사용한 라이브러리
+const PAGE_HTML = Object.fromEntries(PAGES.map((p) => [p, renderHtml(path.join(PUBLIC, 'pages', `${p.slice(1)}.html`))]));
+app.get(PAGES, (req, res) => {
+  res.set('Cache-Control', 'no-cache');
+  res.type('html').send(process.env.NODE_ENV === 'development' ? renderHtml(path.join(PUBLIC, 'pages', `${req.path.slice(1)}.html`)) : PAGE_HTML[req.path]);
+});
+app.get('/changelog.json', (req, res, next) => { res.set('Cache-Control', 'no-cache'); next(); });
 
 // HTML은 항상 서버에 새로 확인한다.
 app.get(['/', '/index.html'], (req, res) => {
