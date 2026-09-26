@@ -77,6 +77,8 @@
   }
 
   async function readBytes(file) {
+    rememberName(file.name);
+    noteFile(file.size);
     try {
       return new Uint8Array(await file.arrayBuffer());
     } catch (e) {
@@ -90,12 +92,27 @@
 
   // ── 알림 ───────────────────────────────────────────────────
   const toastBox = $('toasts');
-  function toast(title, fix, kind = 'error', ms) {
+  /**
+   * 알림. 오류 알림에는 [오류 내용 복사] 버튼이 붙는다(report: 복사할 글, 없으면 제목·안내·상황으로 만든다).
+   */
+  function toast(title, fix, kind = 'error', ms, report) {
+    const copyBtn = kind === 'error'
+      ? h('button', { class: 'toast-copy', type: 'button', title: '오류 내용(파일 이름 · 내용 제외)을 복사해요' }, '오류 내용 복사')
+      : null;
     const el = h('div', { class: `toast ${kind}`, role: kind === 'error' ? 'alert' : 'status' },
       h('div', { class: 'toast-body' },
         h('div', { class: 'toast-title' }, title),
-        fix ? h('div', { class: 'toast-fix' }, fix) : null),
+        fix ? h('div', { class: 'toast-fix' }, fix) : null,
+        copyBtn),
       h('button', { class: 'toast-x', type: 'button', 'aria-label': '알림 닫기', onclick: () => el.remove() }, icon('x')));
+    if (copyBtn) {
+      copyBtn.addEventListener('click', async () => {
+        const text = report || errorReport(null, { title, fix });
+        const ok = await copyText(text);
+        copyBtn.textContent = ok ? '복사했어요 ✓' : '복사하지 못했어요';
+        if (!ok) console.warn(text);
+      });
+    }
     toastBox.prepend(el);
     while (toastBox.children.length > 4) toastBox.lastChild.remove();
     // 열린 대화상자보다 위에 보이도록 다시 띄운다(top layer는 나중에 띄운 것이 위).
@@ -105,37 +122,106 @@
         toastBox.showPopover();
       } catch { /* popover를 모르는 브라우저는 z-index로 */ }
     }
-    const life = ms || (kind === 'error' ? 9000 : 3500);
-    setTimeout(() => el.remove(), life);
+    const life = ms || (kind === 'error' ? 15000 : 3500);
+    let timer = setTimeout(() => el.remove(), life);
+    // 마우스를 올려 두는 동안은 닫히지 않는다(복사할 시간)
+    el.addEventListener('pointerenter', () => clearTimeout(timer));
+    el.addEventListener('pointerleave', () => { timer = setTimeout(() => el.remove(), 4000); });
     return el;
   }
+
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      try {
+        const ta = h('textarea', { style: 'position:fixed;left:-9999px;top:0' });
+        ta.value = text;
+        document.body.append(ta);
+        ta.select();
+        const ok = document.execCommand('copy');
+        ta.remove();
+        return ok;
+      } catch { return false; }
+    }
+  }
+
+  // 오류 보고에 넣을 상황(파일 이름과 내용은 넣지 않는다)
+  const errCtx = { stage: '', file: null };
+  const knownNames = new Set();
+  /** 파일 이름을 기억해 두었다가 보고서에서 가린다 */
+  const rememberName = (name) => { if (name) { knownNames.add(name); knownNames.add(baseName(name)); } };
+  const scrub = (text) => {
+    let s = String(text || '');
+    for (const n of knownNames) if (n && n.length > 1) s = s.split(n).join('(파일 이름)');
+    return s.replace(/"[^"\n]{1,120}\.(pdf|jpe?g|png|webp|zip)"/gi, '"(파일 이름)"').replace(/[^\s"'/\\]+\.(pdf|jpe?g|png|webp|zip)\b/gi, '(파일 이름)');
+  };
+  /** 진행 중인 단계(진행 표시 글)를 기억 */
+  function noteStage(text) { errCtx.stage = scrub(text); }
+  /** 다루는 파일의 크기 · 쪽수 */
+  function noteFile(size, pages) { errCtx.file = { size, pages }; }
+
+  function errorReport(err, shown) {
+    const lines = ['[PDF 작업실 오류 보고]'];
+    lines.push(`버전: v ${VER}`);
+    lines.push(`도구: ${activeView === 'work' ? activeTab : '처음 화면'}`);
+    if (shown) lines.push(`알림: ${scrub(shown.title)}${shown.fix ? ` / ${scrub(shown.fix)}` : ''}`);
+    if (errCtx.stage) lines.push(`단계: ${errCtx.stage}`);
+    const page = /\((\d+)\/(\d+)\)|(\d+)쪽/.exec(errCtx.stage || '');
+    if (page) lines.push(`쪽 번호: ${page[1] ? `${page[1]} / ${page[2]}` : page[3]}`);
+    if (errCtx.file) lines.push(`파일: ${(errCtx.file.size / 1048576).toFixed(2)}MB${errCtx.file.pages ? ` · ${errCtx.file.pages}쪽` : ''}`);
+    if (err) {
+      lines.push(`오류: ${err.name || 'Error'}: ${scrub(err.message || err)}`);
+      const stack = String(err.stack || '').split('\n').slice(0, 7).map(scrub).join('\n  ');
+      if (stack) lines.push(`스택:\n  ${stack}`);
+    }
+    const pm = typeof performance !== 'undefined' && performance.memory;
+    const mem = pm ? ` · JS 힙 ${(pm.usedJSHeapSize / 1048576).toFixed(0)}/${(pm.jsHeapSizeLimit / 1048576).toFixed(0)}MB` : '';
+    lines.push(`브라우저: ${navigator.userAgent}`);
+    lines.push(`환경: 화면 ${innerWidth}×${innerHeight} · 기기 메모리 ${navigator.deviceMemory || '?'}GB · 코어 ${navigator.hardwareConcurrency || '?'}${mem} · Worker ${typeof OffscreenCanvas !== 'undefined' ? '가능' : '없음'}`);
+    lines.push(`시각: ${new Date().toISOString()}`);
+    return lines.join('\n');
+  }
+
+  const isMemoryError = (err) => !!err && (err instanceof RangeError || /out of memory|memory|allocation failed|Array buffer allocation|too large|Could not allocate/i.test(String(err.message || err)));
 
   /** 어떤 오류든 원인과 해결 방법이 담긴 문장으로 바꾼다. */
   function explain(err, fileName) {
     const who = fileName ? `"${fileName}": ` : '';
-    if (!err) return { title: `${who}알 수 없는 문제가 생겼어요.`, fix: '페이지를 새로 고친 뒤 다시 해 주세요.' };
+    if (!err) return { title: `${who}알 수 없는 문제가 생겼어요.`, fix: '페이지를 새로 고친 뒤 다시 해 주세요. 계속되면 [오류 내용 복사]로 알려 주세요.' };
     if (err instanceof UserError || err.name === 'UserError') return { title: who + err.title, fix: err.fix };
     const msg = String(err.message || err);
     if (Core.isWrongPasswordError(err) || (err.name === 'PasswordException' && err.code === 2)) {
       return { title: `${who}비밀번호가 맞지 않아요.`, fix: '대소문자와 한/영 상태를 확인해 주세요.' };
     }
     if (err.name === 'PasswordException' || Core.isEncryptedError(err)) {
-      return { title: `${who}암호가 걸린 PDF예요.`, fix: '비밀번호를 입력하면 이어서 쓸 수 있어요.' };
+      return { title: `${who}암호가 걸린(잠긴) PDF예요.`, fix: '비밀번호를 입력하면 이어서 쓸 수 있어요. 비밀번호를 모르면 만든 사람에게 받아야 해요.' };
     }
-    if (err instanceof RangeError || /memory|allocation|too large|Array buffer/i.test(msg)) {
-      return { title: `${who}메모리가 부족해요.`, fix: '다른 탭을 닫거나, 파일을 나눠서 조금씩 처리해 주세요.' };
+    if (isMemoryError(err)) {
+      return { title: `${who}쪽이 많아 메모리가 부족해요.`, fix: '다른 탭을 닫거나 편집에서 나눠서 줄여 보세요.' };
+    }
+    if (err.workerDied) {
+      return { title: `${who}처리하던 작업이 멈췄어요.`, fix: '다른 탭을 닫고 다시 해 주세요. 계속되면 편집에서 파일을 나눠서 해 보세요.' };
+    }
+    if (/PDF\/A|object and cross-reference streams/i.test(msg)) {
+      return { title: `${who}PDF/A(보존용) 형식이라 그대로 다시 저장하지 못했어요.`, fix: '[오류 내용 복사]를 눌러 알려 주세요. 편집에서 쪽을 모아 새로 저장하면 될 수 있어요.' };
+    }
+    if (/unsupported|not supported|지원하지 않/i.test(msg)) {
+      return { title: `${who}지원하지 않는 형식이 들어 있어요.`, fix: '원래 프로그램에서 PDF로 다시 저장하거나 인쇄 → "PDF로 저장"으로 만든 뒤 넣어 주세요.' };
     }
     if (err.name === 'InvalidPDFException' || err.name === 'MissingPDFException' ||
-        /parse|PDF header|Invalid|Expected|trailer|xref|Unexpected|corrupt|undefined|null/i.test(msg)) {
+        /parse|PDF header|Invalid|Expected|trailer|xref|Unexpected|corrupt/i.test(msg)) {
       return { title: `${who}파일이 손상됐거나 읽을 수 없는 PDF예요.`, fix: '원래 프로그램에서 PDF로 다시 저장한 뒤 넣어 주세요.' };
     }
-    return { title: `${who}처리하지 못했어요.`, fix: `원인: ${msg.slice(0, 160)}` };
+    return { title: `${who}예상하지 못한 문제로 처리하지 못했어요.`, fix: `[오류 내용 복사]를 눌러 내용을 알려 주시면 고칠게요. (원인: ${msg.slice(0, 120)})` };
   }
   function showError(err, fileName) {
     if (isAbort(err)) return toast('취소했어요.', '', 'info');
     console.warn(err);
-    const { title, fix } = explain(err, fileName);
-    toast(title, fix, 'error');
+    rememberName(fileName);
+    const shown = explain(err, fileName);
+    toast(shown.title, shown.fix, 'error', undefined, errorReport(err, shown));
   }
 
   window.addEventListener('error', (e) => {
@@ -162,6 +248,7 @@
     },
     set(text, done, total) {
       this.text.textContent = text;
+      noteStage(text);
       this.fill.style.width = total ? `${Math.round((done / total) * 100)}%` : '0%';
     },
     hide() {
@@ -187,6 +274,7 @@
     }
     await breathe(true);
     try {
+      noteStage(text);
       return await fn((t, d, n) => {
         if (ctrl && ctrl.signal.aborted) throw abortError();
         busy.set(t, d, n);
@@ -1929,6 +2017,9 @@
     $('cf-body').textContent = body;
     $('cf-yes').textContent = yes;
     $('cf-no').textContent = no;
+    // 진행 표시가 떠 있는 동안에도 누를 수 있어야 한다(진행 표시는 버튼을 잠근다)
+    $('cf-yes').disabled = false;
+    $('cf-no').disabled = false;
     return new Promise((resolve) => {
       const done = () => {
         dlg.removeEventListener('close', done);
@@ -2149,12 +2240,27 @@
   })();
 
   // ── 용량 줄이기 실행기: Web Worker(OffscreenCanvas) 또는 메인 스레드 ──
+  // Worker가 죽거나(onerror) 30초 동안 말이 없거나 메모리가 모자라면 메인 스레드에서 쉬어 가며 다시 한다.
   const Squeeze = (() => {
-    const workerOk = typeof Worker !== 'undefined' && typeof OffscreenCanvas !== 'undefined' &&
+    // 주소에 ?worker=0 이 있으면 메인 스레드만 쓴다(메모리 측정 · 검증용)
+    const noWorker = /[?&]worker=0(&|$)/.test(location.search);
+    const workerOk = !noWorker && typeof Worker !== 'undefined' && typeof OffscreenCanvas !== 'undefined' &&
       typeof OffscreenCanvas.prototype.convertToBlob === 'function';
+    const SILENT_MS = 30000;
     let worker = null;
     let seq = 0;
     const pending = new Map();
+    const died = (message) => Object.assign(new Error(message), { workerDied: true });
+    function failAll(err) {
+      pending.forEach((p) => { clearTimeout(p.watch); p.reject(err); });
+      pending.clear();
+      if (worker) worker.terminate();
+      worker = null;
+    }
+    function watch(p) {
+      clearTimeout(p.watch);
+      p.watch = setTimeout(() => failAll(died('용량 줄이기 작업이 30초 동안 응답이 없어요.')), SILENT_MS);
+    }
     function getWorker() {
       if (worker) return worker;
       worker = new Worker(`compress-worker.js?v=${encodeURIComponent(VER)}`);
@@ -2162,54 +2268,71 @@
         const { id, progress, result, error } = e.data;
         const p = pending.get(id);
         if (!p) return;
+        watch(p);
         if (progress) { if (p.onProgress) p.onProgress(progress); return; }
+        clearTimeout(p.watch);
         pending.delete(id);
-        if (error) p.reject(Object.assign(new Error(error.message), { name: error.name || 'Error' }));
+        if (error) p.reject(Object.assign(new Error(error.message), { name: error.name || 'Error', stack: error.stack || '' }));
         else p.resolve(result);
       };
       worker.onerror = (e) => {
         e.preventDefault();
-        const err = new Error(`용량 줄이기 작업이 멈췄어요: ${e.message || '알 수 없는 오류'}`);
-        pending.forEach((p) => p.reject(err));
-        pending.clear();
-        worker = null;
+        failAll(died(`용량 줄이기 작업이 멈췄어요: ${e.message || '알 수 없는 오류'}`));
       };
+      worker.onmessageerror = () => failAll(died('용량 줄이기 결과를 받지 못했어요.'));
       return worker;
     }
     function kill() {
-      if (worker) worker.terminate();
-      worker = null;
-      pending.forEach((p) => p.reject(abortError()));
-      pending.clear();
+      pending.forEach((p) => clearTimeout(p.watch));
+      failAll(abortError());
     }
     let codec = null;
-    async function run(cmd, bytes, target, { onProgress, signal } = {}) {
-      if (signal && signal.aborted) throw abortError();
-      if (!workerOk) {
-        // 메인 스레드: 쪽(그림) 하나마다 쉬어 가며 화면이 멈추지 않게 한다.
-        codec = codec || Compress.browserCodec();
-        const opts = { signal, onProgress: async (p) => { if (onProgress) onProgress(p); await breathe(true); } };
-        return cmd === 'analyze' ? Compress.analyzePdf(bytes, codec, opts) : Compress.compressPdf(bytes, target, codec, opts);
-      }
+    const mainCodec = () => (codec = codec || Compress.browserCodec());
+    function runMain(cmd, bytes, target, { onProgress, signal } = {}) {
+      // 메인 스레드: 사진 하나마다 쉬어 가며 화면이 멈추지 않게 한다.
+      const opts = { signal, onProgress: async (p) => { if (onProgress) onProgress(p); await breathe(true); } };
+      return cmd === 'analyze' ? Compress.analyzePdf(bytes, mainCodec(), opts) : Compress.compressPdf(bytes, target, mainCodec(), opts);
+    }
+    function runWorker(cmd, bytes, target, { onProgress, signal } = {}) {
       const w = getWorker();
       const id = ++seq;
       return new Promise((resolve, reject) => {
-        pending.set(id, { resolve, reject, onProgress });
+        const p = { resolve, reject, onProgress };
+        pending.set(id, p);
+        watch(p);
         if (signal) signal.addEventListener('abort', kill, { once: true });
         const copy = bytes.slice();
         w.postMessage({ id, cmd, bytes: copy, target }, [copy.buffer]);
       });
     }
+    async function run(cmd, bytes, target, opts = {}) {
+      if (opts.signal && opts.signal.aborted) throw abortError();
+      if (!workerOk) return runMain(cmd, bytes, target, opts);
+      try {
+        // 검증용: Worker가 죽은 것처럼 한 번 실패시킨다
+        if (self.__pdfTestFailWorker) { self.__pdfTestFailWorker = false; throw died('검증용: Worker가 멈춘 것처럼'); }
+        return await runWorker(cmd, bytes, target, opts);
+      } catch (e) {
+        if (isAbort(e)) throw e;
+        if (!e.workerDied && !isMemoryError(e)) throw e;
+        console.warn('Worker 실패 → 메인 스레드에서 다시', e);
+        noteStage('Worker 실패 → 화면에서 다시 시도');
+        busy.set('다른 방법으로 다시 하는 중… (화면이 조금 느려질 수 있어요)');
+        return runMain(cmd, bytes, target, opts);
+      }
+    }
     return {
       inWorker: workerOk,
       analyze: (bytes, opts) => run('analyze', bytes, 0, opts),
       compress: (bytes, target, opts) => run('compress', bytes, target, opts),
-      codec: () => (codec = codec || Compress.browserCodec()),
+      codec: mainCodec,
+      /** 검증용: Worker를 일부러 죽인다 */
+      _crash: () => failAll(died('검증용으로 Worker를 멈췄어요.')),
     };
   })();
 
   const STAGE_TEXT = { tidy: '정리 중', search: '알맞은 크기 찾는 중', images: '사진 줄이는 중', save: '확인 중', check: '확인 중' };
-  const stageText = (p) => (p.phase === 'images' ? `사진 줄이는 중 ${p.done + 1}/${p.total}` : STAGE_TEXT[p.phase] || '처리 중');
+  const stageText = (p) => (p.phase === 'images' ? `사진 줄이는 중 ${p.done + 1}/${p.total}` : p.phase === 'search' && p.total ? `알맞은 크기 찾는 중 (${p.done + 1}/${p.total})` : STAGE_TEXT[p.phase] || '처리 중');
 
   /**
    * PDF를 목표 이하로. 2단계로 부족하면 3단계(쪽을 사진으로)를 물어본다.
@@ -2220,14 +2343,16 @@
       signal,
       onProgress: (p) => busy.set(`${label}${stageText(p)}…`),
     });
-    if (r.status !== 'raster' || !ask) return { bytes: r.bytes, result: r, rastered: false };
+    // 2단계로 모자라거나(raster) 줄일 사진이 아예 없을 때(cannot)도 3단계를 물어본다
+    const short = r.status === 'raster' || (r.status === 'cannot' && r.size > target);
+    if (!short || !ask) return { bytes: r.bytes, result: r, rastered: false };
     // 3단계: 자동으로 하지 않고 먼저 묻는다.
     busy.set(`${label}쪽을 사진으로 바꾸면 얼마나 줄어드는지 재는 중…`);
     const est = await rasterEstimate(r.bytes, signal);
     let low;
     try { low = await est.size(0); } finally { est.close(); }
     const ok = await confirmBox({
-      title: '사진만 줄여서는 목표에 못 미쳐요',
+      title: r.status === 'cannot' ? '줄일 사진이 없어 목표에 못 미쳐요' : '사진만 줄여서는 목표에 못 미쳐요',
       body: `지금 ${fmtMB(r.size)}까지 줄였어요. 쪽을 사진으로 바꾸면 약 ${fmtMB(low)}까지 줄일 수 있어요. 대신 글자를 선택하거나 검색할 수 없어요.`,
       yes: '그래도 줄이기',
       no: '여기까지만',
@@ -3821,6 +3946,12 @@
     const basis = () => document.querySelector('input[name="cmp-basis"]:checked').value;
     const photos = () => files.filter((f) => f.kind === 'image' && f.ready);
     const readyFiles = () => files.filter((f) => f.ready);
+    const mergeReasons = (list) => {
+      const out = {};
+      for (const r of list) for (const [k, v] of Object.entries(r || {})) out[k] = (out[k] || 0) + v;
+      return out;
+    };
+    const reasonText = (r) => Object.entries(r || {}).map(([k, v]) => `${k} ${v}장`).join(', ');
 
     async function addFiles(list) {
       const ok = list.filter((f) => isPdfFile(f) || /^image\/(jpeg|png|webp)$/.test(f.type) || /\.(jpe?g|png|webp)$/i.test(f.name));
@@ -3842,6 +3973,7 @@
               if (isAbort(e)) throw e;
               f.error = explain(e, f.name);
               f.state = '읽지 못했어요';
+              showError(e, f.name);
             }
             render();
           }
@@ -3889,8 +4021,10 @@
       f.mostlyText = a.mostlyText;
       f.images = a.images;
       f.skipped = a.skipped;
+      f.reasons = a.reasons;
       f.ready = true;
-      f.state = `${f.pages}쪽 · 사진 ${a.images}장${a.skipped ? ` (못 줄이는 형식 ${a.skipped}장)` : ''}`;
+      noteFile(f.size, f.pages);
+      f.state = `${f.pages}쪽 · 줄일 수 있는 사진 ${a.images}장${a.skipped ? ` · 그대로 둘 사진 ${a.skipped}장` : ''}`;
     }
     let webpOk = null;
     async function canEncode(type) {
@@ -3912,7 +4046,7 @@
           h('span', { class: 'cf-size' }, h('span', null, fmtMB(f.size)),
             res ? h('span', { class: 'cf-arrow' }, ' → ') : null,
             res ? h('b', null, fmtMB(res.size)) : null),
-          h('span', { class: 'cf-state' }, f.error ? `${f.error.title}` : res ? resultText(f) : f.state),
+          h('span', { class: 'cf-state' }, f.error ? `${f.error.title.replace(/^"[^"]*": /, '')} ${f.error.fix || ''}` : res ? resultText(f) : f.state),
           f.note ? h('small', { class: 'cf-note' }, f.note) : null,
           h('button', { type: 'button', class: 'icon-btn cf-x', 'data-del': f.id, 'aria-label': `${f.name} 빼기`, title: '빼기' }, icon('x', 'ic sm')));
         if (f.locked) {
@@ -3936,9 +4070,10 @@
     }
     function resultText(f) {
       const r = f.result;
-      const stageName = r.stage === 3 ? '쪽을 사진으로' : r.stage === 2 ? '사진 줄임' : '손실 없이';
-      if (r.size <= f.target) return `✓ 목표 이하 · ${stageName}`;
-      return `목표보다 ${fmtMB(r.size - f.target)} 커요`;
+      const head = `목표 ${fmtT(f.target)} · 결과 ${fmtT(r.size)} · 화질 ${r.quality || '원본 그대로'}`;
+      const skip = r.skipped ? ` · 건너뛴 사진 ${r.skipped}장(${reasonText(r.reasons)})` : '';
+      if (r.size <= f.target) return `✓ ${head}${skip}`;
+      return `${head} — 목표보다 ${fmtT(r.size - f.target)} 커요${skip}`;
     }
     listEl.addEventListener('click', (e) => {
       const b = e.target.closest('[data-del]');
@@ -3952,6 +4087,13 @@
     });
 
     // ── 목표 용량 막대 ──
+    // 한 칸 = 줄일 수 있는 폭의 약 1/100을 보기 좋은 값(0.01~1MB)으로 올림. 표시 자릿수도 맞춘다.
+    let step = 0.1 * MB;
+    let digits = 1;
+    let locked = false;
+    const fmtT = (v) => `${(v / MB).toFixed(digits)}MB`;
+    const snapV = (v) => Math.round(v / step) * step;
+
     function computeRange() {
       const ready = readyFiles();
       if (!ready.length) return { min: 0, max: 0 };
@@ -3961,7 +4103,7 @@
       }
       // 파일마다 같은 목표: 가장 큰 파일 기준
       const big = ready.reduce((a, b) => (b.size > a.size ? b : a));
-      return { min: big.min, max: big.size };
+      return { min: Math.min(big.min, big.size), max: big.size };
     }
     function setupTarget() {
       const ready = readyFiles();
@@ -3969,24 +4111,31 @@
       $('cmp-basis').hidden = !(ready.length > 1 && ready.every((f) => f.kind === 'image'));
       if (!ready.length) return;
       range = computeRange();
-      const def = Math.min(range.max * 0.6, 10 * MB);
-      const snap = Math.round(def / (0.5 * MB)) * 0.5 * MB;
-      setTarget(Math.max(range.min, Math.min(range.max, snap || def)), false);
+      const stepMB = Compress.niceStep(range.max - range.min);
+      step = stepMB * MB;
+      digits = stepMB < 0.1 ? 2 : stepMB < 1 ? 1 : 0;
+      // 줄일 수 있는 폭이 원래의 5% 미만이면 막대를 잠근다(3단계는 여전히 쓸 수 있다)
+      locked = range.max - range.min < range.max * 0.05;
+      $('cmp-vol').classList.toggle('locked', locked);
+      thumb.tabIndex = locked ? -1 : 0;
+      thumb.setAttribute('aria-disabled', String(locked));
+      $('cmp-step').textContent = `한 칸 ${stepMB}MB`;
+      // 기본 목표: 10MB 넘으면 10MB, 아니면 원래의 70%
+      const def = range.max > 10 * MB ? 10 * MB : range.max * 0.7;
+      setTarget(Math.max(range.min, Math.min(range.max, snapV(def) || def)), false);
       // 눈금 칩: 원래 용량보다 작은 것만
       const ticks = TICKS.filter(([, v]) => v * MB < range.max);
       $('cmp-ticks').replaceChildren(...ticks.map(([label, v]) => {
         const p = frac(v * MB);
-        return h('button', { type: 'button', class: `vol-tick${v * MB < range.min ? ' low' : ''}`, 'data-mb': String(v), style: `left:${p * 100}%`, title: v * MB < range.min ? `이 파일은 약 ${fmtMB(range.min)}까지만 줄일 수 있어요` : `${v}MB 이하로` }, label);
+        return h('button', { type: 'button', class: `vol-tick${v * MB < range.min ? ' low' : ''}`, 'data-mb': String(v), style: `left:${p * 100}%`, title: v * MB < range.min ? `이 파일은 약 ${fmtT(range.min)}까지만 줄일 수 있어요` : `${v}MB 이하로`, disabled: locked }, label);
       }));
-      $('cmp-min').textContent = `최소 약 ${fmtMB(range.min)}`;
-      $('cmp-max').textContent = `원래 ${fmtMB(range.max)}`;
-      const text = ready.filter((f) => f.kind === 'pdf' && f.mostlyText);
+      $('cmp-min').textContent = `최소 약 ${fmtT(range.min)}`;
+      $('cmp-max').textContent = `원래 ${fmtT(range.max)}`;
       const notes = [];
-      if (text.length) notes.push(`${text.map((f) => `"${f.name}"`).join(', ')}: 이 파일은 약 ${fmtMB(Math.max(...text.map((f) => f.min)))}까지만 줄일 수 있어요(대부분 글꼴이라서).`);
       const skipped = ready.filter((f) => f.skipped);
-      if (skipped.length) notes.push(`특수한 형식(CMYK · 흑백 스캔 등) 사진 ${skipped.reduce((s, f) => s + f.skipped, 0)}장은 그대로 둬요.`);
+      if (skipped.length) notes.push(`그대로 둘 사진 ${skipped.reduce((s, f) => s + f.skipped, 0)}장(${reasonText(mergeReasons(skipped.map((f) => f.reasons)))})`);
       if (ready.length > 1 && !(ready.every((f) => f.kind === 'image') && basis() === 'total')) notes.push('목표는 파일마다 따로 적용돼요.');
-      $('cmp-note').textContent = notes.join(' ');
+      $('cmp-note').textContent = notes.join(' · ');
     }
     const frac = (v) => (range.max > range.min ? Math.max(0, Math.min(1, (v - range.min) / (range.max - range.min))) : 1);
     function setTarget(v, fromInput) {
@@ -3994,61 +4143,82 @@
       const p = frac(target);
       thumb.style.left = `${p * 100}%`;
       $('cmp-fill').style.width = `${p * 100}%`;
-      const mb = target / MB;
-      const text = `${mb >= 10 ? mb.toFixed(1) : mb.toFixed(2).replace(/0$/, '')}MB`;
+      const text = fmtT(target);
       $('cmp-bubble').textContent = text;
-      thumb.setAttribute('aria-valuemin', String(Math.round((range.min / MB) * 10) / 10));
-      thumb.setAttribute('aria-valuemax', String(Math.round((range.max / MB) * 10) / 10));
-      thumb.setAttribute('aria-valuenow', String(Math.round(mb * 10) / 10));
+      thumb.setAttribute('aria-valuemin', (range.min / MB).toFixed(digits));
+      thumb.setAttribute('aria-valuemax', (range.max / MB).toFixed(digits));
+      thumb.setAttribute('aria-valuenow', (target / MB).toFixed(digits));
       thumb.setAttribute('aria-valuetext', `${text} 이하`);
-      if (!fromInput) mbInput.value = String(Math.round(mb * 10) / 10);
-      const q = target >= range.max ? '원본 그대로' : target < range.min ? '목표에 못 미칠 수 있어요' : `예상 화질: ${Compress.qualityLabel(p)}`;
+      if (!fromInput) mbInput.value = (target / MB).toFixed(digits);
+      const same = target >= range.max;
+      const below = target < range.min;
+      const q = same ? '원본 그대로' : below ? '3단계 필요' : `예상 화질: ${Compress.qualityLabel(p)}`;
       $('cmp-quality').textContent = q;
-      $('cmp-quality').dataset.q = target >= range.max ? 'same' : target < range.min ? 'low' : Compress.qualityLabel(p);
-      $('cmp-go').disabled = isBusy() || !readyFiles().length;
+      $('cmp-quality').dataset.q = same ? 'same' : below ? 'low' : Compress.qualityLabel(p);
+      const msg = $('cmp-msg');
+      msg.className = 'cmp-msg';
+      if (locked && !below && !(fromInput && same)) {
+        msg.textContent = '이 파일은 더 줄일 여지가 거의 없어요(대부분 글꼴이거나 이미 압축된 사진이라서). 목표를 숫자로 적으면 쪽을 사진으로 바꾸는 3단계를 쓸 수 있어요.';
+        msg.classList.add('low');
+      } else if (same) {
+        msg.textContent = `원본 그대로면 돼요. (원래 ${fmtT(range.max)})`;
+        msg.classList.add('same');
+      } else if (below) {
+        msg.textContent = `최소 약 ${fmtT(range.min)}까지 줄일 수 있어요. 더 줄이려면 쪽을 사진으로 바꿔야 해요(3단계). [줄이기]를 누르면 물어봐요.`;
+        msg.classList.add('low');
+      } else if (locked) {
+        msg.textContent = '이 파일은 더 줄일 여지가 거의 없어요(대부분 글꼴이거나 이미 압축된 사진이라서). 목표를 숫자로 적으면 쪽을 사진으로 바꾸는 3단계를 쓸 수 있어요.';
+        msg.classList.add('low');
+      } else msg.textContent = '';
+      $('cmp-go').disabled = isBusy() || !readyFiles().length || same;
     }
     const fromX = (clientX) => {
       const r = track.getBoundingClientRect();
       const p = Math.max(0, Math.min(1, (clientX - r.left) / r.width));
       const v = range.min + p * (range.max - range.min);
-      return Math.round(v / (0.1 * MB)) * 0.1 * MB || v;
+      if (p <= 0) return range.min;
+      if (p >= 1) return range.max;
+      return Math.max(range.min, Math.min(range.max, snapV(v)));
     };
     let dragging = false;
     track.addEventListener('pointerdown', (e) => {
-      if (e.target.closest('.vol-tick')) return;
+      if (locked || e.target.closest('.vol-tick')) return;
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      e.preventDefault();
       dragging = true;
-      track.setPointerCapture(e.pointerId);
+      try { track.setPointerCapture(e.pointerId); } catch { /* 무시 */ }
+      thumb.classList.add('grabbing');
       setTarget(fromX(e.clientX));
-      thumb.focus();
+      thumb.focus({ preventScroll: true });
     });
     track.addEventListener('pointermove', (e) => { if (dragging) setTarget(fromX(e.clientX)); });
-    track.addEventListener('pointerup', () => { dragging = false; });
-    track.addEventListener('pointercancel', () => { dragging = false; });
+    const endDrag = () => { dragging = false; thumb.classList.remove('grabbing'); };
+    track.addEventListener('pointerup', endDrag);
+    track.addEventListener('pointercancel', endDrag);
+    track.addEventListener('lostpointercapture', endDrag);
     thumb.addEventListener('keydown', (e) => {
-      const step = 0.5 * MB;
+      if (locked) return;
       let v = null;
-      if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') v = Math.max(range.min, target - step);
-      if (e.key === 'ArrowRight' || e.key === 'ArrowUp') v = Math.min(range.max, target + step);
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') v = Math.max(range.min, snapV(target) - step);
+      if (e.key === 'ArrowRight' || e.key === 'ArrowUp') v = Math.min(range.max, snapV(target) + step);
       if (e.key === 'Home') v = range.min;
       if (e.key === 'End') v = range.max;
-      if (e.key === 'PageDown') v = Math.max(range.min, target - 2 * MB);
-      if (e.key === 'PageUp') v = Math.min(range.max, target + 2 * MB);
+      if (e.key === 'PageDown') v = Math.max(range.min, snapV(target) - step * 10);
+      if (e.key === 'PageUp') v = Math.min(range.max, snapV(target) + step * 10);
       if (v == null) return;
       e.preventDefault();
       setTarget(v);
     });
     $('cmp-ticks').addEventListener('click', (e) => {
       const b = e.target.closest('.vol-tick');
-      if (!b) return;
-      const v = Number(b.dataset.mb) * MB;
-      if (v < range.min) toast(`약 ${fmtMB(range.min)}까지만 줄일 수 있어요.`, '목표를 그대로 두면 [줄이기] 뒤에 쪽을 사진으로 바꿀지 물어봐요.', 'info');
-      setTarget(v);
+      if (!b || locked) return;
+      setTarget(Number(b.dataset.mb) * MB);
     });
     mbInput.addEventListener('input', () => {
       const v = Number(mbInput.value.replace(',', '.'));
       if (v > 0) setTarget(v * MB, true);
     });
-    mbInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+    mbInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); if (!$('cmp-go').disabled) go(); } });
     document.querySelectorAll('input[name="cmp-basis"]').forEach((r) => r.addEventListener('change', () => { clearResults(); setupTarget(); }));
 
     // ── 줄이기 ──
@@ -4073,12 +4243,15 @@
               const label = ready.length > 1 ? `${i + 1}/${ready.length} · ` : '';
               if (f.kind === 'pdf') {
                 const r = await squeezePdf(f.bytes, target, progress, signal, { label });
-                f.result = { bytes: r.bytes, size: r.bytes.length, stage: r.result.stage, status: r.result.status, type: 'application/pdf' };
+                f.result = {
+                  bytes: r.bytes, size: r.bytes.length, stage: r.result.stage, status: r.result.status, type: 'application/pdf',
+                  quality: r.result.stage === 3 ? '쪽을 사진으로' : r.result.quality || '원본 그대로', skipped: r.result.skipped || 0, reasons: r.result.reasons || {},
+                };
               } else {
                 await progress(`${label}사진 줄이는 중 ${i + 1}/${ready.length}`, i, ready.length);
                 const r = await Compress.compressImage(f.handle, f.size, target, Squeeze.codec(), { type: f.outType, signal });
                 const keep = r.bytes.length >= f.size && f.outType === f.file.type;
-                f.result = keep ? { bytes: f.bytes, size: f.size, stage: 1, type: f.file.type } : { bytes: r.bytes, size: r.bytes.length, stage: 2, type: r.type || f.outType };
+                f.result = keep ? { bytes: f.bytes, size: f.size, stage: 1, type: f.file.type, quality: '원본 그대로' } : { bytes: r.bytes, size: r.bytes.length, stage: 2, type: r.type || f.outType, quality: r.quality };
               }
               render();
             }
@@ -4110,7 +4283,7 @@
       const out = await encAll(s.t);
       list.forEach((f, i) => {
         f.target = (tgt * f.size) / list.reduce((a, x) => a + x.size, 0);
-        f.result = { bytes: out[i].bytes, size: out[i].bytes.length, stage: 2, type: out[i].type || f.outType };
+        f.result = { bytes: out[i].bytes, size: out[i].bytes.length, stage: 2, type: out[i].type || f.outType, quality: Compress.qualityLabel(s.t) };
       });
       list.totalTarget = tgt;
     }
@@ -4125,14 +4298,19 @@
       const box = $('cmp-summary');
       box.className = `cmp-summary ${over ? 'over' : 'ok'}`;
       box.replaceChildren(
-        h('span', null, fmtMB(before)), ' → ', h('b', null, fmtMB(after)), ' ',
+        h('span', null, fmtT(before)), ' → ', h('b', null, fmtT(after)), ' ',
         over
-          ? h('span', { class: 'bad' }, totalMode ? `목표보다 ${fmtMB(after - target)} 커요` : `${done.filter((f) => f.result.size > f.target).length}개 파일이 목표보다 커요`)
-          : h('span', { class: 'good' }, `✓ 목표(${fmtMB(target)}) 이하`));
+          ? h('span', { class: 'bad' }, totalMode ? `목표보다 ${fmtT(after - target)} 커요` : `${done.filter((f) => f.result.size > f.target).length}개 파일이 목표보다 커요`)
+          : h('span', { class: 'good' }, `✓ 목표(${fmtT(target)}) 이하`),
+        done.length === 1 ? h('small', { class: 'cmp-detail' }, `목표 ${fmtT(done[0].target || target)} · 결과 ${fmtT(done[0].result.size)} · 화질 ${done[0].result.quality || '원본 그대로'}`) : '',
+        (() => {
+          const sk = done.reduce((a, f) => a + (f.result.skipped || 0), 0);
+          return sk ? h('small', { class: 'cmp-detail' }, `건너뛴 사진 ${sk}장 (${reasonText(mergeReasons(done.map((f) => f.result.reasons)))}) — 원본 그대로 두었어요`) : '';
+        })());
       const advice = [];
       done.filter((f) => f.result.size > f.target).forEach((f) => {
         if (f.kind === 'pdf' && f.result.status === 'raster') {
-          advice.push(h('p', null, `"${f.name}": 목표보다 ${fmtMB(f.result.size - f.target)} 커요. 쪽을 사진으로 바꾸면 더 줄일 수 있어요(글자 선택 불가). `,
+          advice.push(h('p', null, `"${f.name}": 사진만 줄여서는 ${fmtT(f.result.size)}까지예요(목표보다 ${fmtT(f.result.size - f.target)} 커요). 쪽을 사진으로 바꾸면 더 줄일 수 있어요(글자 선택 불가). `,
             h('button', { type: 'button', class: 'btn sm', 'data-raster': f.id }, '쪽을 사진으로 바꿔 더 줄이기…')));
         } else if (f.kind === 'pdf' && f.result.status === 'cannot') {
           advice.push(h('p', null, `"${f.name}": 줄일 사진이 없어요. 이 파일은 약 ${fmtMB(f.result.size)}까지만 줄일 수 있어요(대부분 글꼴이라서). 쪽을 나눠 저장하는 방법도 있어요.`));
@@ -4160,7 +4338,7 @@
       if (!ok) return;
       try {
         const out = await withBusy('쪽을 사진으로 바꾸는 중…', (progress, signal) => rasterToTarget(f.result.bytes, f.target, progress, signal), { cancellable: true });
-        if (out.length < f.result.size) f.result = { ...f.result, bytes: out, size: out.length, stage: 3, status: out.length <= f.target ? 'done' : 'raster' };
+        if (out.length < f.result.size) f.result = { ...f.result, bytes: out, size: out.length, stage: 3, status: out.length <= f.target ? 'done' : 'raster', quality: '쪽을 사진으로' };
       } catch (err) { showError(err); }
       render();
       showResult();
@@ -4632,5 +4810,5 @@
     if (t && (t !== activeTab || activeView !== 'work')) openTool(t);
   });
 
-  window.__pdfWorkshop = { version: 4, ready: true, guide: Guide.state, compress: Shrink.state, worker: Squeeze.inWorker };
+  window.__pdfWorkshop = { version: 5, ready: true, guide: Guide.state, compress: Shrink.state, worker: Squeeze.inWorker, lastStage: () => errCtx.stage };
 })();

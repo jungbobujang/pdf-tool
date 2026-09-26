@@ -103,6 +103,14 @@ app.get('/vendor/fonts/Pretendard-Bold.otf', (req, res) => {
 });
 app.use('/vendor/pretendard/woff2', express.static(nm('pretendard', 'dist', 'web', 'variable', 'woff2'), { maxAge: '7d' }));
 
+// CMYK JPEG 등을 성분 값으로 풀 JS 디코더 (용량 줄이기에서 필요할 때만 불러온다)
+const jpegDecoder = require('./lib/jpeg-decoder');
+app.get('/vendor/jpeg-decoder.js', (req, res) => {
+  res.set('Cache-Control', 'public, max-age=86400');
+  res.type('application/javascript');
+  res.send(jpegDecoder.browserScript());
+});
+
 app.get('/vendor/:file', (req, res) => {
   const file = VENDOR[req.params.file];
   if (!file) return res.status(404).send('Not found');

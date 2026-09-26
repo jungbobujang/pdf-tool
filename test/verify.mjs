@@ -486,6 +486,103 @@ await step('사진 줄이기: 5MB JPG → 1MB 이하', async () => {
     `${MBf(big.length)} → ${MBf(r.bytes.length)} (${r.w}×${r.h}, 화질 ${r.quality})`);
 });
 
+// 12. 한글(HWP) 등에서 나오는 이미지 형식 · 망가진 사진 · PDF/A
+const jpegjs = require('jpeg-js');
+const { colorSamplesPdf } = await import('./node-codec.mjs');
+{
+  const samplePdf = (broken) => colorSamplesPdf({ broken });
+  const pageImage = (doc, i) => {
+    const res = doc.getPage(i).node.Resources();
+    const xo = res.lookup(PDFLib.PDFName.of('XObject'), PDFLib.PDFDict);
+    const [, ref] = xo.entries()[0];
+    return doc.context.lookup(ref);
+  };
+  const meanRGB = (bytes) => {
+    const d = jpegjs.decode(Buffer.from(bytes), { useTArray: true, formatAsRGBA: true });
+    const s = [0, 0, 0];
+    for (let i = 0; i < d.data.length; i += 4) for (let c = 0; c < 3; c++) s[c] += d.data[i + c];
+    const n = d.data.length / 4;
+    return { mean: s.map((x) => x / n), w: d.width, h: d.height };
+  };
+
+  await step('HWP 이미지 형식: 줄인 결과가 열리고 색이 맞음', async () => {
+    const { bytes, samples } = await samplePdf(false);
+    const r = await Compress.compressPdf(bytes, 1000, nodeCodec); // 아주 작은 목표 → 모든 사진을 다시 만들게
+    const back = await PDFDocument.load(r.bytes);
+    let pdfjsOk = true;
+    if (pdfjs) {
+      const d = await pdfjs.getDocument({ data: r.bytes.slice(), isEvalSupported: false, verbosity: 0 }).promise;
+      pdfjsOk = d.numPages === samples.length;
+      await d.destroy();
+    }
+    const rows2 = [];
+    let ok = back.getPageCount() === samples.length && pdfjsOk;
+    samples.forEach((smp, i) => {
+      const st = pageImage(back, i);
+      const f = String(st.dict.get(PDFLib.PDFName.of('Filter')));
+      if (f !== '/DCTDecode' || smp.dct && String(st.dict.get(PDFLib.PDFName.of('ColorSpace'))) !== '/DeviceRGB') {
+        rows2.push(`${smp.name}: 원본 유지`);
+        if (!smp.mayKeep) ok = false;
+        return;
+      }
+      const m = meanRGB(st.getContents());
+      const diff = Math.max(...m.mean.map((v, c) => Math.abs(v - smp.expect[c])));
+      if (diff > 12) ok = false;
+      let extra = '';
+      if (smp.smask) {
+        const sm = back.context.lookup(st.dict.get(PDFLib.PDFName.of('SMask')));
+        const sw = sm.dict.get(PDFLib.PDFName.of('Width')).asNumber();
+        const sh = sm.dict.get(PDFLib.PDFName.of('Height')).asNumber();
+        extra = ` SMask ${sw}×${sh}`;
+        if (sw !== m.w || sh !== m.h) ok = false;
+      }
+      rows2.push(`${smp.name} Δ${diff.toFixed(1)}${extra}`);
+    });
+    check('HWP 이미지 형식: 줄인 결과가 열리고 색이 맞음', ok && r.changed >= samples.length - 1,
+      `${(bytes.length / 1024).toFixed(0)}KB → ${(r.size / 1024).toFixed(0)}KB, 바꾼 사진 ${r.changed}/${samples.length} · ${rows2.join(' / ')} (평균 색 차이 12 이하)`);
+  });
+
+  await step('사진 하나가 망가져도 파일 전체는 성공', async () => {
+    const { bytes } = await samplePdf(true);
+    const r = await Compress.compressPdf(bytes, 1000, nodeCodec);
+    const back = await PDFDocument.load(r.bytes);
+    check('사진 하나가 망가져도 파일 전체는 성공', back.getPageCount() === 13 && r.reasons['읽지 못한 사진(손상)'] === 1 && r.changed >= 10,
+      `${r.status} · 바꾼 사진 ${r.changed}장 · 건너뜀 ${JSON.stringify(r.reasons)}`);
+  });
+
+  await step('PDF/A-1 문서도 줄이기 (150쪽 실패 원인 재현)', async () => {
+    const doc = await PDFDocument.load(photos);
+    const xmp = '<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?><x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">' +
+      '<rdf:Description rdf:about="" xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/"><pdfaid:part>1</pdfaid:part><pdfaid:conformance>B</pdfaid:conformance></rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end="w"?>';
+    const meta = doc.context.register(doc.context.stream(new TextEncoder().encode(xmp), { Type: 'Metadata', Subtype: 'XML' }));
+    doc.catalog.set(PDFLib.PDFName.of('Metadata'), meta);
+    const pdfa = await doc.save({ useObjectStreams: false });
+    const before = await errMsg((async () => { const d = await PDFDocument.load(pdfa); await d.save({ useObjectStreams: true }); })());
+    const r = await Compress.compressPdf(pdfa, 12 * 1024 * 1024, nodeCodec);
+    const back = await PDFDocument.load(r.bytes);
+    check('PDF/A-1 문서도 줄이기 (150쪽 실패 원인 재현)', /PDF\/A-1 forbids/.test(before || '') && r.status === 'done' && back.getPageCount() === 20,
+      `예전 오류 "${(before || '').slice(0, 60)}…" → 이제 ${MBf(pdfa.length)} → ${MBf(r.size)} (${r.status})`);
+  });
+
+  await step('목표에 가깝게: 결과가 목표의 85~100%', async () => {
+    const out = [];
+    let ok = true;
+    for (const mb of [20, 10, 6]) {
+      const r = await Compress.compressPdf(photos, mb * 1024 * 1024, nodeCodec);
+      const ratio = r.size / (mb * 1024 * 1024);
+      out.push(`목표 ${mb}MB → ${MBf(r.size)} (${Math.round(ratio * 100)}%, 화질 ${r.quality}, 줄인 사진 ${r.k}/${r.images})`);
+      if (!(ratio >= 0.85 && ratio <= 1)) ok = false;
+    }
+    const keep = await Compress.compressPdf(photos, 40 * 1024 * 1024, nodeCodec);
+    check('목표에 가깝게: 결과가 목표의 85~100%', ok && keep.stage === 1, `${out.join(' / ')} · 목표 40MB는 원본 그대로 1단계`);
+  });
+
+  await step('막대 한 칸 크기', async () => {
+    const s = [0.4, 3, 7, 30, 120, 500].map((mb) => Compress.niceStep(mb * 1024 * 1024));
+    check('막대 한 칸 크기', s.join(',') === '0.01,0.05,0.1,0.5,1,1', `폭 0.4/3/7/30/120/500MB → 한 칸 ${s.join(' / ')}MB`);
+  });
+}
+
 // ── 결과 표 ─────────────────────────────────────────
 const width = (s) => [...s].reduce((n, ch) => n + (/[ᄀ-ᇿ㄰-㆏가-힣]/.test(ch) ? 2 : 1), 0);
 const padR = (s, n) => s + ' '.repeat(Math.max(0, n - width(s)));

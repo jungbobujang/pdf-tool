@@ -519,7 +519,7 @@
         <ul class="cmp-files" id="cmp-files" aria-label="넣은 파일"></ul>
         <div class="card cmp-target" id="cmp-target" hidden>
           <div class="cmp-target-head">
-            <h2>목표 용량</h2>
+            <h2>목표 용량 <small class="cmp-step" id="cmp-step"></small></h2>
             <label class="cmp-num"><input type="text" id="cmp-mb" inputmode="decimal" autocomplete="off" aria-label="목표 용량(MB)"><span>MB 이하로</span></label>
           </div>
           <fieldset class="seg" id="cmp-basis" hidden>
@@ -537,6 +537,7 @@
             <div class="vol-ticks" id="cmp-ticks"></div>
             <div class="vol-scale"><span id="cmp-min"></span><span class="vol-q" id="cmp-quality"></span><span id="cmp-max"></span></div>
           </div>
+          <p class="cmp-msg" id="cmp-msg" role="status" aria-live="polite"></p>
           <p class="sub" id="cmp-note"></p>
           <div class="btn-row end"><button class="btn primary lg" id="cmp-go">줄이기</button></div>
         </div>

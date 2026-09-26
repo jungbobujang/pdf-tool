@@ -13,6 +13,7 @@ self.onmessage = async (e) => {
       : await Compress.compressPdf(bytes, target, codec, { onProgress });
     self.postMessage({ id, result: r }, r.bytes ? [r.bytes.buffer] : []);
   } catch (err) {
-    self.postMessage({ id, error: { name: err && err.name, message: String((err && err.message) || err) } });
+    const stack = String((err && err.stack) || '').split('\n').slice(0, 8).join('\n');
+    self.postMessage({ id, error: { name: err && err.name, message: String((err && err.message) || err), stack } });
   }
 };

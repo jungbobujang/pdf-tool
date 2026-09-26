@@ -1856,3 +1856,28 @@ kbd {
 
 /* 파일 넣기 · 도구 6개 (400px: 아이콘 + 이름 2칸) */
 .panel#panel-compress, .panel#panel-decorate { max-width: 1180px; }
+
+/* ── 용량 줄이기: 한 칸 · 안내 · 잠김 ── */
+.cmp-step { margin-left: 6px; font-size: 12.5px; font-weight: 700; color: var(--muted); }
+.cmp-msg { margin: 0; font-size: 13.5px; font-weight: 700; }
+.cmp-msg:empty { display: none; }
+.cmp-msg.same { color: var(--ok); }
+.cmp-msg.low { color: var(--warn-ink); background: var(--warn-bg); border: 1px solid var(--warn-line); padding: 9px 12px; border-radius: 10px; }
+.cmp-detail { display: block; margin-top: 4px; font-size: 13.5px; font-weight: 700; color: var(--muted); }
+.vol.locked { opacity: .45; filter: grayscale(.6); }
+.vol.locked .vol-track, .vol.locked .vol-thumb, .vol.locked .vol-tick { cursor: not-allowed; pointer-events: none; }
+.vol-thumb.grabbing { cursor: grabbing; transform: scale(1.08); }
+.cf-state { white-space: normal; }
+
+/* 오류 알림의 [오류 내용 복사] */
+.toast-copy {
+  margin-top: 8px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--ground);
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+.toast-copy:hover { border-color: var(--accent); color: var(--accent); }

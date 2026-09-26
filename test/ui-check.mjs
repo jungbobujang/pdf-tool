@@ -310,7 +310,8 @@ try {
   const badLoc = page.locator('.toast.error', { hasText: '가짜.pdf' });
   await badLoc.waitFor();
   const badToast = await badLoc.first().innerText();
-  check('손상/가짜 PDF는 알림으로 안내', /PDF 파일이 아니에요/.test(badToast), badToast.replace(/\s+/g, ' ').trim());
+  const badCopy = await badLoc.first().locator('.toast-copy').count();
+  check('손상/가짜 PDF는 알림으로 안내 (+[오류 내용 복사])', /PDF 파일이 아니에요/.test(badToast) && badCopy === 1, badToast.replace(/\s+/g, ' ').trim());
 
   // 잠긴 PDF → 노란 안내줄
   await page.setInputFiles('#edit-input', [fileEnc]);
@@ -698,7 +699,7 @@ try {
   // ── 11. 저장 두 가지 · 설정하고 저장 · 나눠 저장 · PDF → 사진 막대 · 용량 줄이기 ──
   {
     const fileMany = await writePdf('수업자료.pdf', await samplePdf(30, 'P'));
-    const sctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, acceptDownloads: true, colorScheme: 'light' });
+    const sctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, acceptDownloads: true, colorScheme: 'light', permissions: ['clipboard-read', 'clipboard-write'] });
     const s = await sctx.newPage();
     const serr = [];
     watch(s, serr);
@@ -871,11 +872,44 @@ try {
     await s.setInputFiles('#cmp-input', [heavyFile]);
     await s.waitForSelector('#cmp-target:not([hidden])', { timeout: 60000 });
     const ticks = await s.$$eval('#cmp-ticks .vol-tick', (els) => els.map((e) => Number(e.dataset.mb)));
+    const vnow = () => s.$eval('#cmp-thumb', (e) => Number(e.getAttribute('aria-valuenow')));
+    const firstVal = await s.$eval('#cmp-mb', (e) => e.value);
+    const stepText = await s.textContent('#cmp-step');
     await s.fill('#cmp-mb', '6');
     const thumbNow = await s.$eval('#cmp-thumb', (e) => e.getAttribute('aria-valuenow'));
     await s.focus('#cmp-thumb');
     await s.keyboard.press('ArrowRight');
     const afterKey = await s.$eval('#cmp-mb', (e) => e.value);
+    // 실제 마우스: 손잡이를 눌러 오른쪽으로 끌기
+    const tb = await s.locator('#cmp-thumb').boundingBox();
+    const before = await vnow();
+    await s.mouse.move(tb.x + tb.width / 2, tb.y + tb.height / 2);
+    await s.mouse.down();
+    await s.mouse.move(tb.x + tb.width / 2 + 60, tb.y + tb.height / 2, { steps: 4 });
+    await s.mouse.move(tb.x + tb.width / 2 + 140, tb.y + tb.height / 2 + 6, { steps: 6 });
+    await s.mouse.up();
+    const afterDrag = await vnow();
+    const dragInput = await s.$eval('#cmp-mb', (e) => e.value);
+    // 트랙 클릭(25% 지점)
+    const tr = await s.locator('#cmp-track').boundingBox();
+    await s.mouse.click(tr.x + tr.width * 0.25, tr.y + tr.height / 2);
+    const afterClick = await vnow();
+    const rg = await s.evaluate(() => window.__pdfWorkshop.compress().range);
+    const expectClick = (rg.min + (rg.max - rg.min) * 0.25) / 1024 / 1024;
+    // 터치로 끌기
+    const cdpT = await sctx.newCDPSession(s);
+    const tb2 = await s.locator('#cmp-thumb').boundingBox();
+    const tp = { x: tb2.x + tb2.width / 2, y: tb2.y + tb2.height / 2 };
+    const beforeTouch = await vnow();
+    await cdpT.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [tp] });
+    for (let i = 1; i <= 6; i++) await cdpT.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: tp.x + i * 20, y: tp.y }] });
+    await cdpT.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    const afterTouch = await vnow();
+    const onStep = (v) => Math.abs(v / 0.2 - Math.round(v / 0.2)) < 1e-6;
+    check('목표 막대: 한 칸 0.2MB · 마우스 끌기 · 트랙 클릭 · 터치 끌기(실제 포인터)', stepText === '한 칸 0.2MB' && firstVal === '10.0' &&
+      afterDrag > before + 1 && onStep(afterDrag) && String(afterDrag.toFixed(1)) === dragInput &&
+      Math.abs(afterClick - expectClick) <= 0.2 && afterTouch > beforeTouch + 0.5,
+    `${stepText}, 처음 ${firstVal} · 끌기 ${before}→${afterDrag}MB · 트랙 25% → ${afterClick}MB(기대 ${expectClick.toFixed(2)}) · 터치 ${beforeTouch}→${afterTouch}MB`);
     await s.click('.vol-tick[data-mb="10"]');
     const tickVal = await s.$eval('#cmp-mb', (e) => e.value);
     const t0 = Date.now();
@@ -886,17 +920,27 @@ try {
     const summary = (await s.textContent('#cmp-summary')).trim();
     const heavyMB = heavySize / 1024 / 1024;
     const expectTicks = [10, 20, 5, 2].filter((v) => v < heavyMB);
-    check('용량 줄이기: 슬라이더 ↔ 숫자 입력 · 눈금 칩은 원래보다 작은 것만', thumbNow === '6' && afterKey === '6.5' && tickVal === '10' &&
+    check('용량 줄이기: 슬라이더 ↔ 숫자 입력 · 눈금 칩은 원래보다 작은 것만', thumbNow === '6.0' && afterKey === '6.2' && tickVal === '10.0' &&
       ticks.join(',') === expectTicks.join(',') && ticks.every((v) => v < heavyMB),
     `원래 ${heavyMB.toFixed(1)}MB → 칩 ${ticks.join(', ')}MB · 숫자 6 → 막대 ${thumbNow} · → 키 ${afterKey} · 칩 → ${tickVal}`);
     const res = st2.files[0];
-    check('용량 줄이기: 목표 10MB 결과 (글자 남김)', res.result <= 10 * 1024 * 1024 && /✓ 목표\(10MB\) 이하/.test(summary) && res.stage === 2,
-      `${summary} · ${res.stage}단계 · ${(took / 1000).toFixed(1)}초 · Worker ${await s.evaluate(() => window.__pdfWorkshop.worker)}`);
-    uiMeasures.push(`현장사진 PDF(8장) ${heavyMB.toFixed(1)}MB → 목표 10MB: ${(res.result / 1024 / 1024).toFixed(1)}MB · ${(took / 1000).toFixed(1)}초 · ${res.stage}단계 (브라우저)`);
+    const ratio = res.result / (10 * 1024 * 1024);
+    check('용량 줄이기: 목표 10MB에 가깝게(85~100%) · 목표 · 결과 · 화질 표시', ratio <= 1 && ratio >= 0.85 && /✓ 목표\(10\.0MB\) 이하/.test(summary) && /목표 10\.0MB · 결과 [\d.]+MB · 화질 /.test(summary) && res.stage === 2,
+      `${summary.replace(/\s+/g, ' ')} · ${res.stage}단계 · ${(took / 1000).toFixed(1)}초 · Worker ${await s.evaluate(() => window.__pdfWorkshop.worker)}`);
+    uiMeasures.push(`현장사진 PDF(8장) ${heavyMB.toFixed(1)}MB → 목표 10MB: ${(res.result / 1024 / 1024).toFixed(1)}MB(${Math.round(ratio * 100)}%) · ${(took / 1000).toFixed(1)}초 · ${res.stage}단계 (브라우저)`);
+
+    // Worker가 죽으면 메인 스레드에서 다시
+    await s.evaluate(() => { self.__pdfTestFailWorker = true; });
+    await s.fill('#cmp-mb', '8');
+    await s.click('#cmp-go');
+    await s.waitForSelector('#cmp-result:not([hidden])', { timeout: 120000 });
+    const fb = await s.evaluate(() => ({ r: window.__pdfWorkshop.compress().files[0].result, stage: window.__pdfWorkshop.lastStage(), errs: document.querySelectorAll('.toast.error').length }));
+    check('Worker가 멈추면 메인 스레드에서 다시 해서 끝냄', fb.r && fb.r <= 8 * 1024 * 1024 && fb.errs === 0,
+      `결과 ${(fb.r / 1024 / 1024).toFixed(1)}MB · 오류 알림 ${fb.errs}개`);
     [dlS] = await Promise.all([s.waitForEvent('download'), s.click('#cmp-save')]);
     const shrunk = fs.readFileSync(await dlS.path());
     const shrunkDoc = await PDFDocument.load(shrunk);
-    check('줄인 파일 저장', dlS.suggestedFilename() === '현장사진_줄임.pdf' && shrunkDoc.getPageCount() === 8 && shrunk.length <= 10 * 1024 * 1024,
+    check('줄인 파일 저장', dlS.suggestedFilename() === '현장사진_줄임.pdf' && shrunkDoc.getPageCount() === 8 && shrunk.length <= 8 * 1024 * 1024,
       `${dlS.suggestedFilename()} · ${shrunkDoc.getPageCount()}쪽 · ${(shrunk.length / 1024 / 1024).toFixed(1)}MB`);
     // 비교해 보기
     await s.click('#cmp-compare');
@@ -904,11 +948,130 @@ try {
     const cmpOk = await s.evaluate(() => document.getElementById('compare-dialog').open);
     await s.keyboard.press('Escape');
     check('비교해 보기 (원본 · 결과 나란히)', cmpOk, '두 칸에 같은 쪽을 그림');
+
+    // 작은 파일(0.5MB): 한 칸 0.01MB, 두 자리까지
+    {
+      const small = await PDFDocument.create();
+      const sf = await small.embedFont(StandardFonts.Helvetica);
+      const img = await small.embedJpg(photoJpeg(680, 520, 11));
+      const pg = small.addPage([595, 842]);
+      pg.drawImage(img, { x: 40, y: 300, width: 515, height: 394 });
+      pg.drawText('Small photo', { x: 40, y: 760, size: 24, font: sf });
+      const smallFile = await writePdf('작은사진.pdf', small);
+      await s.click('#cmp-files .cf-x');
+      await s.setInputFiles('#cmp-input', [smallFile]);
+      await s.waitForSelector('#cmp-target:not([hidden])', { timeout: 60000 });
+      const sm = await s.evaluate(() => ({ step: document.getElementById('cmp-step').textContent, bubble: document.getElementById('cmp-bubble').textContent, input: document.getElementById('cmp-mb').value, locked: document.getElementById('cmp-vol').classList.contains('locked') }));
+      await s.focus('#cmp-thumb');
+      await s.keyboard.press('ArrowLeft');
+      const smLeft = await s.$eval('#cmp-mb', (e) => e.value);
+      await s.fill('#cmp-mb', '9');
+      const sameMsg = await s.evaluate(() => ({ msg: document.getElementById('cmp-msg').textContent, go: document.getElementById('cmp-go').disabled }));
+      const sizeMB = fs.statSync(smallFile).size / 1024 / 1024;
+      check('작은 파일: 한 칸 0.01MB · 두 자리 표시 · 원래 이상이면 "원본 그대로"', sm.step === '한 칸 0.01MB' && /^\d\.\d\dMB$/.test(sm.bubble) && /^\d\.\d\d$/.test(sm.input) && !sm.locked &&
+        Math.abs(Number(sm.input) - Number(smLeft) - 0.01) < 1e-6 && /원본 그대로면 돼요/.test(sameMsg.msg) && sameMsg.go,
+      `${sizeMB.toFixed(2)}MB 파일 · ${sm.step} · 막대 ${sm.bubble} · ← 키 ${sm.input}→${smLeft} · 9MB 입력: "${sameMsg.msg}" [줄이기] 꺼짐`);
+      await s.click('#cmp-files .cf-x');
+    }
+
+    // 줄일 여지 5% 미만: 막대 잠김 + 안내, 3단계는 숫자로
+    {
+      const textOnly = await PDFDocument.create();
+      const tf = await textOnly.embedFont(StandardFonts.Helvetica);
+      for (let i = 0; i < 40; i++) {
+        const pg = textOnly.addPage([595, 842]);
+        for (let k = 0; k < 40; k++) pg.drawText(`Line ${k} of page ${i}: The quick brown fox jumps over the lazy dog ${i * k}`, { x: 30, y: 800 - k * 19, size: 10, font: tf });
+      }
+      const textFile = await writePdf('글자만.pdf', textOnly);
+      await s.setInputFiles('#cmp-input', [textFile]);
+      await s.waitForSelector('#cmp-target:not([hidden])', { timeout: 60000 });
+      const lk = await s.evaluate(() => ({ locked: document.getElementById('cmp-vol').classList.contains('locked'), msg: document.getElementById('cmp-msg').textContent, tab: document.getElementById('cmp-thumb').tabIndex }));
+      const v0 = await s.$eval('#cmp-mb', (e) => e.value);
+      const tr2 = await s.locator('#cmp-track').boundingBox();
+      await s.mouse.click(tr2.x + tr2.width * 0.1, tr2.y + tr2.height / 2, { force: true }).catch(() => {});
+      const v1 = await s.$eval('#cmp-mb', (e) => e.value);
+      await s.fill('#cmp-mb', '0.01');
+      const low = await s.evaluate(() => ({ msg: document.getElementById('cmp-msg').textContent, go: document.getElementById('cmp-go').disabled }));
+      check('여지 5% 미만이면 막대 잠김 + 안내, 숫자로 3단계', lk.locked && lk.tab === -1 && /더 줄일 여지가 거의 없어요/.test(lk.msg) && v0 === v1 &&
+        /최소 약 .*3단계/.test(low.msg) && !low.go,
+      `잠김 ${lk.locked} · "${lk.msg.slice(0, 40)}…" · 트랙 클릭해도 ${v0} 그대로 · 0.01 입력: [줄이기] 켜짐`);
+      await s.click('#cmp-files .cf-x');
+    }
+
+    // 오류 알림에 [오류 내용 복사] (파일 이름은 넣지 않음)
+    {
+      await s.evaluate(() => document.getElementById('toasts').replaceChildren());
+      await s.setInputFiles('#cmp-input', [notPdf]);
+      await s.waitForSelector('.toast.error .toast-copy', { timeout: 20000 });
+      await s.click('.toast.error .toast-copy');
+      await s.waitForTimeout(300);
+      const clip = await s.evaluate(() => navigator.clipboard.readText());
+      const btnText = await s.textContent('.toast.error .toast-copy');
+      check('오류 알림: [오류 내용 복사] · 파일 이름 · 내용 빠짐', btnText === '복사했어요 ✓' && /\[PDF 작업실 오류 보고\]/.test(clip) && /오류: UserError/.test(clip) && /브라우저: /.test(clip) && !/가짜/.test(clip) && !/this is not a pdf/.test(clip),
+        clip.split('\n').slice(0, 6).join(' / ').slice(0, 220));
+      await s.click('#cmp-files .cf-x');
+    }
     if (SCREENS) {
       await s.evaluate(() => window.scrollTo(0, 0));
       await s.waitForTimeout(300);
       await s.evaluate(() => document.getElementById('toasts').replaceChildren());
       await s.screenshot({ path: path.join(root, 'docs', 'screens', 'compress.png') });
+    }
+
+    if (SCREENS) {
+    // 색 변환 확인: HWP에서 흔한 이미지 형식을 줄이기 전·후 나란히 (docs/screens/compress-colors.png)
+    {
+      const { colorSamplesPdf } = await import('./node-codec.mjs');
+      const cs = await colorSamplesPdf();
+      const colorFile = path.join(tmp, '색샘플.pdf');
+      fs.writeFileSync(colorFile, cs.bytes);
+      const cctx = await browser.newContext({ viewport: { width: 1280, height: 1000 }, colorScheme: 'light', acceptDownloads: true, deviceScaleFactor: 1 });
+      const c = await cctx.newPage();
+      await c.goto(`${BASE}/#compress`, { waitUntil: 'networkidle' });
+      await c.setInputFiles('#cmp-input', [colorFile]);
+      await c.waitForSelector('#cmp-target:not([hidden])', { timeout: 60000 });
+      await c.fill('#cmp-mb', '0.01'); // 가장 세게 → 모든 사진을 다시 만든다
+      await c.click('#cmp-go');
+      await c.waitForSelector('#confirm-dialog[open]', { timeout: 60000 });
+      await c.click('#cf-no'); // 3단계는 하지 않고 여기까지
+      await c.waitForSelector('#cmp-result:not([hidden])', { timeout: 60000 });
+      const [dlc] = await Promise.all([c.waitForEvent('download'), c.click('#cmp-save')]);
+      const outBytes = fs.readFileSync(await dlc.path());
+      await c.evaluate(async ({ a, b, names }) => {
+        const bin = (s) => Uint8Array.from(atob(s), (x) => x.charCodeAt(0));
+        const [da, db] = await Promise.all([a, b].map((x) => pdfjsLib.getDocument({ data: bin(x) }).promise));
+        const wrap = document.createElement('div');
+        wrap.id = 'color-sheet';
+        wrap.style.cssText = 'position:fixed;inset:0;z-index:9999;background:#EEF1F6;padding:18px 22px;font:13px/1.4 "Pretendard Variable",sans-serif;color:#172033;overflow:hidden';
+        wrap.innerHTML = '<h2 style="margin:0 0 4px;font-size:18px">용량 줄이기 색 확인 — 왼쪽 원본, 오른쪽 줄인 결과(pdf.js로 그림)</h2><p style="margin:0 0 12px;color:#667085">가장 세게 줄인 상태(크기 0.35배 · 품질 0.4). 결과는 모두 DeviceRGB JPEG로 다시 넣음.</p>';
+        const grid = document.createElement('div');
+        grid.style.cssText = 'display:grid;grid-template-columns:repeat(4,1fr);gap:10px 14px';
+        wrap.append(grid);
+        for (let i = 0; i < names.length; i++) {
+          const cell = document.createElement('div');
+          cell.style.cssText = 'background:#fff;border-radius:10px;padding:8px;box-shadow:0 1px 3px rgba(0,0,0,.08)';
+          cell.innerHTML = `<b style="display:block;margin-bottom:6px">${names[i]}</b>`;
+          const row = document.createElement('div');
+          row.style.cssText = 'display:flex;gap:6px';
+          for (const d of [da, db]) {
+            const pg = await d.getPage(i + 1);
+            const vp = pg.getViewport({ scale: 0.55 });
+            const cv = document.createElement('canvas');
+            cv.width = vp.width; cv.height = vp.height;
+            await pg.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+            row.append(cv);
+          }
+          cell.append(row);
+          grid.append(cell);
+        }
+        document.body.append(wrap);
+      }, { a: Buffer.from(cs.bytes).toString('base64'), b: outBytes.toString('base64'), names: cs.samples.map((x) => x.name) });
+      await c.waitForTimeout(300);
+      await c.evaluate(() => document.getElementById('toasts').replaceChildren());
+      const sheetH = await c.evaluate(() => Math.ceil(document.querySelector('#color-sheet > div').getBoundingClientRect().bottom + 18));
+      await c.screenshot({ path: path.join(root, 'docs', 'screens', 'compress-colors.png'), clip: { x: 0, y: 0, width: 1280, height: Math.min(1000, sheetH) } });
+      await cctx.close();
+    }
     }
 
     // 설정하고 저장 창 스크린샷 (새 창: 기억한 설정 없이)
