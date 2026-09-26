@@ -14,6 +14,11 @@
     standardFontDataUrl: '/vendor/standard_fonts/',
   };
 
+  // 이 화면을 이루는 파일의 배포 버전(Worker 주소에도 붙인다)
+  const VER = (() => {
+    try { return new URL(document.currentScript.src).searchParams.get('v') || 'dev'; } catch { return 'dev'; }
+  })();
+
   const FILE_COLORS = ['#2f5bea', '#e8590c', '#2b8a3e', '#ae3ec9', '#0c8599', '#d6336c', '#e0a100', '#5c7cfa', '#868e96', '#12b886'];
   const MAX_CANVAS_PIXELS = 16000000; // iOS 사파리 한계(약 16.7MP) 안쪽
   const MAX_CANVAS_SIDE = 16000;
@@ -93,6 +98,13 @@
       h('button', { class: 'toast-x', type: 'button', 'aria-label': '알림 닫기', onclick: () => el.remove() }, icon('x')));
     toastBox.prepend(el);
     while (toastBox.children.length > 4) toastBox.lastChild.remove();
+    // 열린 대화상자보다 위에 보이도록 다시 띄운다(top layer는 나중에 띄운 것이 위).
+    if (toastBox.showPopover) {
+      try {
+        if (toastBox.matches(':popover-open')) toastBox.hidePopover();
+        toastBox.showPopover();
+      } catch { /* popover를 모르는 브라우저는 z-index로 */ }
+    }
     const life = ms || (kind === 'error' ? 9000 : 3500);
     setTimeout(() => el.remove(), life);
     return el;
@@ -120,6 +132,7 @@
     return { title: `${who}처리하지 못했어요.`, fix: `원인: ${msg.slice(0, 160)}` };
   }
   function showError(err, fileName) {
+    if (isAbort(err)) return toast('취소했어요.', '', 'info');
     console.warn(err);
     const { title, fix } = explain(err, fileName);
     toast(title, fix, 'error');
@@ -160,19 +173,41 @@
       document.dispatchEvent(new Event('busyend'));
     },
   };
-  async function withBusy(text, fn) {
+  /**
+   * 진행 표시를 띄우고 fn을 실행한다. cancellable이면 [취소] 버튼이 생기고 fn은 두 번째 인자로 AbortSignal을 받는다.
+   */
+  async function withBusy(text, fn, { cancellable = false } = {}) {
     busy.show(text);
+    let ctrl = null;
+    if (cancellable) {
+      ctrl = new AbortController();
+      busy.abort = ctrl;
+      busy.cancelBtn.hidden = false;
+      busy.cancelBtn.disabled = false;
+    }
     await breathe(true);
     try {
       return await fn((t, d, n) => {
+        if (ctrl && ctrl.signal.aborted) throw abortError();
         busy.set(t, d, n);
         return breathe();
-      });
+      }, ctrl ? ctrl.signal : undefined);
     } finally {
+      if (ctrl) { busy.cancelBtn.hidden = true; busy.abort = null; }
       busy.hide();
     }
   }
   const isBusy = () => busy.depth > 0;
+  const abortError = () => Object.assign(new Error('취소했어요.'), { name: 'AbortError' });
+  const isAbort = (e) => e && e.name === 'AbortError';
+  busy.cancelBtn = $('busy-cancel');
+  busy.abort = null;
+  busy.cancelBtn.addEventListener('click', () => {
+    if (!busy.abort) return;
+    busy.abort.abort();
+    busy.cancelBtn.disabled = true;
+    busy.text.textContent = '취소하는 중…';
+  });
 
   // ── 다운로드 ────────────────────────────────────────────────
   function download(data, name, type) {
@@ -470,7 +505,23 @@
     $('view-home').hidden = name !== 'home';
     $('view-work').hidden = name !== 'work';
     window.scrollTo({ top: 0 });
+    if (name === 'home') setHash('');
+    else setHash(activeTab);
     guideSync();
+  }
+
+  // 주소의 #도구 이름. 예전 이름(lock, number)은 새 도구로 이어 준다.
+  const TOOL_ALIAS = { lock: 'security', password: 'security', number: 'decorate', numbers: 'decorate', shrink: 'compress' };
+  function toolFromHash() {
+    const raw = decodeURIComponent(location.hash.slice(1)).toLowerCase();
+    const t = TOOL_ALIAS[raw] || raw;
+    return tabs.some((x) => x.dataset.tab === t) ? t : null;
+  }
+  function setHash(tool) {
+    try {
+      const want = tool ? `#${tool}` : '';
+      if (location.hash !== want) history.replaceState(null, '', tool ? want : location.pathname + location.search);
+    } catch { /* 주소를 못 바꿔도 동작한다 */ }
   }
 
   /** 작업 화면의 도구를 연다. 도구마다 넣은 파일과 상태는 그대로 남는다. */
@@ -488,6 +539,8 @@
       if (on && focus) t.focus();
     });
     document.querySelectorAll('.panel').forEach((p) => (p.hidden = p.id !== `panel-${name}`));
+    if (activeView === 'work') setHash(name);
+    try { localStorage.setItem('pdfws.tab', name); } catch { /* 무시 */ }
     guideSync();
   }
   tabs.forEach((t, i) => {
@@ -513,8 +566,9 @@
     else if (activeTab === 'edit') Edit.addFiles(files);
     else if (activeTab === 'img2pdf') Img.addFiles(files);
     else if (activeTab === 'pdf2img') P2I.load(files);
-    else if (activeTab === 'number') Num.load(files);
-    else toast('파일을 왼쪽이나 오른쪽 상자 위에 놓아 주세요.', '풀지, 걸지에 따라 놓는 곳이 달라요.', 'info');
+    else if (activeTab === 'decorate') Decor.load(files);
+    else if (activeTab === 'compress') Shrink.addFiles(files);
+    else toast('파일을 알맞은 상자 위에 놓아 주세요.', '풀기 · 걸기 · 제한 보기에 따라 놓는 곳이 달라요.', 'info');
   });
 
   // ═══════════════════════════════════════════════════════════
@@ -678,6 +732,7 @@
           h('button', { type: 'button', class: 'del-band', 'data-act': 'del', tabindex: '-1' }, '삭제 예정 · 되돌리기')),
         h('button', { type: 'button', class: 'sel-check', 'data-act': 'check', role: 'checkbox', 'aria-checked': 'false', 'aria-label': '이 쪽 선택', title: '선택 (Ctrl+클릭과 같아요)', tabindex: '-1' },
           icon('check')),
+        h('button', { type: 'button', class: 'cut-slot', 'data-act': 'cut', 'aria-pressed': 'false', 'aria-label': '이 쪽 다음에서 자르기', title: '여기서 자르기' }, icon('scissors', 'ic sm')),
         h('div', { class: 'page-src' }),
         h('div', { class: 'card-tools' },
           h('button', { type: 'button', 'data-act': 'rotl', title: '왼쪽으로 90° 회전', 'aria-label': '왼쪽 회전' }, icon('rotate-left')),
@@ -758,6 +813,7 @@
       $('edit-empty').hidden = has;
       updateCount();
       updateSelection();
+      updateSplit();
     }
 
     function updateCount() {
@@ -769,7 +825,7 @@
       }
       count.replaceChildren(...[h('b', null, String(kept)), '쪽 저장 예정', extra && h('small', null, extra)].filter(Boolean));
       const none = kept === 0;
-      ['edit-save', 'edit-save-range', 'edit-split', 'edit-odd', 'edit-even', 'edit-reverse'].forEach((id) => {
+      ['edit-save', 'edit-save-opts', 'edit-save-range', 'edit-split', 'edit-odd', 'edit-even', 'edit-reverse'].forEach((id) => {
         if (isBusy()) return;
         $(id).disabled = id === 'edit-reverse' ? pages.length < 2 : none;
       });
@@ -1004,6 +1060,9 @@
         record(`${no()} ${dir === 'left' ? '왼쪽' : '오른쪽'} 90°`, () => (p.rot = Core.rotate(p.rot, dir)));
       } else if (act === 'del') {
         record(p.deleted ? `${no()} 복구` : `${no()} 삭제`, () => (p.deleted = !p.deleted));
+      } else if (act === 'cut') {
+        if (split.cuts.has(p.key)) split.cuts.delete(p.key); else split.cuts.add(p.key);
+        updateSplit();
       } else if (act === 'rep') {
         Replace.open(p);
       }
@@ -1264,6 +1323,8 @@
         toggleDeleteSelected();
       } else if (e.key === 'Escape' && sel.size) {
         clearSelection();
+      } else if (e.key === 'Escape' && !splitPanel.hidden) {
+        openSplit(false);
       }
     });
 
@@ -1354,32 +1415,219 @@
       } catch (e) { showError(e); }
     }
 
-    async function saveSplit() {
+    // ── 설정하고 저장… ──
+    /** 미리보기용 쪽 목록 */
+    function makeSource(list) {
+      return {
+        count: list.length,
+        selected: list.map((p, i) => (sel.has(p.key) ? i : -1)).filter((i) => i >= 0),
+        async getPage(i) {
+          const p = list[i];
+          const pdf = await getPdfjs(srcById(p.srcId));
+          return { page: await pdf.getPage(p.index + 1), rot: p.rot };
+        },
+      };
+    }
+    const metaText = (kept) => `${kept.length}쪽 · 삭제 예정 ${pages.length - kept.length}쪽 제외`;
+
+    function openSaveDialog() {
       const kept = keptPages();
-      if (!kept.length) return toast('저장할 쪽이 없어요.', 'PDF를 먼저 넣어 주세요.');
-      try {
-        const blob = await withBusy('나누는 중…', async (progress) => {
-          const zip = new JSZip();
-          for (let i = 0; i < kept.length; i++) {
-            await progress(`${i + 1}번째 쪽 처리 중 (${i + 1}/${kept.length})`, i, kept.length);
-            const p = kept[i];
-            const src = srcById(p.srcId);
-            const doc = await Core.assemble(toList([p]));
-            zip.file(`${pad3(i + 1)}_${safeName(baseName(src.name))}_${p.index + 1}쪽.pdf`, await doc.save());
-          }
-          return zip.generateAsync({ type: 'blob', compression: 'STORE' }, (m) => {
-            busy.set(`zip으로 묶는 중 (${Math.round(m.percent)}%)`, m.percent, 100);
-          });
-        });
-        const one = sources.length === 1 ? baseName(sources[0].name) : `합본_${ymd()}`;
-        download(blob, `${safeName(one)}_쪽나눔.zip`, 'application/zip');
-      } catch (e) { showError(e); }
+      if (!kept.length) return toast('저장할 쪽이 없어요.', 'PDF를 넣거나 "삭제 예정" 쪽을 되살려 주세요.');
+      const source = makeSource(kept);
+      SaveDialog.open({
+        name: saveStem(kept, `합본_${ymd()}`),
+        meta: metaText(kept),
+        source,
+        run: async (o, name) => {
+          try {
+            const r = await withBusy('저장 준비 중…', async (progress, signal) => {
+              const doc = await Core.assemble(toList(kept), (d, n) => progress(`${d}번째 쪽 가져오는 중 (${d}/${n})`, d, n));
+              return applyOptions(doc, o, progress, signal, { selected: source.selected });
+            }, { cancellable: true });
+            download(r.bytes, `${name}.pdf`);
+            if (r.sizeNote && r.sizeNote.status !== 'done') {
+              toast(`목표보다 ${fmtMB(r.bytes.length - Number(o.size.mb) * MB)} 커요.`, `지금 ${fmtMB(r.bytes.length)}까지 줄였어요. 목표를 조금 올리거나 "용량 줄이기" 도구에서 비교해 보세요.`, 'info', 9000);
+            }
+          } catch (e) { showError(e); }
+        },
+      });
     }
 
+    // ── 나눠 저장 패널 ──
+    const splitPanel = $('split-panel');
+    const split = { mode: 'each', cuts: new Set() };
+    const splitNum = (id) => {
+      const v = $(id).value.trim();
+      return /^\d+$/.test(v) ? Number(v) : NaN;
+    };
+    function cutPositions() {
+      let count = 0;
+      const out = [];
+      for (const p of pages) {
+        if (!p.deleted) count++;
+        if (split.cuts.has(p.key) && count > 0) out.push(count);
+      }
+      return [...new Set(out)];
+    }
+    function splitPlan() {
+      const param = split.mode === 'every' ? splitNum('split-every') : split.mode === 'parts' ? splitNum('split-parts') : split.mode === 'cuts' ? cutPositions() : undefined;
+      return Core.splitGroups(pages, split.mode, param);
+    }
+    const splitStem = () => safeName(saveStem(keptPages(), `합본_${ymd()}`));
+
+    function openSplit(on) {
+      splitPanel.hidden = !on;
+      $('edit-split').setAttribute('aria-expanded', String(on));
+      grid.classList.toggle('cut-mode', on && split.mode === 'cuts');
+      if (on) {
+        updateSplit();
+        splitPanel.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
+    }
+    $('edit-split').addEventListener('click', () => openSplit(splitPanel.hidden));
+    $('split-close').addEventListener('click', () => { openSplit(false); $('edit-split').focus(); });
+    splitPanel.addEventListener('change', (e) => {
+      if (e.target.name === 'split-mode') {
+        split.mode = e.target.value;
+        grid.classList.toggle('cut-mode', split.mode === 'cuts');
+      }
+      updateSplit();
+    });
+    splitPanel.addEventListener('input', (e) => {
+      if (e.target.id === 'split-every' || e.target.id === 'split-parts') {
+        const mode = e.target.id === 'split-every' ? 'every' : 'parts';
+        splitPanel.querySelector(`input[name="split-mode"][value="${mode}"]`).checked = true;
+        split.mode = mode;
+        grid.classList.remove('cut-mode');
+      }
+      updateSplit();
+    });
+    splitPanel.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-every]');
+      if (!b) return;
+      e.preventDefault();
+      $('split-every').value = b.dataset.every;
+      splitPanel.querySelector('input[name="split-mode"][value="every"]').checked = true;
+      split.mode = 'every';
+      grid.classList.remove('cut-mode');
+      updateSplit();
+    });
+
+    function updateSplit() {
+      for (const [k, el] of cards) {
+        const on = split.cuts.has(k);
+        el.classList.toggle('cut-after', on);
+        const slot = el.querySelector('.cut-slot');
+        if (slot) slot.setAttribute('aria-pressed', on ? 'true' : 'false');
+      }
+      if (splitPanel.hidden) return;
+      let groups = [];
+      let err = null;
+      try { groups = splitPlan(); } catch (e) { err = e; }
+      splitPanel.querySelectorAll('.mode-card').forEach((c) => c.classList.toggle('on', c.querySelector('input[type="radio"]').checked));
+      const kept = keptPages().length;
+      // 미니 쪽 줄 (자르는 곳에 ✂)
+      const strip = $('split-strip');
+      const bits = [];
+      if (kept <= 300) {
+        groups.forEach((g, gi) => {
+          for (let i = 0; i < g.items.length; i++) bits.push(h('i', { class: gi % 2 ? 'alt' : null }));
+          if (gi < groups.length - 1) bits.push(h('b', null, '✂'));
+        });
+      } else {
+        groups.forEach((g, gi) => {
+          bits.push(h('i', { class: `wide${gi % 2 ? ' alt' : ''}`, style: `flex-grow:${g.items.length}` }));
+          if (gi < groups.length - 1 && groups.length < 60) bits.push(h('b', null, '✂'));
+        });
+      }
+      strip.replaceChildren(...bits);
+      const stem = splitStem();
+      $('split-files').replaceChildren(...groups.slice(0, 3).map((g, i) =>
+        h('li', null, h('span', { class: 'f-name' }, Core.splitFileName(stem, i, groups.length, g.from, g.to)), h('span', { class: 'f-meta' }, `${g.items.length}쪽`))));
+      const more = $('split-more');
+      more.classList.toggle('err', !!err);
+      if (err) more.textContent = `${err.title} ${err.fix || ''}`.trim();
+      else if (!groups.length) more.textContent = '저장할 쪽이 없어요.';
+      else if (groups.length > 3) more.textContent = `… 모두 ${groups.length}개 · 마지막 파일은 ${groups[groups.length - 1].items.length}쪽`;
+      else more.textContent = `모두 ${groups.length}개`;
+      const n = err ? 0 : groups.length;
+      $('split-save').textContent = n ? `${n}개 파일 저장` : '파일 저장';
+      $('split-save').disabled = isBusy() || !n;
+      $('split-save-opts').disabled = isBusy() || !n;
+      const cuts = cutPositions().length;
+      $('split-cut-hint').textContent = split.mode === 'cuts'
+        ? (cuts ? `✂ ${cuts}곳에서 잘라요. 카드 사이를 다시 누르면 빠져요.` : '카드 사이에 마우스를 올리고(휴대폰은 탭) ✂를 눌러요.')
+        : '카드 사이 ✂를 눌러 자를 곳을 정해요';
+    }
+
+    async function saveSplitFiles(o, stemIn) {
+      let groups;
+      try { groups = splitPlan(); } catch (e) { return showError(e); }
+      if (!groups.length) return toast('저장할 쪽이 없어요.', 'PDF를 넣거나 "삭제 예정" 쪽을 되살려 주세요.');
+      const stem = safeName(stemIn || splitStem());
+      const zipOn = $('split-zip').checked;
+      const withOpts = o && hasAnyOption(o);
+      try {
+        const files = await withBusy('나누는 중…', async (progress, signal) => {
+          const out = [];
+          for (let i = 0; i < groups.length; i++) {
+            const g = groups[i];
+            const label = groups.length > 1 ? `${i + 1}/${groups.length}번째 파일 · ` : '';
+            await progress(`${label}쪽 모으는 중`, i, groups.length);
+            const doc = await Core.assemble(toList(g.items));
+            let bytes;
+            if (withOpts) {
+              const selected = g.items.map((p, j) => (sel.has(p.key) ? j : -1)).filter((j) => j >= 0);
+              ({ bytes } = await applyOptions(doc, o, progress, signal, { label, selected }));
+            } else bytes = await doc.save();
+            out.push({ name: Core.splitFileName(stem, i, groups.length, g.from, g.to), bytes });
+          }
+          if (!zipOn || out.length === 1) return out;
+          const zip = new JSZip();
+          out.forEach((f) => zip.file(f.name, f.bytes));
+          const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' }, (m) => busy.set(`zip으로 묶는 중 (${Math.round(m.percent)}%)`, m.percent, 100));
+          return [{ name: `${stem}_나눔.zip`, blob }];
+        }, { cancellable: true });
+        if (files.length === 1) {
+          const f = files[0];
+          download(f.blob || f.bytes, f.name, f.blob ? 'application/zip' : 'application/pdf');
+        } else {
+          // zip 없이 여러 개: 브라우저가 막지 않도록 조금씩 간격을 둔다.
+          for (let i = 0; i < files.length; i++) {
+            download(files[i].bytes, files[i].name);
+            await new Promise((r) => setTimeout(r, 350));
+          }
+          toast(`${files.length}개 파일 저장을 시작했어요.`, '브라우저가 "여러 파일 다운로드"를 물으면 허용해 주세요.', 'ok');
+        }
+      } catch (e) { showError(e); }
+    }
+    $('split-save').addEventListener('click', () => saveSplitFiles(null));
+    function openSplitDialog() {
+      let groups;
+      try { groups = splitPlan(); } catch (e) { return showError(e); }
+      if (!groups.length) return toast('저장할 쪽이 없어요.', '');
+      const kept = keptPages();
+      SaveDialog.open({
+        title: `설정하고 나눠 저장 (${groups.length}개 파일)`,
+        name: splitStem(),
+        meta: `${metaText(kept)} · ${groups.length}개 파일 · 쪽번호는 파일마다 1부터`,
+        source: makeSource(groups[0].items),
+        run: (o, name) => saveSplitFiles(o, name),
+      });
+    }
+    $('split-save-opts').addEventListener('click', openSplitDialog);
+
     $('edit-save').addEventListener('click', saveAll);
+    $('edit-save-opts').addEventListener('click', openSaveDialog);
     $('edit-save-range').addEventListener('click', saveRange);
-    $('edit-split').addEventListener('click', saveSplit);
     wireDrop($('edit-drop'), $('edit-input'), (files) => addFiles(files));
+
+    /** Ctrl+S / Ctrl+Shift+S */
+    function shortcutSave(withOpts) {
+      if (!pages.length) return toast('저장할 쪽이 없어요.', 'PDF를 먼저 넣어 주세요.', 'info');
+      if (!splitPanel.hidden) return withOpts ? openSplitDialog() : saveSplitFiles(null);
+      return withOpts ? openSaveDialog() : saveAll();
+    }
 
     function reset() {
       sources.forEach((s) => s.pdfjs && s.pdfjs.then((d) => d.destroy()).catch(() => {}));
@@ -1395,13 +1643,15 @@
       sel.clear();
       anchor = null;
       selectMode = false;
+      split.cuts.clear();
+      openSplit(false);
       render();
     }
 
     render();
 
     return {
-      addFiles, addDecrypted, reset, render, removeSource,
+      addFiles, addDecrypted, reset, render, removeSource, shortcutSave,
       get sources() { return sources; },
       getPdfjs, srcById,
       replacePage(p, srcId, index) {
@@ -1546,6 +1796,1092 @@
 
     return { open, close };
   })();
+
+  // ═══════════════════════════════════════════════════════════
+  // 공용: 글꼴 · 쪽을 그림으로 · 서명/도장 보관 · 확인 창 · 용량 줄이기 실행기
+  // ═══════════════════════════════════════════════════════════
+  const MB = 1024 * 1024;
+  const fmtMB = (n) => {
+    const v = n / MB;
+    return v >= 10 ? `${v.toFixed(1).replace(/\.0$/, '')}MB` : v >= 0.1 ? `${v.toFixed(2).replace(/0$/, '')}MB` : `${Math.max(1, Math.round(n / 1024))}KB`;
+  };
+
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      const el = h('script', { src });
+      el.onload = resolve;
+      el.onerror = () => { el.remove(); reject(new Error(`${src}를 불러오지 못했어요`)); };
+      document.head.append(el);
+    });
+  }
+
+  // 한글 워터마크 글꼴: 워터마크를 쓸 때만 불러온다.
+  let fontkitLoading = null;
+  let fontBytes = null;
+  async function watermarkFont(doc) {
+    try {
+      if (!window.fontkit) {
+        if (!fontkitLoading) fontkitLoading = loadScript('/vendor/fontkit.min.js');
+        await fontkitLoading;
+      }
+      if (!fontBytes) {
+        const res = await fetch('/vendor/fonts/Pretendard-Bold.otf');
+        if (!res.ok) throw new Error(`글꼴 응답 ${res.status}`);
+        fontBytes = new Uint8Array(await res.arrayBuffer());
+      }
+    } catch (e) {
+      fontkitLoading = null;
+      console.warn(e);
+      throw new UserError('워터마크 글꼴을 불러오지 못했어요.', '인터넷 연결을 확인하고 다시 해 주세요. 글꼴은 이 서버에서만 받아요.');
+    }
+    return Core.embedFont(doc, window.fontkit, fontBytes);
+  }
+
+  function canvasToBytes(canvas, type, quality) {
+    return new Promise((resolve, reject) => canvas.toBlob(async (b) => {
+      if (!b) return reject(new UserError('메모리가 부족해 그림을 만들지 못했어요.', '선명도를 낮추거나 쪽 수를 줄여 주세요.'));
+      resolve(new Uint8Array(await b.arrayBuffer()));
+    }, type, quality));
+  }
+
+  /** 쪽을 dpi 해상도 캔버스로 그린다. 한 변 8192px, 1,670만 화소를 넘으면 낮춘다. */
+  async function renderPageCanvas(page, dpi, extraRot = 0, { white = true } = {}) {
+    const rotation = Core.normAngle(page.rotate + extraRot);
+    const vp1 = page.getViewport({ scale: 1, rotation });
+    let scale = dpi / 72;
+    const fit = Math.min(1, Math.sqrt(16.7e6 / (vp1.width * vp1.height * scale * scale)),
+      8192 / (vp1.width * scale), 8192 / (vp1.height * scale));
+    scale *= fit;
+    const vp = page.getViewport({ scale, rotation });
+    const c = makeCanvas(vp.width, vp.height);
+    const ctx = c.getContext('2d');
+    if (white) { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height); }
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    return { canvas: c, reduced: fit < 0.999, vp1 };
+  }
+
+  /** 모든 쪽을 JPEG 그림으로 바꾼 새 PDF (워터마크 굳히기, 용량 줄이기 3단계) */
+  async function rasterizePdf(bytes, { dpi, q }, progress, signal) {
+    const pdf = await openPdfjs(bytes);
+    try {
+      const out = await PDFDocument.create();
+      for (let i = 1; i <= pdf.numPages; i++) {
+        if (signal && signal.aborted) throw abortError();
+        if (progress) await progress(`쪽을 그림으로 바꾸는 중 (${i}/${pdf.numPages})`, i - 1, pdf.numPages);
+        const page = await pdf.getPage(i);
+        const { canvas, vp1 } = await renderPageCanvas(page, dpi);
+        const jpg = await canvasToBytes(canvas, 'image/jpeg', q);
+        canvas.width = canvas.height = 0;
+        page.cleanup();
+        const img = await out.embedJpg(jpg);
+        out.addPage([vp1.width, vp1.height]).drawImage(img, { x: 0, y: 0, width: vp1.width, height: vp1.height });
+      }
+      return await out.save({ useObjectStreams: true });
+    } finally {
+      pdf.destroy();
+    }
+  }
+
+  /** 3단계: 쪽을 사진으로 바꿔 목표에 맞춘다. 표본 쪽 몇 장으로 크기를 추정하며 dpi · 품질을 이진 탐색 */
+  async function rasterEstimate(bytes, signal) {
+    const pdf = await openPdfjs(bytes);
+    try {
+      const n = pdf.numPages;
+      const picks = [...new Set([1, Math.ceil(n / 2), n])];
+      const memo = new Map();
+      return {
+        pages: n,
+        async size(t) {
+          if (memo.has(t)) return memo.get(t);
+          const { dpi, q } = Compress.rasterParams(t);
+          let sum = 0;
+          for (const no of picks) {
+            if (signal && signal.aborted) throw abortError();
+            const page = await pdf.getPage(no);
+            const { canvas } = await renderPageCanvas(page, dpi);
+            sum += (await canvasToBytes(canvas, 'image/jpeg', q)).length;
+            canvas.width = canvas.height = 0;
+          }
+          const est = Math.round((sum / picks.length) * n * 1.02 + 3000 + n * 600);
+          memo.set(t, est);
+          return est;
+        },
+        close() { pdf.destroy(); },
+      };
+    } catch (e) { pdf.destroy(); throw e; }
+  }
+  async function rasterToTarget(bytes, target, progress, signal) {
+    const est = await rasterEstimate(bytes, signal);
+    let t;
+    try {
+      await progress('쪽을 그림으로 바꿀 크기를 찾는 중…', 0, 1);
+      t = (await Compress.searchT((x) => est.size(x), target * 0.95, { steps: 6, signal })).t;
+    } finally { est.close(); }
+    let out = await rasterizePdf(bytes, Compress.rasterParams(t), progress, signal);
+    if (out.length > target && t > 0) out = await rasterizePdf(bytes, Compress.rasterParams(Math.max(0, t - 0.2)), progress, signal);
+    return out;
+  }
+
+  // ── 확인 창 (브라우저 confirm 대신) ──
+  function confirmBox({ title, body, yes = '확인', no = '취소' }) {
+    const dlg = $('confirm-dialog');
+    $('cf-title').textContent = title;
+    $('cf-body').textContent = body;
+    $('cf-yes').textContent = yes;
+    $('cf-no').textContent = no;
+    return new Promise((resolve) => {
+      const done = () => {
+        dlg.removeEventListener('close', done);
+        resolve(dlg.returnValue === 'yes');
+      };
+      dlg.returnValue = '';
+      dlg.addEventListener('close', done);
+      dlg.showModal();
+      $('cf-yes').focus();
+    });
+  }
+
+  // ── 서명 · 도장 보관 (이 브라우저에만: IndexedDB, 안 되면 이번 방문 동안만) ──
+  const Stamps = (() => {
+    let items = null;
+    let dbp = null;
+    const listeners = new Set();
+    function db() {
+      if (!dbp) {
+        dbp = new Promise((resolve) => {
+          try {
+            const req = indexedDB.open('pdf-workshop', 1);
+            req.onupgradeneeded = () => req.result.createObjectStore('stamps', { keyPath: 'id' });
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => resolve(null);
+            req.onblocked = () => resolve(null);
+          } catch { resolve(null); }
+        });
+      }
+      return dbp;
+    }
+    const tx = async (mode, fn) => {
+      const d = await db();
+      if (!d) return null;
+      return new Promise((resolve) => {
+        try {
+          const t = d.transaction('stamps', mode);
+          const r = fn(t.objectStore('stamps'));
+          t.oncomplete = () => resolve(r && r.result);
+          t.onerror = () => resolve(null);
+        } catch { resolve(null); }
+      });
+    };
+    async function list() {
+      if (!items) {
+        const rows = (await tx('readonly', (st) => st.getAll())) || [];
+        items = rows.sort((a, b) => a.created - b.created).map((r) => ({ ...r, bytes: new Uint8Array(r.bytes) }));
+      }
+      return items;
+    }
+    const notify = () => listeners.forEach((f) => f());
+    async function add(item) {
+      await list();
+      const it = { id: `st${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, created: Date.now(), clearWhite: false, ...item };
+      items.push(it);
+      await tx('readwrite', (st) => st.put({ ...it, bytes: it.bytes.buffer.slice(0) }));
+      notify();
+      return it;
+    }
+    async function update(it) {
+      delete it.processed;
+      await tx('readwrite', (st) => st.put({ ...it, bytes: it.bytes.buffer.slice(0), processed: undefined, url: undefined }));
+      if (it.url) { URL.revokeObjectURL(it.url); delete it.url; }
+      notify();
+    }
+    async function remove(id) {
+      await list();
+      const it = items.find((x) => x.id === id);
+      if (it && it.url) URL.revokeObjectURL(it.url);
+      items = items.filter((x) => x.id !== id);
+      await tx('readwrite', (st) => st.delete(id));
+      notify();
+    }
+    /** 실제로 넣을 PNG (흰 배경 지우기 반영) */
+    async function pngOf(it) {
+      if (!it.clearWhite) return it.bytes;
+      if (!it.processed) it.processed = await whiteToAlpha(it.bytes);
+      return it.processed;
+    }
+    async function urlOf(it) {
+      if (!it.url) it.url = URL.createObjectURL(new Blob([await pngOf(it)], { type: 'image/png' }));
+      return it.url;
+    }
+    const byId = (id) => (items || []).find((x) => x.id === id);
+    return { list, add, update, remove, pngOf, urlOf, byId, onChange: (f) => listeners.add(f) };
+  })();
+
+  /** 밝은(흰) 부분을 투명하게. 스캔한 도장용 */
+  async function whiteToAlpha(bytes) {
+    const bmp = await createImageBitmap(new Blob([bytes]));
+    const c = makeCanvas(bmp.width, bmp.height);
+    const ctx = c.getContext('2d');
+    ctx.drawImage(bmp, 0, 0);
+    bmp.close && bmp.close();
+    const img = ctx.getImageData(0, 0, c.width, c.height);
+    const d = img.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const lum = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+      if (lum >= 235) d[i + 3] = 0;
+      else if (lum > 195) d[i + 3] = Math.round(d[i + 3] * ((235 - lum) / 40));
+    }
+    ctx.putImageData(img, 0, 0);
+    return canvasToBytes(c, 'image/png');
+  }
+
+  /** 올린 그림을 PNG로(너무 크면 긴 변 1200px로 줄여 보관) */
+  async function imageFileToPng(file) {
+    let bmp;
+    try {
+      bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
+    } catch {
+      throw new UserError(`"${file.name}"을(를) 그림으로 읽지 못했어요.`, 'PNG나 JPG 파일을 골라 주세요.');
+    }
+    const k = Math.min(1, 1200 / Math.max(bmp.width, bmp.height));
+    const c = makeCanvas(Math.round(bmp.width * k), Math.round(bmp.height * k));
+    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+    bmp.close && bmp.close();
+    return { bytes: await canvasToBytes(c, 'image/png'), w: c.width, h: c.height };
+  }
+
+  // ── 손으로 서명 그리기 ──
+  const SignPad = (() => {
+    const dlg = $('sign-dialog');
+    const canvas = $('sign-canvas');
+    let ctx = null;
+    let drawing = null;
+    let dirty = false;
+    let resolveFn = null;
+    const penW = () => Number(document.querySelector('input[name="sign-w"]:checked').value);
+    const penC = () => document.querySelector('input[name="sign-c"]:checked').value;
+    function setup() {
+      const r = canvas.getBoundingClientRect();
+      const dpr = Math.min(3, window.devicePixelRatio || 1);
+      canvas.width = Math.max(1, Math.round(r.width * dpr));
+      canvas.height = Math.max(1, Math.round(r.height * dpr));
+      ctx = canvas.getContext('2d');
+      ctx.scale(dpr, dpr);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      dirty = false;
+      dlg.classList.remove('dirty');
+    }
+    const pt = (e) => {
+      const r = canvas.getBoundingClientRect();
+      return { x: e.clientX - r.left, y: e.clientY - r.top };
+    };
+    canvas.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      canvas.setPointerCapture(e.pointerId);
+      const p = pt(e);
+      drawing = { last: p, mid: p };
+      ctx.strokeStyle = penC();
+      ctx.fillStyle = penC();
+      ctx.lineWidth = penW();
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, penW() / 2, 0, Math.PI * 2);
+      ctx.fill();
+      dirty = true;
+      dlg.classList.add('dirty');
+    });
+    canvas.addEventListener('pointermove', (e) => {
+      if (!drawing) return;
+      const p = pt(e);
+      const mid = { x: (drawing.last.x + p.x) / 2, y: (drawing.last.y + p.y) / 2 };
+      ctx.beginPath();
+      ctx.moveTo(drawing.mid.x, drawing.mid.y);
+      ctx.quadraticCurveTo(drawing.last.x, drawing.last.y, mid.x, mid.y);
+      ctx.stroke();
+      drawing = { last: p, mid };
+    });
+    const end = () => { drawing = null; };
+    canvas.addEventListener('pointerup', end);
+    canvas.addEventListener('pointercancel', end);
+    $('sign-clear').addEventListener('click', () => { ctx.clearRect(0, 0, canvas.width, canvas.height); dirty = false; dlg.classList.remove('dirty'); });
+    $('sign-cancel').addEventListener('click', () => dlg.close('cancel'));
+
+    /** 그린 부분만 잘라 투명 PNG로 */
+    async function trimmed() {
+      const w = canvas.width;
+      const hh = canvas.height;
+      const d = canvas.getContext('2d').getImageData(0, 0, w, hh).data;
+      let x0 = w; let y0 = hh; let x1 = -1; let y1 = -1;
+      for (let y = 0; y < hh; y++) {
+        for (let x = 0; x < w; x++) {
+          if (d[(y * w + x) * 4 + 3] > 8) {
+            if (x < x0) x0 = x; if (x > x1) x1 = x;
+            if (y < y0) y0 = y; if (y > y1) y1 = y;
+          }
+        }
+      }
+      if (x1 < 0) return null;
+      const pad = 6;
+      x0 = Math.max(0, x0 - pad); y0 = Math.max(0, y0 - pad);
+      x1 = Math.min(w - 1, x1 + pad); y1 = Math.min(hh - 1, y1 + pad);
+      const out = makeCanvas(x1 - x0 + 1, y1 - y0 + 1);
+      out.getContext('2d').drawImage(canvas, x0, y0, out.width, out.height, 0, 0, out.width, out.height);
+      return { bytes: await canvasToBytes(out, 'image/png'), w: out.width, h: out.height };
+    }
+    $('sign-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!dirty) { toast('서명판이 비어 있어요.', '마우스나 손가락으로 서명한 뒤 저장해 주세요.', 'info'); return; }
+      const r = await trimmed();
+      dlg.close('ok');
+      if (resolveFn) resolveFn(r);
+      resolveFn = null;
+    });
+    dlg.addEventListener('close', () => {
+      if (resolveFn) { resolveFn(null); resolveFn = null; }
+    });
+    function open() {
+      return new Promise((resolve) => {
+        resolveFn = resolve;
+        dlg.showModal();
+        requestAnimationFrame(setup);
+      });
+    }
+    return { open };
+  })();
+
+  // ── 용량 줄이기 실행기: Web Worker(OffscreenCanvas) 또는 메인 스레드 ──
+  const Squeeze = (() => {
+    const workerOk = typeof Worker !== 'undefined' && typeof OffscreenCanvas !== 'undefined' &&
+      typeof OffscreenCanvas.prototype.convertToBlob === 'function';
+    let worker = null;
+    let seq = 0;
+    const pending = new Map();
+    function getWorker() {
+      if (worker) return worker;
+      worker = new Worker(`compress-worker.js?v=${encodeURIComponent(VER)}`);
+      worker.onmessage = (e) => {
+        const { id, progress, result, error } = e.data;
+        const p = pending.get(id);
+        if (!p) return;
+        if (progress) { if (p.onProgress) p.onProgress(progress); return; }
+        pending.delete(id);
+        if (error) p.reject(Object.assign(new Error(error.message), { name: error.name || 'Error' }));
+        else p.resolve(result);
+      };
+      worker.onerror = (e) => {
+        e.preventDefault();
+        const err = new Error(`용량 줄이기 작업이 멈췄어요: ${e.message || '알 수 없는 오류'}`);
+        pending.forEach((p) => p.reject(err));
+        pending.clear();
+        worker = null;
+      };
+      return worker;
+    }
+    function kill() {
+      if (worker) worker.terminate();
+      worker = null;
+      pending.forEach((p) => p.reject(abortError()));
+      pending.clear();
+    }
+    let codec = null;
+    async function run(cmd, bytes, target, { onProgress, signal } = {}) {
+      if (signal && signal.aborted) throw abortError();
+      if (!workerOk) {
+        // 메인 스레드: 쪽(그림) 하나마다 쉬어 가며 화면이 멈추지 않게 한다.
+        codec = codec || Compress.browserCodec();
+        const opts = { signal, onProgress: async (p) => { if (onProgress) onProgress(p); await breathe(true); } };
+        return cmd === 'analyze' ? Compress.analyzePdf(bytes, codec, opts) : Compress.compressPdf(bytes, target, codec, opts);
+      }
+      const w = getWorker();
+      const id = ++seq;
+      return new Promise((resolve, reject) => {
+        pending.set(id, { resolve, reject, onProgress });
+        if (signal) signal.addEventListener('abort', kill, { once: true });
+        const copy = bytes.slice();
+        w.postMessage({ id, cmd, bytes: copy, target }, [copy.buffer]);
+      });
+    }
+    return {
+      inWorker: workerOk,
+      analyze: (bytes, opts) => run('analyze', bytes, 0, opts),
+      compress: (bytes, target, opts) => run('compress', bytes, target, opts),
+      codec: () => (codec = codec || Compress.browserCodec()),
+    };
+  })();
+
+  const STAGE_TEXT = { tidy: '정리 중', search: '알맞은 크기 찾는 중', images: '사진 줄이는 중', save: '확인 중', check: '확인 중' };
+  const stageText = (p) => (p.phase === 'images' ? `사진 줄이는 중 ${p.done + 1}/${p.total}` : STAGE_TEXT[p.phase] || '처리 중');
+
+  /**
+   * PDF를 목표 이하로. 2단계로 부족하면 3단계(쪽을 사진으로)를 물어본다.
+   * @returns {Promise<{bytes, result, rastered:boolean}>}
+   */
+  async function squeezePdf(bytes, target, progress, signal, { ask = true, label = '' } = {}) {
+    const r = await Squeeze.compress(bytes, target, {
+      signal,
+      onProgress: (p) => busy.set(`${label}${stageText(p)}…`),
+    });
+    if (r.status !== 'raster' || !ask) return { bytes: r.bytes, result: r, rastered: false };
+    // 3단계: 자동으로 하지 않고 먼저 묻는다.
+    busy.set(`${label}쪽을 사진으로 바꾸면 얼마나 줄어드는지 재는 중…`);
+    const est = await rasterEstimate(r.bytes, signal);
+    let low;
+    try { low = await est.size(0); } finally { est.close(); }
+    const ok = await confirmBox({
+      title: '사진만 줄여서는 목표에 못 미쳐요',
+      body: `지금 ${fmtMB(r.size)}까지 줄였어요. 쪽을 사진으로 바꾸면 약 ${fmtMB(low)}까지 줄일 수 있어요. 대신 글자를 선택하거나 검색할 수 없어요.`,
+      yes: '그래도 줄이기',
+      no: '여기까지만',
+    });
+    if (!ok) return { bytes: r.bytes, result: r, rastered: false };
+    const out = await rasterToTarget(r.bytes, target, progress, signal);
+    const best = out.length < r.bytes.length ? out : r.bytes;
+    return { bytes: best, result: { ...r, size: best.length, stage: 3, status: best.length <= target ? 'done' : 'raster' }, rastered: true };
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // 꾸미기 옵션 + 미리보기 (설정하고 저장 창과 꾸미기 도구가 함께 쓴다)
+  // ═══════════════════════════════════════════════════════════
+  const defaultOpts = () => ({
+    number: { on: false, position: 'bc', format: 'n', skipFirst: false },
+    watermark: { on: false, text: '내부 자료', layout: 'diagonal', strength: 'normal', color: 'red', flatten: false },
+    stamp: { on: false, ids: [], places: {}, target: 'last' },
+    lock: { on: false, pw: '', pw2: '', print: true, copy: false, edit: false },
+    size: { on: false, mb: '' },
+  });
+  const WM_RGB = { red: '#D62E2E', gray: '#595E6B', blue: '#3355FF' };
+  const ITEM_META = {
+    number: { title: '쪽번호', icon: 'hash', color: 'var(--c5)' },
+    watermark: { title: '워터마크', icon: 'brush', color: 'var(--c2)' },
+    stamp: { title: '서명 · 도장 이미지', icon: 'pen', color: 'var(--c3)' },
+    lock: { title: '암호 걸기', icon: 'lock', color: 'var(--c4)' },
+    size: { title: '용량 목표', icon: 'filedown', color: 'var(--c6)' },
+  };
+  const POS_TEXT = { bc: '아래 가운데', br: '아래 오른쪽', tr: '위 오른쪽' };
+  const FMT_TEXT = { n: '3', dash: '- 3 -', total: '3 / N' };
+  const LAYOUT_TEXT = { diagonal: '대각선', center: '가운데', tile: '바둑판' };
+  const STRENGTH_TEXT = { light: '연하게', normal: '보통', dark: '진하게' };
+  const COLOR_TEXT = { red: '빨강', gray: '회색', blue: '파랑' };
+  const TARGET_TEXT = { last: '마지막 쪽', all: '모든 쪽', selected: '고른 쪽' };
+  const defaultPlace = (k) => ({ x: Math.max(0.02, 0.7 - k * 0.06), y: Math.max(0.02, 0.8 - k * 0.06), w: 0.2 });
+
+  function seg(name, legend, options, value) {
+    return h('fieldset', { class: 'seg' }, h('legend', null, legend),
+      ...options.map(([v, label, extra]) => h('label', extra || null,
+        h('input', { type: 'radio', name, value: v, checked: v === value }), h('span', null, label))));
+  }
+
+  let editorSeq = 0;
+  /**
+   * items: ['number','watermark','stamp','lock','size'] 중 쓸 것
+   * 돌려주는 것: {getOpts, setOpts, setSource, validate, onChange, refresh}
+   */
+  function createDecorEditor({ itemsEl, previewEl, items, order = items }) {
+    const P = `de${++editorSeq}`;
+    let opts = defaultOpts();
+    let source = null; // {count, getPage(i), selected: [i…]}
+    let pageIdx = 0;
+    const listeners = new Set();
+    const changed = () => { listeners.forEach((f) => f(opts)); };
+    const bodies = {};
+    const sums = {};
+    const switches = {};
+
+    // ── 항목 머리(아이콘 · 이름 · 요약 · 스위치)와 본문 ──
+    function accItem(key, body) {
+      const m = ITEM_META[key];
+      const sw = h('input', { type: 'checkbox', role: 'switch', class: 'switch-input', 'data-toggle': key, 'aria-label': `${m.title} 켜기` });
+      const sum = h('small', { class: 'acc-sum' });
+      const sec = h('section', { class: 'acc', 'data-item': key, style: `--tc: ${m.color}` },
+        h('label', { class: 'acc-head' },
+          h('span', { class: 'acc-icon', 'aria-hidden': 'true' }, icon(m.icon)),
+          h('span', { class: 'acc-title' }, h('strong', null, m.title), sum),
+          sw, h('span', { class: 'switch', 'aria-hidden': 'true' })),
+        h('div', { class: 'acc-body', hidden: true }, ...body));
+      bodies[key] = sec.querySelector('.acc-body');
+      sums[key] = sum;
+      switches[key] = sw;
+      sw.addEventListener('change', () => {
+        opts[key].on = sw.checked;
+        syncItem(key);
+        if (key === 'size' && sw.checked) setTimeout(() => sec.querySelector('input[data-f="mb"]').focus(), 0);
+        if (key === 'stamp' && sw.checked) jumpToStampPage();
+        if (key === 'watermark' && sw.checked) setTimeout(() => sec.querySelector('input[data-f="text"]').select(), 0);
+        updatePreview();
+        changed();
+      });
+      return sec;
+    }
+
+    // 1) 쪽번호
+    const numberBody = [
+      seg(`${P}-npos`, '위치', [['bc', '아래 가운데'], ['br', '아래 오른쪽'], ['tr', '위 오른쪽']], 'bc'),
+      seg(`${P}-nfmt`, '모양', [['n', '3'], ['dash', '- 3 -'], ['total', '3 / N']], 'n'),
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', 'data-f': 'skipFirst' }), h('span', null, '표지(첫 쪽) 건너뛰기')),
+    ];
+    // 2) 워터마크
+    const wmText = h('input', { type: 'text', 'data-f': 'text', maxlength: '40', autocomplete: 'off', 'aria-label': '워터마크 글자' });
+    const watermarkBody = [
+      h('label', { class: 'field' }, h('span', null, '글자'), wmText),
+      seg(`${P}-wlay`, '배치', [['diagonal', '대각선'], ['center', '가운데'], ['tile', '바둑판']], 'diagonal'),
+      seg(`${P}-wstr`, '진하기', [['light', '연하게'], ['normal', '보통'], ['dark', '진하게']], 'normal'),
+      seg(`${P}-wcol`, '색', [['red', '빨강', { class: 'sw-red' }], ['gray', '회색', { class: 'sw-gray' }], ['blue', '파랑', { class: 'sw-blue' }]], 'red'),
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', 'data-f': 'flatten' }),
+        h('span', null, '지울 수 없게 쪽을 이미지로 굳히기 ', h('small', null, '(글자 선택 안 됨 · 용량 커짐)'))),
+    ];
+    // 3) 서명 · 도장
+    const chipBox = h('ul', { class: 'stamp-chips', 'aria-label': '보관한 서명 · 도장' });
+    const upInput = h('input', { type: 'file', accept: 'image/png,image/jpeg,.png,.jpg,.jpeg', hidden: true });
+    const clearWhite = h('input', { type: 'checkbox', 'data-f': 'clearWhite', checked: true });
+    const targetSeg = seg(`${P}-starget`, '넣을 쪽', [['last', '마지막 쪽'], ['all', '모든 쪽'], ['selected', '고른 쪽']], 'last');
+    const selNote = h('small', { class: 'sel-note' });
+    const stampBody = [
+      chipBox,
+      h('div', { class: 'btn-row' },
+        h('button', { type: 'button', class: 'btn sm', 'data-act': 'draw' }, icon('pen', 'ic sm'), '손으로 그리기'),
+        h('button', { type: 'button', class: 'btn sm', 'data-act': 'upload' }, icon('upload', 'ic sm'), '이미지 올리기'),
+        upInput),
+      h('label', { class: 'check' }, clearWhite, h('span', null, '흰 배경 지우기 ', h('small', null, '(스캔한 도장용, 고른 이미지에 적용)'))),
+      targetSeg, selNote,
+      h('p', { class: 'hint-box' }, '서명 이미지를 넣는 기능이에요. 인증서로 하는 법적 전자서명과는 달라요.'),
+      h('p', { class: 'sub' }, '미리보기에서 끌어서 옮기고, 오른쪽 아래 모서리를 끌어 크기를 바꿔요. 만든 서명과 도장은 이 브라우저에만 보관돼요.'),
+    ];
+    // 4) 암호
+    const pw1 = h('input', { type: 'password', 'data-f': 'pw', autocomplete: 'new-password', 'aria-label': '열기 암호' });
+    const pw2 = h('input', { type: 'password', 'data-f': 'pw2', autocomplete: 'new-password', 'aria-label': '열기 암호 한 번 더' });
+    const pwMsg = h('p', { class: 'form-error', role: 'alert', hidden: true });
+    const lockBody = [
+      h('label', { class: 'field' }, h('span', null, '열기 암호'), pw1),
+      h('label', { class: 'field' }, h('span', null, '한 번 더'), pw2),
+      pwMsg,
+      h('fieldset', { class: 'checks' }, h('legend', null, '허용할 것'),
+        h('label', null, h('input', { type: 'checkbox', 'data-f': 'print', checked: true }), h('span', null, '인쇄')),
+        h('label', null, h('input', { type: 'checkbox', 'data-f': 'copy' }), h('span', null, '복사')),
+        h('label', null, h('input', { type: 'checkbox', 'data-f': 'edit' }), h('span', null, '편집'))),
+      h('p', { class: 'hint-box warn' }, '비밀번호를 잊으면 이 파일은 누구도 열 수 없어요. 따로 적어 두세요.'),
+    ];
+    // 5) 용량 목표
+    const mbInput = h('input', { type: 'text', 'data-f': 'mb', inputmode: 'decimal', autocomplete: 'off', placeholder: '10', 'aria-label': '목표 용량(MB)' });
+    const sizeBody = [
+      h('label', { class: 'inline-num' }, mbInput, h('span', null, 'MB 이하로 맞추기')),
+      h('p', { class: 'sub' }, '글자는 그대로 두고 사진만 줄여요. 그래도 크면 쪽을 사진으로 바꿀지 물어봐요.'),
+    ];
+    const build = { number: numberBody, watermark: watermarkBody, stamp: stampBody, lock: lockBody, size: sizeBody };
+    itemsEl.replaceChildren(...items.map((k) => accItem(k, build[k])));
+
+    // 입력 → opts
+    itemsEl.addEventListener('input', (e) => readInput(e.target));
+    itemsEl.addEventListener('change', (e) => readInput(e.target));
+    function readInput(t) {
+      const sec = t.closest('.acc');
+      if (!sec || t.classList.contains('switch-input')) return;
+      const key = sec.dataset.item;
+      const o = opts[key];
+      if (t.type === 'radio') {
+        const name = t.name.replace(`${P}-`, '');
+        const field = { npos: 'position', nfmt: 'format', wlay: 'layout', wstr: 'strength', wcol: 'color', starget: 'target' }[name];
+        if (field && t.checked) o[field] = t.value;
+      } else if (t.dataset.f === 'clearWhite') {
+        applyClearWhite(t.checked);
+      } else if (t.dataset.f) {
+        o[t.dataset.f] = t.type === 'checkbox' ? t.checked : t.value;
+      }
+      if (key === 'stamp' && t.type === 'radio') jumpToStampPage();
+      syncItem(key);
+      updatePreview();
+      changed();
+    }
+
+    async function applyClearWhite(on) {
+      const list = opts.stamp.ids.map((id) => Stamps.byId(id)).filter((it) => it && it.kind === 'upload');
+      for (const it of list) { it.clearWhite = on; await Stamps.update(it); }
+      renderChips();
+      updatePreview();
+    }
+
+    function summary(key) {
+      const o = opts[key];
+      if (!o.on) return '';
+      if (key === 'number') return `${POS_TEXT[o.position]} · ${FMT_TEXT[o.format]}${o.skipFirst ? ' · 표지 제외' : ''}`;
+      if (key === 'watermark') return `"${o.text || ''}" · ${LAYOUT_TEXT[o.layout]} · ${STRENGTH_TEXT[o.strength]} · ${COLOR_TEXT[o.color]}${o.flatten ? ' · 굳히기' : ''}`;
+      if (key === 'stamp') return `${o.ids.length}개 · ${TARGET_TEXT[o.target]}`;
+      if (key === 'lock') return `AES-256 · 인쇄 ${o.print ? '허용' : '막음'}`;
+      if (key === 'size') return o.mb ? `${o.mb}MB 이하` : '용량을 적어 주세요';
+      return '';
+    }
+    function syncItem(key) {
+      const o = opts[key];
+      switches[key].checked = o.on;
+      bodies[key].hidden = !o.on;
+      sums[key].textContent = summary(key);
+      bodies[key].closest('.acc').classList.toggle('on', o.on);
+      if (key === 'lock') {
+        const bad = o.on && o.pw && o.pw2 && o.pw !== o.pw2;
+        pwMsg.hidden = !bad;
+        pwMsg.textContent = bad ? '두 암호가 달라요. 같게 적어 주세요.' : '';
+      }
+      if (key === 'stamp') {
+        const hasSel = !!(source && source.selected && source.selected.length);
+        const selRadio = targetSeg.querySelector('input[value="selected"]');
+        selRadio.disabled = !hasSel;
+        selRadio.closest('label').classList.toggle('disabled', !hasSel);
+        if (!hasSel && o.target === 'selected') { o.target = 'last'; targetSeg.querySelector('input[value="last"]').checked = true; }
+        selNote.textContent = hasSel ? `편집에서 고른 ${source.selected.length}쪽에 넣어요.` : '"고른 쪽"은 편집 화면에서 쪽을 골랐을 때 쓸 수 있어요.';
+        const anyUpload = o.ids.some((id) => (Stamps.byId(id) || {}).kind === 'upload');
+        clearWhite.disabled = !anyUpload;
+        if (anyUpload) clearWhite.checked = o.ids.map(Stamps.byId).filter((it) => it && it.kind === 'upload').every((it) => it.clearWhite);
+      }
+    }
+
+    // ── 서명 · 도장 칩 ──
+    async function renderChips() {
+      const list = await Stamps.list();
+      opts.stamp.ids = opts.stamp.ids.filter((id) => list.some((x) => x.id === id));
+      const chips = await Promise.all(list.map(async (it) => {
+        const on = opts.stamp.ids.includes(it.id);
+        return h('li', { class: `stamp-chip${on ? ' on' : ''}` },
+          h('button', { type: 'button', class: 'stamp-pick', 'data-id': it.id, 'aria-pressed': on ? 'true' : 'false', title: on ? '넣지 않기' : '이 이미지 넣기' },
+            h('img', { src: await Stamps.urlOf(it), alt: '' }), h('span', null, it.name)),
+          h('button', { type: 'button', class: 'stamp-x', 'data-del': it.id, 'aria-label': `${it.name} 지우기`, title: '이 브라우저에서 지우기' }, icon('x', 'ic sm')));
+      }));
+      chipBox.replaceChildren(...chips);
+      if (!list.length) chipBox.append(h('li', { class: 'stamp-empty' }, '아직 보관한 서명 · 도장이 없어요.'));
+      syncItem('stamp');
+      sums.stamp.textContent = summary('stamp');
+    }
+    Stamps.onChange(() => { if (itemsEl.isConnected) renderChips(); });
+    chipBox.addEventListener('click', async (e) => {
+      const del = e.target.closest('[data-del]');
+      if (del) {
+        const it = Stamps.byId(del.dataset.del);
+        opts.stamp.ids = opts.stamp.ids.filter((x) => x !== del.dataset.del);
+        await Stamps.remove(del.dataset.del);
+        toast(`"${it ? it.name : '이미지'}"을(를) 지웠어요.`, '', 'info');
+        updatePreview();
+        changed();
+        return;
+      }
+      const pick = e.target.closest('[data-id]');
+      if (!pick) return;
+      const id = pick.dataset.id;
+      opts.stamp.ids = opts.stamp.ids.includes(id) ? opts.stamp.ids.filter((x) => x !== id) : [...opts.stamp.ids, id];
+      await renderChips();
+      updatePreview();
+      changed();
+    });
+    async function addStamp(item) {
+      const n = (await Stamps.list()).filter((x) => x.kind === item.kind).length + 1;
+      const it = await Stamps.add({ ...item, name: item.kind === 'drawn' ? `서명 ${n}` : `도장 ${n}` });
+      opts.stamp.ids.push(it.id);
+      if (!opts.stamp.on) { opts.stamp.on = true; syncItem('stamp'); }
+      await renderChips();
+      jumpToStampPage();
+      updatePreview();
+      changed();
+    }
+    itemsEl.addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-act]');
+      if (!b || !itemsEl.contains(b)) return;
+      if (b.dataset.act === 'draw') {
+        const r = await SignPad.open();
+        if (r) await addStamp({ kind: 'drawn', bytes: r.bytes, w: r.w, h: r.h, clearWhite: false });
+      } else if (b.dataset.act === 'upload') upInput.click();
+    });
+    upInput.addEventListener('change', async () => {
+      const f = upInput.files[0];
+      upInput.value = '';
+      if (!f) return;
+      if (!/^image\/(png|jpeg)$/.test(f.type) && !/\.(png|jpe?g)$/i.test(f.name)) return toast('PNG나 JPG만 올릴 수 있어요.', '도장을 스캔했다면 PNG나 JPG로 저장해 주세요.');
+      try {
+        const r = await imageFileToPng(f);
+        await addStamp({ kind: 'upload', bytes: r.bytes, w: r.w, h: r.h, clearWhite: clearWhite.disabled ? true : clearWhite.checked });
+      } catch (err) { showError(err, f.name); }
+    });
+
+    // ── 미리보기 ──
+    const pvCanvas = h('canvas', { class: 'pv-canvas' });
+    const pvLayer = h('div', { class: 'pv-layer' });
+    const pvStage = h('div', { class: 'pv-stage' }, pvCanvas, pvLayer);
+    const pvPage = h('span', { class: 'pv-page' });
+    const prev = h('button', { type: 'button', class: 'icon-btn', 'aria-label': '이전 쪽' }, '◀');
+    const next = h('button', { type: 'button', class: 'icon-btn', 'aria-label': '다음 쪽' }, '▶');
+    const ORDER = [['number', '쪽번호'], ['watermark', '워터마크'], ['stamp', '도장'], ['size', '용량 맞추기'], ['lock', '암호(항상 마지막)']];
+    const orderList = h('ol', { class: 'pv-order', 'aria-label': '적용 순서' },
+      ...ORDER.filter(([k]) => order.includes(k)).map(([k, t]) => h('li', { 'data-k': k }, t)));
+    previewEl.replaceChildren(
+      h('div', { class: 'pv' }, h('p', { class: 'pv-cap' }, '미리보기'), pvStage, h('div', { class: 'pv-nav' }, prev, pvPage, next),
+        h('div', { class: 'pv-order-wrap' }, h('span', null, '적용 순서'), orderList)));
+    prev.addEventListener('click', () => go(pageIdx - 1));
+    next.addEventListener('click', () => go(pageIdx + 1));
+    let frame = null; // {visW, visH, cssW, cssH}
+    let drawToken = 0;
+
+    function go(i) {
+      if (!source) return;
+      pageIdx = Math.max(0, Math.min(source.count - 1, i));
+      drawPage();
+    }
+    function stampPageList() {
+      if (!source) return [];
+      const t = opts.stamp.target === 'selected' ? (source.selected || []) : opts.stamp.target;
+      return Core.stampPages(t, source.count);
+    }
+    function jumpToStampPage() {
+      if (!source || !opts.stamp.on) return;
+      const list = stampPageList();
+      if (list.length && !list.includes(pageIdx)) go(list[0]);
+    }
+
+    async function drawPage() {
+      if (!source || !source.count) return;
+      const my = ++drawToken;
+      pvPage.textContent = `${pageIdx + 1} / ${source.count}쪽`;
+      prev.disabled = pageIdx <= 0;
+      next.disabled = pageIdx >= source.count - 1;
+      try {
+        const { page, rot } = await source.getPage(pageIdx);
+        if (my !== drawToken) return;
+        const rotation = Core.normAngle(page.rotate + (rot || 0));
+        const vp1 = page.getViewport({ scale: 1, rotation });
+        const boxW = Math.max(200, (previewEl.clientWidth || 340) - 8);
+        const maxH = window.innerWidth <= 760 ? Math.max(220, window.innerHeight * 0.36) : Math.min(460, Math.max(260, window.innerHeight * 0.55));
+        const cssW = Math.min(boxW, maxH * (vp1.width / vp1.height));
+        const cssH = cssW * (vp1.height / vp1.width);
+        const dpr = Math.min(2, window.devicePixelRatio || 1);
+        const vp = page.getViewport({ scale: (cssW / vp1.width) * dpr, rotation });
+        const c = makeCanvas(vp.width, vp.height);
+        const ctx = c.getContext('2d');
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, c.width, c.height);
+        await page.render({ canvasContext: ctx, viewport: vp }).promise;
+        if (my !== drawToken) return;
+        pvCanvas.width = c.width;
+        pvCanvas.height = c.height;
+        pvCanvas.getContext('2d').drawImage(c, 0, 0);
+        pvStage.style.width = `${cssW}px`;
+        pvStage.style.height = `${cssH}px`;
+        frame = { visW: vp1.width, visH: vp1.height, cssW, cssH };
+        updatePreview();
+      } catch (e) {
+        console.warn(e);
+      }
+    }
+
+    const measureCtx = document.createElement('canvas').getContext('2d');
+
+    function updatePreview() {
+      orderList.querySelectorAll('li').forEach((li) => li.classList.toggle('on', !!(opts[li.dataset.k] && opts[li.dataset.k].on)));
+      if (!frame || !source) return;
+      const { visW, visH, cssW, cssH } = frame;
+      const k = cssW / visW;
+      const parts = [];
+      // 쪽번호
+      const o = opts.number;
+      if (o.on && !(o.skipFirst && pageIdx === 0)) {
+        const total = source.count - (o.skipFirst ? 1 : 0);
+        const n = pageIdx + 1 - (o.skipFirst ? 1 : 0);
+        const text = Core.numberText(n, total, o.format);
+        const { size, margin } = Core.numberMetrics(visW, visH);
+        measureCtx.font = `${size}px Helvetica, Arial, sans-serif`;
+        const tw = measureCtx.measureText(text).width;
+        const { vx, vy } = Core.numberSpot(visW, visH, tw, size, margin, o.position);
+        parts.push(h('span', { class: 'pv-num', style: `left:${vx * k}px;top:${(visH - vy - size * 0.78) * k}px;font-size:${size * k}px` }, text));
+      }
+      // 워터마크
+      const w = opts.watermark;
+      if (w.on && w.text.trim()) {
+        const text = w.text.trim();
+        measureCtx.font = '700 100px "Pretendard Variable", Pretendard, sans-serif';
+        const w1 = measureCtx.measureText(text).width / 100;
+        const lay = Core.watermarkLayout(visW, visH, w1, w.layout);
+        const alpha = Core.WM_OPACITY[w.strength] || 0.2;
+        for (const s of lay.spots) {
+          parts.push(h('span', {
+            class: 'pv-wm',
+            style: `left:${s.cx * k}px;top:${(visH - s.cy) * k}px;font-size:${lay.size * k}px;color:${WM_RGB[w.color]};opacity:${alpha};transform:translate(-50%,-50%) rotate(${-lay.angle}deg)`,
+          }, text));
+        }
+      }
+      pvLayer.replaceChildren(...parts);
+      // 도장
+      if (opts.stamp.on && stampPageList().includes(pageIdx)) {
+        opts.stamp.ids.forEach((id, idx) => {
+          const it = Stamps.byId(id);
+          if (!it) return;
+          const place = opts.stamp.places[id] || (opts.stamp.places[id] = defaultPlace(idx));
+          const aspect = it.h / it.w;
+          const el = h('div', { class: 'pv-stamp', 'data-id': id, tabindex: '0', title: '끌어서 옮기기 · 모서리로 크기 바꾸기', 'aria-label': `${it.name} 위치` },
+            h('img', { alt: '', draggable: 'false' }), h('span', { class: 'pv-handle', 'aria-hidden': 'true' }));
+          Stamps.urlOf(it).then((u) => { el.querySelector('img').src = u; });
+          const hFrac = (place.w * visW * aspect) / visH;
+          place.y = Math.min(place.y, Math.max(0, 1 - hFrac));
+          Object.assign(el.style, { left: `${place.x * cssW}px`, top: `${place.y * cssH}px`, width: `${place.w * cssW}px`, height: `${place.w * cssW * aspect}px` });
+          pvLayer.append(el);
+        });
+      }
+    }
+
+    // 도장 끌기 · 크기 조절 (쪽 크기 대비 비율로 저장)
+    let drag = null;
+    pvLayer.addEventListener('pointerdown', (e) => {
+      const el = e.target.closest('.pv-stamp');
+      if (!el || !frame) return;
+      e.preventDefault();
+      const id = el.dataset.id;
+      const it = Stamps.byId(id);
+      const place = opts.stamp.places[id];
+      el.setPointerCapture(e.pointerId);
+      drag = { el, id, place, aspect: it.h / it.w, resize: !!e.target.closest('.pv-handle'), x0: e.clientX, y0: e.clientY, start: { ...place } };
+      el.classList.add('moving');
+    });
+    pvLayer.addEventListener('pointermove', (e) => {
+      if (!drag) return;
+      const { cssW, cssH, visW, visH } = frame;
+      const dx = (e.clientX - drag.x0) / cssW;
+      const dy = (e.clientY - drag.y0) / cssH;
+      const p = drag.place;
+      if (drag.resize) {
+        const maxW = Math.min(1 - p.x, ((1 - p.y) * visH) / (drag.aspect * visW));
+        p.w = Math.max(0.03, Math.min(maxW, drag.start.w + dx));
+      } else {
+        const hFrac = (p.w * visW * drag.aspect) / visH;
+        p.x = Math.max(0, Math.min(1 - p.w, drag.start.x + dx));
+        p.y = Math.max(0, Math.min(1 - hFrac, drag.start.y + dy));
+      }
+      Object.assign(drag.el.style, { left: `${p.x * cssW}px`, top: `${p.y * cssH}px`, width: `${p.w * cssW}px`, height: `${p.w * cssW * drag.aspect}px` });
+    });
+    const endDrag = () => {
+      if (!drag) return;
+      drag.el.classList.remove('moving');
+      drag = null;
+      changed();
+    };
+    pvLayer.addEventListener('pointerup', endDrag);
+    pvLayer.addEventListener('pointercancel', endDrag);
+    // 키보드로도 옮기기(화살표 1%, Shift 5%)
+    pvLayer.addEventListener('keydown', (e) => {
+      const el = e.target.closest('.pv-stamp');
+      if (!el || !frame) return;
+      const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+      if (!d) return;
+      e.preventDefault();
+      const p = opts.stamp.places[el.dataset.id];
+      const step = e.shiftKey ? 0.05 : 0.01;
+      p.x = Math.max(0, Math.min(1 - p.w, p.x + d[0] * step));
+      p.y = Math.max(0, Math.min(0.99, p.y + d[1] * step));
+      updatePreview();
+      pvLayer.querySelector(`.pv-stamp[data-id="${el.dataset.id}"]`)?.focus();
+      changed();
+    });
+
+    function setOpts(o) {
+      const base = defaultOpts();
+      opts = {};
+      for (const key of Object.keys(base)) opts[key] = { ...base[key], ...((o && o[key]) || {}) };
+      opts.stamp.places = { ...((o && o.stamp && o.stamp.places) || {}) };
+      opts.stamp.ids = [...((o && o.stamp && o.stamp.ids) || [])];
+      // 화면 값 채우기
+      for (const key of items) {
+        const sec = itemsEl.querySelector(`.acc[data-item="${key}"]`);
+        sec.querySelectorAll('input').forEach((inp) => {
+          if (inp.classList.contains('switch-input') || inp.type === 'file') return;
+          if (inp.type === 'radio') {
+            const name = inp.name.replace(`${P}-`, '');
+            const field = { npos: 'position', nfmt: 'format', wlay: 'layout', wstr: 'strength', wcol: 'color', starget: 'target' }[name];
+            inp.checked = opts[key][field] === inp.value;
+          } else if (inp.dataset.f && inp.dataset.f !== 'clearWhite') {
+            if (inp.type === 'checkbox') inp.checked = !!opts[key][inp.dataset.f];
+            else inp.value = opts[key][inp.dataset.f] ?? '';
+          }
+        });
+        syncItem(key);
+      }
+      renderChips();
+      updatePreview();
+    }
+
+    function validate() {
+      if (items.includes('lock') && opts.lock.on) {
+        if (!opts.lock.pw) return '열기 암호를 적어 주세요.';
+        if (opts.lock.pw !== opts.lock.pw2) return '두 암호가 달라요.';
+      }
+      if (items.includes('size') && opts.size.on) {
+        const v = Number(String(opts.size.mb).replace(',', '.'));
+        if (!(v > 0)) return '목표 용량을 MB 숫자로 적어 주세요.';
+      }
+      if (opts.watermark.on && !opts.watermark.text.trim()) return '워터마크 글자를 적어 주세요.';
+      return null;
+    }
+
+    return {
+      getOpts: () => JSON.parse(JSON.stringify(opts)),
+      setOpts,
+      validate,
+      onChange: (f) => listeners.add(f),
+      async setSource(src, startAt = 0) {
+        source = src;
+        pageIdx = Math.min(startAt, Math.max(0, (src ? src.count : 1) - 1));
+        frame = null;
+        pvLayer.replaceChildren();
+        for (const key of items) syncItem(key);
+        if (opts.stamp.on) jumpToStampPage();
+        await drawPage();
+      },
+      redraw: () => drawPage(),
+      get pageIndex() { return pageIdx; },
+    };
+  }
+
+  /**
+   * 꾸미기 옵션을 적용해 PDF 바이트를 만든다.
+   * 순서: 쪽번호 → 워터마크(→ 굳히기) → 도장 → 용량 맞추기 → 암호(항상 마지막)
+   * ctx.selected: 편집에서 고른 쪽의 결과 문서 속 번호(0부터)
+   */
+  async function applyOptions(doc, o, progress, signal, ctx = {}) {
+    const label = ctx.label || '';
+    if (o.number && o.number.on) {
+      await Core.addPageNumbers(doc, { position: o.number.position, format: o.number.format, start: 1, skipFirst: o.number.skipFirst },
+        (d, n) => progress(`${label}쪽번호 넣는 중 (${d}/${n})`, d, n));
+    }
+    if (o.watermark && o.watermark.on) {
+      await progress(`${label}워터마크 글꼴 준비 중…`, 0, 1);
+      const font = await watermarkFont(doc);
+      await Core.addWatermark(doc, o.watermark, font, (d, n) => progress(`${label}워터마크 넣는 중 (${d}/${n})`, d, n));
+      if (o.watermark.flatten) {
+        const flat = await rasterizePdf(await doc.save(), { dpi: 150, q: 0.85 }, (t, d, n) => progress(`${label}${t}`, d, n), signal);
+        doc = await PDFDocument.load(flat, { updateMetadata: false });
+      }
+    }
+    if (o.stamp && o.stamp.on && o.stamp.ids.length) {
+      await Stamps.list();
+      const stamps = [];
+      o.stamp.ids.forEach((id, idx) => {
+        const it = Stamps.byId(id);
+        if (it) stamps.push({ it, place: (o.stamp.places && o.stamp.places[id]) || defaultPlace(idx) });
+      });
+      const list = [];
+      for (const s of stamps) list.push({ bytes: await Stamps.pngOf(s.it), place: s.place });
+      const target = o.stamp.target === 'selected' ? (ctx.selected || []) : o.stamp.target;
+      await progress(`${label}서명 · 도장 넣는 중…`, 1, 1);
+      await Core.addStamps(doc, list, target);
+    }
+    await progress(`${label}파일로 만드는 중…`, 1, 1);
+    let bytes = await doc.save({ useObjectStreams: true });
+    let sizeNote = null;
+    if (o.size && o.size.on) {
+      const target = Number(String(o.size.mb).replace(',', '.')) * MB;
+      if (bytes.length > target) {
+        const r = await squeezePdf(bytes, target, progress, signal, { label });
+        bytes = r.bytes;
+        sizeNote = r.result;
+      }
+    }
+    if (o.lock && o.lock.on) {
+      await progress(`${label}AES-256으로 암호 거는 중…`, 1, 1);
+      const d = await PDFDocument.load(bytes, { updateMetadata: false });
+      // 권한을 막았다면 권한 암호는 아무도 모르는 값으로 둔다(열기 암호로 제한을 풀 수 없게).
+      const restricted = !o.lock.print || !o.lock.copy || !o.lock.edit;
+      const owner = restricted ? Array.from(crypto.getRandomValues(new Uint8Array(18)), (b) => b.toString(16).padStart(2, '0')).join('') : o.lock.pw;
+      Core.encrypt(d, { userPassword: o.lock.pw, ownerPassword: owner, allowPrint: o.lock.print, allowCopy: o.lock.copy, allowEdit: o.lock.edit });
+      bytes = await d.save({ useObjectStreams: false });
+    }
+    return { bytes, sizeNote };
+  }
+
+  const hasAnyOption = (o) => ['number', 'watermark', 'stamp', 'lock', 'size'].some((k) => o[k] && o[k].on);
+
+  // ═══════════════════════════════════════════════════════════
+  // 설정하고 저장… 창
+  // ═══════════════════════════════════════════════════════════
+  const SaveDialog = (() => {
+    const dlg = $('save-dialog');
+    const nameInput = $('sd-name');
+    const nameNote = $('sd-name-note');
+    const saveBtn = $('sd-save');
+    const remember = $('sd-remember');
+    const KEY = 'pdfws.saveOpts';
+    const editor = createDecorEditor({ itemsEl: $('sd-items'), previewEl: $('sd-preview'), items: ['number', 'watermark', 'stamp', 'lock', 'size'] });
+    let ctx = null;
+    let errMsg = null;
+
+    const BAD = /[\\/:*?"<>|\u0000-\u001f]/g;
+    nameInput.addEventListener('input', () => {
+      if (new RegExp(BAD.source).test(nameInput.value)) {
+        const pos = nameInput.selectionStart;
+        nameInput.value = nameInput.value.replace(BAD, '_');
+        nameInput.setSelectionRange(pos, pos);
+        nameNote.textContent = '파일 이름에 쓸 수 없는 글자(\\ / : * ? " < > |)는 _ 로 바꿨어요.';
+        nameNote.hidden = false;
+      }
+      validate();
+    });
+    function validate() {
+      errMsg = editor.validate() || (!nameInput.value.trim() ? '파일 이름을 적어 주세요.' : null);
+      saveBtn.disabled = !!errMsg;
+      saveBtn.title = errMsg || '';
+    }
+    editor.onChange(validate);
+
+    function loadRemembered() {
+      try {
+        const raw = localStorage.getItem(KEY);
+        return raw ? JSON.parse(raw) : null;
+      } catch { return null; }
+    }
+    function storeRemembered(o) {
+      try {
+        if (!o) return localStorage.removeItem(KEY);
+        const safe = JSON.parse(JSON.stringify(o));
+        // 비밀번호는 절대 저장하지 않는다.
+        safe.lock = { ...safe.lock, pw: '', pw2: '' };
+        localStorage.setItem(KEY, JSON.stringify(safe));
+      } catch { /* 저장소를 못 써도 저장은 된다 */ }
+    }
+
+    /**
+     * context: {name, meta, source, selected, run(opts, name), sizeAllowed?, preset?}
+     */
+    async function open(context) {
+      if (isBusy()) return;
+      ctx = context;
+      const saved = loadRemembered();
+      remember.checked = !!saved;
+      editor.setOpts(context.preset || saved || defaultOpts());
+      nameInput.value = context.name;
+      nameNote.hidden = true;
+      $('sd-meta').textContent = context.meta || '';
+      $('sd-title').textContent = context.title || '설정하고 저장';
+      dlg.showModal();
+      validate();
+      nameInput.focus();
+      nameInput.select();
+      await editor.setSource(context.source, context.startPage || 0);
+    }
+    function close() {
+      if (dlg.open) dlg.close();
+      if (ctx && ctx.onClose) ctx.onClose();
+    }
+    $('sd-cancel').addEventListener('click', close);
+    $('sd-x').addEventListener('click', close);
+    dlg.addEventListener('cancel', (e) => { e.preventDefault(); close(); });
+    $('sd-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      validate();
+      if (errMsg) return toast(errMsg, '');
+      const o = editor.getOpts();
+      storeRemembered(remember.checked ? o : null);
+      const name = nameInput.value.trim().replace(/\.pdf$/i, '');
+      const run = ctx.run;
+      close();
+      await run(o, safeName(name));
+    });
+    return { open, close, get isOpen() { return dlg.open; }, editor };
+  })();
+
+  /** 결과 파일 이름 앞부분 */
+  const saveStem = (list, fallback) => {
+    const ids = [...new Set(list.map((p) => p.srcId))];
+    return ids.length === 1 ? baseName(Edit.srcById(ids[0]).name) : fallback;
+  };
 
   // ═══════════════════════════════════════════════════════════
   // 탭2: 이미지 → PDF
@@ -1774,20 +3110,33 @@
   const P2I = (() => {
     const grid = $('p2i-grid');
     const unlockBox = $('p2i-unlock');
+    const est = $('p2i-est');
+    const copyBtn = $('p2i-copy');
+    const FMT = {
+      png: { type: 'image/png', ext: 'png', label: 'PNG' },
+      jpg: { type: 'image/jpeg', ext: 'jpg', label: 'JPG' },
+      webp: { type: 'image/webp', ext: 'webp', label: 'WEBP' },
+    };
     let pdf = null;
     let name = '';
     let picked = new Set();
     let token = 0;
+    let estToken = 0;
+    let estTimer = 0;
 
     const io = new IntersectionObserver((entries) => {
       for (const en of entries) if (en.isIntersecting) paint(en.target);
     }, { rootMargin: '400px 0px' });
 
+    const radioVal = (n) => document.querySelector(`input[name="${n}"]:checked`).value;
+    const settings = () => ({ fmt: radioVal('p2i-fmt'), dpi: Number(radioVal('p2i-dpi')), q: Number(radioVal('p2i-q')) });
+    const isPhone = () => matchMedia('(pointer: coarse)').matches && window.innerWidth <= 820;
+
     async function load(files) {
       const f = files[0];
       if (files.length > 1) toast('PDF는 한 번에 하나씩 바꿀 수 있어요.', `첫 번째 파일 "${f.name}"만 열었어요.`, 'info');
       if (!isPdfFile(f)) return toast(`"${f.name}"은(는) PDF가 아니에요.`, 'PDF 파일을 넣어 주세요.');
-      reset();
+      reset(true);
       const my = ++token;
       let bytes;
       try {
@@ -1856,9 +3205,18 @@
 
     function update() {
       const n = picked.size;
+      const s = settings();
       $('p2i-bar').hidden = !pdf;
-      $('p2i-count').textContent = `${n}쪽 선택 · ${n > 1 ? 'zip으로 묶어 저장' : 'PNG 한 장'}`;
-      if (!isBusy()) $('p2i-save').disabled = n === 0;
+      $('p2i-count').textContent = `${n}쪽 선택 · ${n > 1 ? 'zip으로 묶어 저장' : `${FMT[s.fmt].label} 한 장`}`;
+      $('p2i-q').disabled = s.fmt === 'png';
+      $('p2i-webp').hidden = !(pdf && s.fmt === 'webp');
+      if (!isBusy()) {
+        $('p2i-save').disabled = n === 0;
+        $('p2i-save-opts').disabled = n === 0;
+        copyBtn.disabled = n !== 1;
+      }
+      copyBtn.title = n === 1 ? '이 쪽을 PNG로 복사 (PPT · 한글에 붙여넣기)' : '한 쪽만 골랐을 때 복사할 수 있어요';
+      scheduleEstimate();
     }
 
     function setAll(on) {
@@ -1875,60 +3233,135 @@
     $('p2i-all').addEventListener('click', () => setAll(true));
     $('p2i-none').addEventListener('click', () => setAll(false));
 
-    async function renderPng(n, dpi) {
+    // 형식 · 선명도 · 품질을 바꾸면 다시 계산
+    $('p2i-bar').addEventListener('change', (e) => {
+      if (e.target.name === 'p2i-dpi' && e.target.value === '300' && isPhone()) {
+        document.querySelector('input[name="p2i-dpi"][value="150"]').checked = true;
+        toast('휴대폰에서는 보통(150)으로 바꿨어요.', '인쇄용(300)은 메모리가 많이 들어 휴대폰에서 멈출 수 있어요. 컴퓨터에서 해 주세요.', 'info');
+      }
+      update();
+    });
+
+    /** 쪽 하나를 그림 파일로 */
+    async function renderImage(n, { fmt, dpi, q }) {
       const page = await pdf.getPage(n);
-      let scale = dpi / 72;
-      const vp1 = page.getViewport({ scale: 1 });
-      const fit = Math.min(1, Math.sqrt(MAX_CANVAS_PIXELS / (vp1.width * vp1.height * scale * scale)),
-        MAX_CANVAS_SIDE / (vp1.width * scale), MAX_CANVAS_SIDE / (vp1.height * scale));
-      scale *= fit;
-      const vp = page.getViewport({ scale });
-      const c = makeCanvas(vp.width, vp.height);
-      const ctx = c.getContext('2d');
-      ctx.fillStyle = '#fff';
-      ctx.fillRect(0, 0, c.width, c.height);
-      await page.render({ canvasContext: ctx, viewport: vp }).promise;
+      const { canvas, reduced } = await renderPageCanvas(page, dpi);
       page.cleanup();
-      const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
-      c.width = c.height = 0;
-      if (!blob) throw new UserError('메모리가 부족해 그림을 만들지 못했어요.', '보통(150dpi)으로 바꾸거나 쪽 수를 줄여 주세요.');
-      return { blob, reduced: fit < 0.999 };
+      const bytes = await canvasToBytes(canvas, FMT[fmt].type, fmt === 'png' ? undefined : q);
+      canvas.width = canvas.height = 0;
+      return { bytes, reduced };
     }
 
-    async function save() {
+    // 예상 용량: 첫 쪽을 실제로 바꿔 본 크기 × 쪽수 (0.4초 모아서)
+    function scheduleEstimate() {
+      clearTimeout(estTimer);
+      if (!pdf || !picked.size) { est.textContent = ''; return; }
+      est.textContent = '예상 용량 계산 중…';
+      estTimer = setTimeout(async () => {
+        const my = ++estToken;
+        const first = Math.min(...picked);
+        try {
+          const r = await queueRender(() => renderImage(first, settings()));
+          if (my !== estToken) return;
+          est.textContent = `약 ${fmtMB(r.bytes.length * picked.size)}`;
+          est.title = `${first}쪽을 실제로 바꿔 본 크기(${fmtMB(r.bytes.length)}) × ${picked.size}쪽`;
+        } catch {
+          if (my === estToken) est.textContent = '';
+        }
+      }, 400);
+    }
+
+    const pageName = (stem, n, total, ext) => `${stem}_p${String(n).padStart(String(total).length, '0')}.${ext}`;
+
+    async function save(s = settings(), { stem, zipOn = true } = {}) {
       if (!pdf || !picked.size) return toast('저장할 쪽을 골라 주세요.', '카드를 누르면 고르거나 뺄 수 있어요.');
-      const dpi = Number(document.querySelector('input[name="p2i-dpi"]:checked').value);
       const list = [...picked].sort((a, b) => a - b);
-      const stem = safeName(baseName(name));
+      const base = safeName(stem || baseName(name));
+      const ext = FMT[s.fmt].ext;
       let reduced = 0;
       try {
-        await withBusy('그림으로 바꾸는 중…', async (progress) => {
-          if (list.length === 1) {
-            await progress(`${list[0]}쪽 처리 중`, 0, 1);
-            const r = await renderPng(list[0], dpi);
-            if (r.reduced) reduced++;
-            download(r.blob, `${stem}_${list[0]}쪽.png`, 'image/png');
-            return;
-          }
-          const zip = new JSZip();
+        const out = await withBusy('그림으로 바꾸는 중…', async (progress, signal) => {
+          const files = [];
+          const zip = list.length > 1 && zipOn ? new JSZip() : null;
           for (let i = 0; i < list.length; i++) {
-            await progress(`${list[i]}쪽 처리 중 (${i + 1}/${list.length})`, i, list.length);
-            const r = await renderPng(list[i], dpi);
+            if (signal.aborted) throw abortError();
+            await progress(`${list[i]}쪽 바꾸는 중 (${i + 1}/${list.length})`, i, list.length);
+            const r = await renderImage(list[i], s);
             if (r.reduced) reduced++;
-            zip.file(`${stem}_${pad3(list[i])}쪽.png`, r.blob);
+            const fname = pageName(base, list[i], pdf.numPages, ext);
+            if (zip) zip.file(fname, r.bytes); else files.push({ name: fname, bytes: r.bytes });
           }
+          if (!zip) return files;
           const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' }, (m) =>
             busy.set(`zip으로 묶는 중 (${Math.round(m.percent)}%)`, m.percent, 100));
-          download(blob, `${stem}_이미지.zip`, 'application/zip');
-        });
-        if (reduced) toast(`${reduced}쪽은 너무 커서 해상도를 조금 낮춰 저장했어요.`, '브라우저가 한 번에 그릴 수 있는 크기에 한계가 있어요.', 'info');
+          return [{ name: `${base}_${ext}.zip`, blob }];
+        }, { cancellable: true });
+        for (let i = 0; i < out.length; i++) {
+          const f = out[i];
+          download(f.blob || f.bytes, f.name, f.blob ? 'application/zip' : FMT[s.fmt].type);
+          if (out.length > 1) await new Promise((r) => setTimeout(r, 350));
+        }
+        if (reduced) toast(`${reduced}쪽은 너무 커서 해상도를 조금 낮췄어요.`, '브라우저가 한 번에 그릴 수 있는 크기(한 변 8192px)에 한계가 있어요.', 'info');
       } catch (e) { showError(e, name); }
     }
-    $('p2i-save').addEventListener('click', save);
+    $('p2i-save').addEventListener('click', () => save());
+
+    // 한 쪽을 PNG로 복사 (ClipboardItem은 PNG만 된다)
+    copyBtn.addEventListener('click', async () => {
+      if (picked.size !== 1) return;
+      const n = [...picked][0];
+      if (!window.ClipboardItem || !navigator.clipboard || !navigator.clipboard.write) {
+        return toast('이 브라우저는 그림 복사를 지원하지 않아요.', '[바로 저장]으로 저장해서 쓰세요.');
+      }
+      try {
+        // 사용자 동작 안에서 바로 쓰기 시작해야 하는 브라우저(사파리)를 위해 Promise를 넘긴다.
+        const s = settings();
+        const blobP = withBusy(`${n}쪽 복사 준비 중…`, async () => new Blob([(await renderImage(n, { ...s, fmt: 'png' })).bytes], { type: 'image/png' }));
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blobP })]);
+        toast('복사했어요. PPT나 한글에서 Ctrl+V 하세요.', s.fmt === 'png' ? '' : '복사는 형식과 상관없이 PNG로 돼요.', 'ok');
+      } catch (e) {
+        console.warn(e);
+        toast('복사하지 못했어요.', `${/denied|permission|NotAllowed/i.test(String(e && (e.name + e.message))) ? '브라우저가 클립보드 쓰기를 막았어요.' : `원인: ${String((e && e.message) || e).slice(0, 80)}`} 저장해서 쓰세요.`);
+      }
+    });
+
+    // 설정하고 저장… (작은 창)
+    const dlg = $('p2i-dialog');
+    function openDialog() {
+      if (!pdf || !picked.size) return toast('저장할 쪽을 골라 주세요.', '');
+      const s = settings();
+      dlg.querySelector(`input[name="p2d-fmt"][value="${s.fmt}"]`).checked = true;
+      dlg.querySelector(`input[name="p2d-dpi"][value="${s.dpi}"]`).checked = true;
+      dlg.querySelector(`input[name="p2d-q"][value="${s.q}"]`).checked = true;
+      $('p2d-stem').value = baseName(name);
+      $('p2d-zip').closest('label').hidden = picked.size < 2;
+      syncDialog();
+      dlg.showModal();
+    }
+    function syncDialog() {
+      const fmt = dlg.querySelector('input[name="p2d-fmt"]:checked').value;
+      $('p2d-q').disabled = fmt === 'png';
+      $('p2d-note').textContent = fmt === 'webp' ? 'WEBP는 한글(HWP)이나 예전 오피스에서 안 열릴 수 있어요.' : `${picked.size}쪽 · 이름 예: ${pageName(safeName($('p2d-stem').value || baseName(name)), Math.min(...picked), pdf.numPages, FMT[fmt].ext)}`;
+    }
+    dlg.addEventListener('change', syncDialog);
+    dlg.addEventListener('input', syncDialog);
+    $('p2d-form').addEventListener('submit', (e) => {
+      if (!e.submitter || e.submitter.value !== 'ok') return;
+      e.preventDefault();
+      const v = (n) => dlg.querySelector(`input[name="${n}"]:checked`).value;
+      let dpi = Number(v('p2d-dpi'));
+      if (dpi === 300 && isPhone()) { dpi = 150; toast('휴대폰에서는 보통(150)으로 바꿨어요.', '', 'info'); }
+      const s = { fmt: v('p2d-fmt'), dpi, q: Number(v('p2d-q')) };
+      dlg.close();
+      save(s, { stem: $('p2d-stem').value.trim() || baseName(name), zipOn: $('p2d-zip').checked });
+    });
+    $('p2i-save-opts').addEventListener('click', openDialog);
     wireDrop($('p2i-drop'), $('p2i-input'), load);
 
-    function reset() {
+    function reset(keepOptions) {
       token++;
+      estToken++;
+      clearTimeout(estTimer);
       if (pdf) pdf.destroy();
       pdf = null;
       picked = new Set();
@@ -1939,9 +3372,15 @@
       $('p2i-bar').hidden = true;
       $('p2i-empty').hidden = false;
       $('p2i-file').hidden = true;
-      document.querySelector('input[name="p2i-dpi"][value="150"]').checked = true;
+      $('p2i-webp').hidden = true;
+      est.textContent = '';
+      if (!keepOptions) {
+        document.querySelector('input[name="p2i-dpi"][value="150"]').checked = true;
+        document.querySelector('input[name="p2i-fmt"][value="png"]').checked = true;
+        document.querySelector('input[name="p2i-q"][value="0.8"]').checked = true;
+      }
     }
-    return { load, reset };
+    return { load, reset, shortcutSave: (withOpts) => (withOpts ? openDialog() : save()) };
   })();
 
   // ═══════════════════════════════════════════════════════════
@@ -2089,7 +3528,46 @@
       }
     });
 
+    // 이 파일에 걸린 제한 보기 (푸는 기능은 없다)
+    const rTable = $('restrict-table');
+    wireDrop($('restrict-drop'), $('restrict-input'), async (files) => {
+      const f = files[0];
+      formError('restrict-error', '');
+      rTable.hidden = true;
+      if (!isPdfFile(f)) return formError('restrict-error', `"${f.name}"은(는) PDF가 아니에요. PDF 파일을 골라 주세요.`);
+      $('restrict-file').textContent = f.name;
+      $('restrict-drop').classList.add('has-file');
+      try {
+        const bytes = await readBytes(f);
+        const r = await withBusy('걸린 제한 확인 중…', () => Core.readRestrictions(bytes));
+        const yes = (ok, a = '허용', b = '제한') => h('td', { class: ok ? 'ok' : 'no' }, ok ? a : b);
+        const rows = [
+          ['열기 암호', h('td', { class: r.needsPassword ? 'no' : 'ok' }, r.needsPassword ? '있음 — 비밀번호를 알아야 열려요' : r.encrypted ? '없음 (권한만 잠김)' : '없음')],
+          ['암호 방식', h('td', null, r.encrypted ? r.algorithm : '걸려 있지 않음')],
+          ['인쇄', yes(r.print)],
+          ['내용 복사', yes(r.copy)],
+          ['편집', yes(r.edit)],
+          ['메모 · 주석', yes(r.annotate)],
+          ['양식 채우기', yes(r.forms)],
+          ['쪽 추가 · 빼기', yes(r.assemble)],
+        ];
+        rTable.tBodies[0].replaceChildren(...rows.map(([k, td]) => h('tr', null, h('th', { scope: 'row' }, k), td)));
+        rTable.hidden = false;
+        const limited = r.encrypted && !(r.print && r.copy && r.edit);
+        if (limited) formError('restrict-error', '');
+        toast(r.encrypted ? `"${f.name}"에 암호가 걸려 있어요.` : `"${f.name}"에는 제한이 없어요.`,
+          limited ? '제한을 바꾸려면 만든 사람에게 권한 암호를 받아 [암호 풀기]에서 풀어 주세요. 비밀번호 없이 푸는 기능은 없어요.' : '', 'info', 7000);
+      } catch (e) {
+        const x = explain(e, f.name);
+        formError('restrict-error', `${x.title} ${x.fix}`.trim());
+      }
+    });
+
     function reset() {
+      rTable.hidden = true;
+      $('restrict-file').textContent = 'PDF 고르기';
+      $('restrict-drop').classList.remove('has-file');
+      formError('restrict-error', '');
       unlockFile = null;
       lockFile = null;
       $('unlock-form').reset();
@@ -2106,31 +3584,24 @@
   })();
 
   // ═══════════════════════════════════════════════════════════
-  // 탭5: 쪽번호
+  // 꾸미기: 쪽번호 · 워터마크 · 서명/도장 (설정하고 저장 창과 같은 코드)
   // ═══════════════════════════════════════════════════════════
-  const Num = (() => {
-    const unlockBox = $('num-unlock');
-    const canvas = $('num-canvas');
-    const mark = $('num-mark');
+  const Decor = (() => {
+    const unlockBox = $('decor-unlock');
+    const ITEMS = ['number', 'watermark', 'stamp'];
+    const editor = createDecorEditor({ itemsEl: $('decor-options'), previewEl: $('decor-preview'), items: ITEMS, order: ITEMS });
+    const startOpts = () => ({ ...defaultOpts(), number: { ...defaultOpts().number, on: true } });
+    editor.setOpts(startOpts());
     let file = null; // {name, bytes, pageCount}
-    let pdf = null; // pdf.js 문서(미리보기용)
-    let previewPage = 0;
-    let visW = 0;
-    let visH = 0;
+    let pdf = null;
     let token = 0;
-
-    const opts = () => ({
-      position: document.querySelector('input[name="num-pos"]:checked').value,
-      format: document.querySelector('input[name="num-fmt"]:checked').value,
-      start: $('num-start').value.trim() === '' ? NaN : Number($('num-start').value),
-      skipFirst: $('num-skip').checked,
-    });
+    editor.onChange(update);
 
     async function load(files) {
       const f = files[0];
-      if (files.length > 1) toast('쪽번호는 한 번에 한 파일씩 넣을 수 있어요.', `첫 번째 파일 "${f.name}"만 열었어요.`, 'info');
+      if (files.length > 1) toast('꾸미기는 한 번에 한 파일씩 할 수 있어요.', `첫 번째 파일 "${f.name}"만 열었어요.`, 'info');
       if (!isPdfFile(f)) return toast(`"${f.name}"은(는) PDF가 아니에요.`, 'PDF 파일을 넣어 주세요.');
-      reset(true);
+      close();
       const my = token;
       try {
         const bytes = await readBytes(f);
@@ -2145,7 +3616,7 @@
               await ready(f.name, r.bytes, r.doc.getPageCount());
             },
           });
-          unlockBox.replaceChildren(h('p', null, `"${f.name}"은(는) 암호가 걸려 있어요. 비밀번호를 넣으면 번호를 넣을 수 있어요. 저장한 파일에는 암호가 없어요.`), row.el);
+          unlockBox.replaceChildren(h('p', null, `"${f.name}"은(는) 암호가 걸려 있어요. 비밀번호를 넣으면 꾸밀 수 있어요. 저장한 파일에는 암호가 없어요(설정하고 저장에서 다시 걸 수 있어요).`), row.el);
           unlockBox.hidden = false;
           row.input.focus();
           return;
@@ -2156,131 +3627,626 @@
       }
     }
 
+    const source = () => ({
+      count: file.pageCount,
+      selected: [],
+      getPage: async (i) => ({ page: await pdf.getPage(i + 1), rot: 0 }),
+    });
+
     async function ready(name, bytes, pageCount) {
       file = { name, bytes, pageCount };
       pdf = await openPdfjs(bytes);
-      $('num-layout').hidden = false;
-      $('num-empty').hidden = true;
-      $('num-file').hidden = false;
-      $('num-name').textContent = `${name} · ${pageCount}쪽`;
-      await drawPreview();
+      $('decor-layout').hidden = false;
+      $('decor-empty').hidden = true;
+      $('decor-file').hidden = false;
+      $('decor-bar').hidden = false;
+      $('decor-name').textContent = `${name} · ${pageCount}쪽`;
+      await editor.setSource(source());
+      update();
     }
 
-    async function drawPreview() {
-      if (!pdf || !file) return;
-      const o = opts();
-      const want = o.skipFirst && file.pageCount > 1 ? 2 : 1;
-      const my = ++token;
-      if (want !== previewPage) {
-        const page = await pdf.getPage(want);
-        const vp1 = page.getViewport({ scale: 1 });
-        const maxH = Math.min(640, window.innerHeight * 0.7);
-        const cssW = Math.min(520, $('num-preview').parentElement.clientWidth || 520, maxH * (vp1.width / vp1.height));
-        const k = cssW / vp1.width;
-        const dpr = Math.min(2, window.devicePixelRatio || 1);
-        const vp = page.getViewport({ scale: k * dpr });
-        if (my !== token) return;
-        canvas.width = Math.floor(vp.width);
-        canvas.height = Math.floor(vp.height);
-        canvas.style.width = `${Math.floor(vp1.width * k)}px`;
-        const ctx = canvas.getContext('2d');
-        ctx.fillStyle = '#fff';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        await page.render({ canvasContext: ctx, viewport: vp }).promise;
-        visW = vp1.width;
-        visH = vp1.height;
-        previewPage = want;
-      }
-      placeMark();
-    }
-
-    // 미리보기 위에 번호 위치를 겹쳐 그린다(저장 때와 같은 계산).
-    function placeMark() {
+    const NAMES = { number: '쪽번호', watermark: '워터마크', stamp: '서명 · 도장' };
+    function update() {
       if (!file) return;
-      const o = opts();
-      const info = $('num-info');
-      if (!Number.isInteger(o.start) || o.start < 0) {
-        mark.hidden = true;
-        info.textContent = '시작 번호는 0 이상의 정수로 적어 주세요.';
-        return;
-      }
-      const numbered = file.pageCount - (o.skipFirst ? 1 : 0);
-      const total = o.start + numbered - 1;
-      const showNo = o.skipFirst ? (file.pageCount > 1 ? o.start : null) : o.start;
-      info.textContent = numbered > 0
-        ? `모두 ${file.pageCount}쪽 · ${numbered}쪽에 “${Core.numberText(o.start, total, o.format)}”부터 “${Core.numberText(total, total, o.format)}”까지 들어가요.`
-        : '번호를 넣을 쪽이 없어요. "첫 쪽 건너뛰기"를 끄세요.';
-      $('num-caption').textContent = previewPage === 2 ? '2쪽 미리보기 (첫 쪽은 번호 없음)' : '첫 쪽 미리보기';
-      if (showNo == null) { mark.hidden = true; return; }
-      const text = Core.numberText(showNo, total, o.format);
-      const { size, margin } = Core.numberMetrics(visW, visH);
-      // Helvetica 폭을 대략 맞추기 위해 canvas로 잰다.
-      const ctx = document.createElement('canvas').getContext('2d');
-      ctx.font = `${size}px Helvetica, Arial, sans-serif`;
-      const textW = ctx.measureText(text).width;
-      const { vx, vy } = Core.numberSpot(visW, visH, textW, size, margin, o.position);
-      const k = canvas.getBoundingClientRect().width / visW || 1;
-      mark.textContent = text;
-      mark.style.fontSize = `${size * k}px`;
-      mark.style.left = `${vx * k}px`;
-      // 기준선(vy) 위로 글자 높이만큼 올린다.
-      mark.style.top = `${(visH - vy - size * 0.78) * k}px`;
-      mark.hidden = false;
+      const o = editor.getOpts();
+      const on = ITEMS.filter((k) => o[k].on && (k !== 'stamp' || o.stamp.ids.length));
+      const err = editor.validate();
+      $('decor-count').textContent = on.length ? `${file.pageCount}쪽 · ${on.map((k) => NAMES[k]).join(' · ')}` : '꾸밀 것을 켜 주세요';
+      if (!isBusy()) $('decor-save').disabled = !on.length || !!err;
+      $('decor-save').title = err || '바로 저장 (Ctrl+S)';
     }
+    document.addEventListener('busyend', update);
 
-    $('panel-number').addEventListener('change', (e) => {
-      if (e.target.closest('.num-options')) drawPreview().catch(showError);
-    });
-    $('num-start').addEventListener('input', placeMark);
-    window.addEventListener('resize', () => {
-      if (activeTab === 'number' && file) { previewPage = 0; drawPreview().catch(() => {}); }
-    });
-
-    $('num-save').addEventListener('click', async () => {
+    const stem = () => safeName(baseName(file.name));
+    async function saveNow(o = editor.getOpts(), name = `${stem()}_꾸미기`) {
       if (!file) return toast('PDF를 먼저 넣어 주세요.', '');
-      const o = opts();
-      if (!Number.isInteger(o.start) || o.start < 0) {
-        $('num-start').focus();
-        return toast('시작 번호가 올바르지 않아요.', '0 이상의 정수로 적어 주세요. 예: 1');
-      }
-      if (file.pageCount - (o.skipFirst ? 1 : 0) < 1) {
-        return toast('번호를 넣을 쪽이 없어요.', '한 쪽짜리 PDF는 "첫 쪽 건너뛰기"를 끄고 저장하세요.');
-      }
+      const err = editor.validate();
+      if (err) return toast(err, '');
       try {
-        const bytes = await withBusy('번호 넣는 중…', async (progress) => {
-          // 매번 원본에서 새로 연다(두 번 저장해도 번호가 겹치지 않게).
+        const r = await withBusy('꾸미는 중…', async (progress, signal) => {
           const doc = await PDFDocument.load(file.bytes.slice(), { updateMetadata: false });
-          await Core.addPageNumbers(doc, o, (d, n) => progress(`${d}번째 쪽 처리 중 (${d}/${n})`, d, n));
-          await progress('파일로 만드는 중…', 1, 1);
-          return doc.save();
-        });
-        download(bytes, `${safeName(baseName(file.name))}_쪽번호.pdf`);
+          return applyOptions(doc, o, progress, signal);
+        }, { cancellable: true });
+        download(r.bytes, `${name}.pdf`);
       } catch (e) { showError(e, file.name); }
+    }
+    function openDialog() {
+      if (!file) return toast('PDF를 먼저 넣어 주세요.', '');
+      SaveDialog.open({
+        name: `${stem()}_꾸미기`,
+        meta: `${file.pageCount}쪽`,
+        source: source(),
+        startPage: editor.pageIndex,
+        preset: editor.getOpts(),
+        run: (o, name) => saveNow(o, name),
+      });
+    }
+    $('decor-save').addEventListener('click', () => saveNow());
+    $('decor-save-opts').addEventListener('click', openDialog);
+    wireDrop($('decor-drop'), $('decor-input'), load);
+    let resizeTimer = 0;
+    window.addEventListener('resize', () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => { if (activeTab === 'decorate' && file) editor.redraw(); }, 200);
     });
 
-    wireDrop($('num-drop'), $('num-input'), load);
-
-    function reset(keepOptions) {
+    function close() {
       token++;
       if (pdf) pdf.destroy();
       pdf = null;
       file = null;
-      previewPage = 0;
       unlockBox.hidden = true;
-      mark.hidden = true;
-      $('num-layout').hidden = true;
-      $('num-empty').hidden = false;
-      $('num-file').hidden = true;
-      const ctx = canvas.getContext('2d');
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      if (!keepOptions) {
-        document.querySelector('input[name="num-pos"][value="bc"]').checked = true;
-        document.querySelector('input[name="num-fmt"][value="n"]').checked = true;
-        $('num-start').value = '1';
-        $('num-skip').checked = false;
+      $('decor-layout').hidden = true;
+      $('decor-empty').hidden = false;
+      $('decor-file').hidden = true;
+      $('decor-bar').hidden = true;
+    }
+    function reset() {
+      close();
+      editor.setOpts(startOpts());
+    }
+    return { load, reset, shortcutSave: (withOpts) => (withOpts ? openDialog() : saveNow()) };
+  })();
+
+  // ═══════════════════════════════════════════════════════════
+  // 비교해 보기 (원본과 결과의 같은 쪽을 나란히)
+  // ═══════════════════════════════════════════════════════════
+  const Compare = (() => {
+    const dlg = $('compare-dialog');
+    const fileSel = $('cv-file');
+    const zoomSel = $('cv-zoom');
+    const paneA = $('cv-a');
+    const paneB = $('cv-b');
+    let items = [];
+    let cur = 0;
+    let page = 1;
+    let docs = {};
+    let token = 0;
+
+    async function docOf(key, bytes) {
+      if (!docs[key]) docs[key] = openPdfjs(bytes);
+      return docs[key];
+    }
+    async function drawPdf(pane, doc, zoom, my) {
+      const pg = await doc.getPage(Math.min(page, doc.numPages));
+      const vp1 = pg.getViewport({ scale: 1 });
+      const cssW = (pane.clientWidth - 4) * zoom;
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      const vp = pg.getViewport({ scale: (cssW / vp1.width) * dpr });
+      const c = makeCanvas(vp.width, vp.height);
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, c.width, c.height);
+      await pg.render({ canvasContext: ctx, viewport: vp }).promise;
+      if (my !== token) return;
+      c.style.width = `${cssW}px`;
+      pane.replaceChildren(c);
+    }
+    async function draw() {
+      const it = items[cur];
+      if (!it) return;
+      const my = ++token;
+      const zoom = Number(zoomSel.value);
+      $('cv-a-size').textContent = fmtMB(it.aSize);
+      $('cv-b-size').textContent = fmtMB(it.bSize);
+      if (it.kind === 'pdf') {
+        const a = await docOf(`a${cur}`, it.a);
+        const b = await docOf(`b${cur}`, it.b);
+        const n = Math.min(a.numPages, b.numPages);
+        page = Math.max(1, Math.min(page, n));
+        $('cv-page').textContent = `${page} / ${n}쪽`;
+        $('cv-prev').disabled = page <= 1;
+        $('cv-next').disabled = page >= n;
+        await Promise.all([drawPdf(paneA, a, zoom, my), drawPdf(paneB, b, zoom, my)]);
+      } else {
+        $('cv-page').textContent = '사진';
+        $('cv-prev').disabled = $('cv-next').disabled = true;
+        for (const [pane, blob] of [[paneA, it.a], [paneB, it.b]]) {
+          const img = h('img', { alt: '', src: URL.createObjectURL(blob) });
+          img.style.width = `${(pane.clientWidth - 4) * zoom}px`;
+          img.onload = () => URL.revokeObjectURL(img.src);
+          pane.replaceChildren(img);
+        }
       }
     }
-    return { load, reset };
+    // 두 칸을 같이 스크롤
+    let syncing = false;
+    for (const [x, y] of [[paneA, paneB], [paneB, paneA]]) {
+      x.addEventListener('scroll', () => {
+        if (syncing) return;
+        syncing = true;
+        y.scrollTop = x.scrollTop;
+        y.scrollLeft = x.scrollLeft;
+        requestAnimationFrame(() => { syncing = false; });
+      });
+    }
+    zoomSel.addEventListener('change', draw);
+    fileSel.addEventListener('change', () => { cur = Number(fileSel.value); page = 1; draw(); });
+    $('cv-prev').addEventListener('click', () => { page--; draw(); });
+    $('cv-next').addEventListener('click', () => { page++; draw(); });
+    dlg.addEventListener('close', () => {
+      Object.values(docs).forEach((p) => p.then((d) => d.destroy()).catch(() => {}));
+      docs = {};
+      paneA.replaceChildren();
+      paneB.replaceChildren();
+    });
+    function open(list) {
+      items = list;
+      cur = 0;
+      page = 1;
+      fileSel.replaceChildren(...list.map((it, i) => h('option', { value: String(i) }, it.name)));
+      fileSel.hidden = list.length < 2;
+      dlg.showModal();
+      requestAnimationFrame(() => draw().catch(showError));
+    }
+    return { open };
+  })();
+
+  // ═══════════════════════════════════════════════════════════
+  // 용량 줄이기
+  // ═══════════════════════════════════════════════════════════
+  const Shrink = (() => {
+    const listEl = $('cmp-files');
+    const thumb = $('cmp-thumb');
+    const track = $('cmp-track');
+    const mbInput = $('cmp-mb');
+    const TICKS = [['공문 10MB', 10], ['메일 20MB', 20], ['5MB', 5], ['2MB', 2]];
+    const IMG_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
+    let files = [];
+    let seq = 0;
+    let target = 0; // 바이트
+    let range = { min: 0, max: 0 };
+
+    const isPdf = (f) => f.kind === 'pdf';
+    const basis = () => document.querySelector('input[name="cmp-basis"]:checked').value;
+    const photos = () => files.filter((f) => f.kind === 'image' && f.ready);
+    const readyFiles = () => files.filter((f) => f.ready);
+
+    async function addFiles(list) {
+      const ok = list.filter((f) => isPdfFile(f) || /^image\/(jpeg|png|webp)$/.test(f.type) || /\.(jpe?g|png|webp)$/i.test(f.name));
+      const bad = list.length - ok.length;
+      if (bad) toast(`넣을 수 없는 파일 ${bad}개는 뺐어요.`, 'PDF나 JPG · PNG · WEBP 사진만 줄일 수 있어요.');
+      if (!ok.length) return;
+      const added = ok.map((file) => ({ id: `c${++seq}`, file, name: file.name, kind: isPdfFile(file) ? 'pdf' : 'image', size: file.size, state: '읽는 중…' }));
+      files.push(...added);
+      clearResults();
+      render();
+      try {
+        await withBusy('얼마까지 줄일 수 있는지 재는 중…', async (progress, signal) => {
+          for (let i = 0; i < added.length; i++) {
+            const f = added[i];
+            await progress(`${f.name} 살펴보는 중 (${i + 1}/${added.length})`, i, added.length);
+            try {
+              await prepare(f, signal);
+            } catch (e) {
+              if (isAbort(e)) throw e;
+              f.error = explain(e, f.name);
+              f.state = '읽지 못했어요';
+            }
+            render();
+          }
+        }, { cancellable: true });
+      } catch (e) {
+        if (!isAbort(e)) showError(e);
+        added.filter((f) => !f.ready && !f.locked).forEach((f) => { f.state = '취소함'; });
+      }
+      render();
+      setupTarget();
+    }
+
+    async function prepare(f, signal) {
+      const bytes = await readBytes(f.file);
+      if (f.kind === 'pdf') {
+        const info = await Core.openPdf(bytes);
+        if (info.locked) {
+          f.locked = true;
+          f.bytes = bytes;
+          f.state = '암호가 걸려 있어요';
+          return;
+        }
+        f.bytes = info.wasEncrypted ? info.bytes : bytes;
+        f.pages = info.doc.getPageCount();
+        await analyzePdf(f, signal);
+      } else {
+        f.bytes = bytes;
+        const codec = Squeeze.codec();
+        const hd = await codec.fromBlob(new Blob([bytes], { type: f.file.type || 'image/jpeg' }));
+        const alpha = f.file.type === 'image/png' && codec.hasAlpha(hd);
+        f.outType = alpha ? (await canEncode('image/webp') ? 'image/webp' : 'image/png') : 'image/jpeg';
+        f.handle = hd;
+        const low = await codec.encode(hd, Compress.params(0).scale, Compress.params(0).q, f.outType);
+        f.min = Math.min(bytes.length, low.bytes.length);
+        f.lossless = bytes.length;
+        f.ready = true;
+        f.state = `${f.handle.w}×${f.handle.h}`;
+        if (f.outType !== f.file.type) f.note = alpha ? `투명한 곳이 있어 ${IMG_TYPES[f.outType].toUpperCase()}로 저장해요` : 'JPG로 바꿔 저장해요';
+      }
+    }
+    async function analyzePdf(f, signal) {
+      const a = await Squeeze.analyze(f.bytes, { signal });
+      f.min = a.min;
+      f.lossless = a.lossless;
+      f.mostlyText = a.mostlyText;
+      f.images = a.images;
+      f.skipped = a.skipped;
+      f.ready = true;
+      f.state = `${f.pages}쪽 · 사진 ${a.images}장${a.skipped ? ` (못 줄이는 형식 ${a.skipped}장)` : ''}`;
+    }
+    let webpOk = null;
+    async function canEncode(type) {
+      if (webpOk == null) {
+        const c = makeCanvas(2, 2);
+        webpOk = await new Promise((r) => c.toBlob((b) => r(!!b && b.type === type), type, 0.8));
+      }
+      return webpOk;
+    }
+
+    function render() {
+      $('cmp-empty').hidden = files.length > 0;
+      listEl.replaceChildren(...files.map((f) => {
+        const res = f.result;
+        const over = res && res.size > f.target;
+        const li = h('li', { class: `cmp-file${res ? (over ? ' over' : ' done') : ''}`, 'data-id': f.id },
+          h('span', { class: 'cf-icon', 'aria-hidden': 'true' }, icon(f.kind === 'pdf' ? 'filedown' : 'image')),
+          h('span', { class: 'cf-name', title: f.name }, f.name),
+          h('span', { class: 'cf-size' }, h('span', null, fmtMB(f.size)),
+            res ? h('span', { class: 'cf-arrow' }, ' → ') : null,
+            res ? h('b', null, fmtMB(res.size)) : null),
+          h('span', { class: 'cf-state' }, f.error ? `${f.error.title}` : res ? resultText(f) : f.state),
+          f.note ? h('small', { class: 'cf-note' }, f.note) : null,
+          h('button', { type: 'button', class: 'icon-btn cf-x', 'data-del': f.id, 'aria-label': `${f.name} 빼기`, title: '빼기' }, icon('x', 'ic sm')));
+        if (f.locked) {
+          const row = passwordRow({
+            placeholder: '이 파일의 비밀번호',
+            onSubmit: async (pw) => {
+              const r = await withBusy('암호 푸는 중…', () => Core.decrypt(f.bytes, pw));
+              f.bytes = r.bytes;
+              f.pages = r.doc.getPageCount();
+              f.locked = false;
+              await withBusy('얼마까지 줄일 수 있는지 재는 중…', (p, signal) => analyzePdf(f, signal), { cancellable: true });
+              render();
+              setupTarget();
+              toast(`"${f.name}" 암호를 풀었어요.`, '줄인 파일에는 암호가 없어요. 설정하고 저장에서 다시 걸 수 있어요.', 'ok');
+            },
+          });
+          li.append(h('div', { class: 'cf-unlock' }, row.el));
+        }
+        return li;
+      }));
+    }
+    function resultText(f) {
+      const r = f.result;
+      const stageName = r.stage === 3 ? '쪽을 사진으로' : r.stage === 2 ? '사진 줄임' : '손실 없이';
+      if (r.size <= f.target) return `✓ 목표 이하 · ${stageName}`;
+      return `목표보다 ${fmtMB(r.size - f.target)} 커요`;
+    }
+    listEl.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-del]');
+      if (!b || isBusy()) return;
+      const f = files.find((x) => x.id === b.dataset.del);
+      if (f && f.handle) Squeeze.codec().release(f.handle);
+      files = files.filter((x) => x.id !== b.dataset.del);
+      clearResults();
+      render();
+      setupTarget();
+    });
+
+    // ── 목표 용량 막대 ──
+    function computeRange() {
+      const ready = readyFiles();
+      if (!ready.length) return { min: 0, max: 0 };
+      const onlyPhotos = ready.every((f) => f.kind === 'image');
+      if (onlyPhotos && ready.length > 1 && basis() === 'total') {
+        return { min: ready.reduce((s, f) => s + f.min, 0), max: ready.reduce((s, f) => s + f.size, 0) };
+      }
+      // 파일마다 같은 목표: 가장 큰 파일 기준
+      const big = ready.reduce((a, b) => (b.size > a.size ? b : a));
+      return { min: big.min, max: big.size };
+    }
+    function setupTarget() {
+      const ready = readyFiles();
+      $('cmp-target').hidden = !ready.length;
+      $('cmp-basis').hidden = !(ready.length > 1 && ready.every((f) => f.kind === 'image'));
+      if (!ready.length) return;
+      range = computeRange();
+      const def = Math.min(range.max * 0.6, 10 * MB);
+      const snap = Math.round(def / (0.5 * MB)) * 0.5 * MB;
+      setTarget(Math.max(range.min, Math.min(range.max, snap || def)), false);
+      // 눈금 칩: 원래 용량보다 작은 것만
+      const ticks = TICKS.filter(([, v]) => v * MB < range.max);
+      $('cmp-ticks').replaceChildren(...ticks.map(([label, v]) => {
+        const p = frac(v * MB);
+        return h('button', { type: 'button', class: `vol-tick${v * MB < range.min ? ' low' : ''}`, 'data-mb': String(v), style: `left:${p * 100}%`, title: v * MB < range.min ? `이 파일은 약 ${fmtMB(range.min)}까지만 줄일 수 있어요` : `${v}MB 이하로` }, label);
+      }));
+      $('cmp-min').textContent = `최소 약 ${fmtMB(range.min)}`;
+      $('cmp-max').textContent = `원래 ${fmtMB(range.max)}`;
+      const text = ready.filter((f) => f.kind === 'pdf' && f.mostlyText);
+      const notes = [];
+      if (text.length) notes.push(`${text.map((f) => `"${f.name}"`).join(', ')}: 이 파일은 약 ${fmtMB(Math.max(...text.map((f) => f.min)))}까지만 줄일 수 있어요(대부분 글꼴이라서).`);
+      const skipped = ready.filter((f) => f.skipped);
+      if (skipped.length) notes.push(`특수한 형식(CMYK · 흑백 스캔 등) 사진 ${skipped.reduce((s, f) => s + f.skipped, 0)}장은 그대로 둬요.`);
+      if (ready.length > 1 && !(ready.every((f) => f.kind === 'image') && basis() === 'total')) notes.push('목표는 파일마다 따로 적용돼요.');
+      $('cmp-note').textContent = notes.join(' ');
+    }
+    const frac = (v) => (range.max > range.min ? Math.max(0, Math.min(1, (v - range.min) / (range.max - range.min))) : 1);
+    function setTarget(v, fromInput) {
+      target = Math.max(1024, v);
+      const p = frac(target);
+      thumb.style.left = `${p * 100}%`;
+      $('cmp-fill').style.width = `${p * 100}%`;
+      const mb = target / MB;
+      const text = `${mb >= 10 ? mb.toFixed(1) : mb.toFixed(2).replace(/0$/, '')}MB`;
+      $('cmp-bubble').textContent = text;
+      thumb.setAttribute('aria-valuemin', String(Math.round((range.min / MB) * 10) / 10));
+      thumb.setAttribute('aria-valuemax', String(Math.round((range.max / MB) * 10) / 10));
+      thumb.setAttribute('aria-valuenow', String(Math.round(mb * 10) / 10));
+      thumb.setAttribute('aria-valuetext', `${text} 이하`);
+      if (!fromInput) mbInput.value = String(Math.round(mb * 10) / 10);
+      const q = target >= range.max ? '원본 그대로' : target < range.min ? '목표에 못 미칠 수 있어요' : `예상 화질: ${Compress.qualityLabel(p)}`;
+      $('cmp-quality').textContent = q;
+      $('cmp-quality').dataset.q = target >= range.max ? 'same' : target < range.min ? 'low' : Compress.qualityLabel(p);
+      $('cmp-go').disabled = isBusy() || !readyFiles().length;
+    }
+    const fromX = (clientX) => {
+      const r = track.getBoundingClientRect();
+      const p = Math.max(0, Math.min(1, (clientX - r.left) / r.width));
+      const v = range.min + p * (range.max - range.min);
+      return Math.round(v / (0.1 * MB)) * 0.1 * MB || v;
+    };
+    let dragging = false;
+    track.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('.vol-tick')) return;
+      dragging = true;
+      track.setPointerCapture(e.pointerId);
+      setTarget(fromX(e.clientX));
+      thumb.focus();
+    });
+    track.addEventListener('pointermove', (e) => { if (dragging) setTarget(fromX(e.clientX)); });
+    track.addEventListener('pointerup', () => { dragging = false; });
+    track.addEventListener('pointercancel', () => { dragging = false; });
+    thumb.addEventListener('keydown', (e) => {
+      const step = 0.5 * MB;
+      let v = null;
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') v = Math.max(range.min, target - step);
+      if (e.key === 'ArrowRight' || e.key === 'ArrowUp') v = Math.min(range.max, target + step);
+      if (e.key === 'Home') v = range.min;
+      if (e.key === 'End') v = range.max;
+      if (e.key === 'PageDown') v = Math.max(range.min, target - 2 * MB);
+      if (e.key === 'PageUp') v = Math.min(range.max, target + 2 * MB);
+      if (v == null) return;
+      e.preventDefault();
+      setTarget(v);
+    });
+    $('cmp-ticks').addEventListener('click', (e) => {
+      const b = e.target.closest('.vol-tick');
+      if (!b) return;
+      const v = Number(b.dataset.mb) * MB;
+      if (v < range.min) toast(`약 ${fmtMB(range.min)}까지만 줄일 수 있어요.`, '목표를 그대로 두면 [줄이기] 뒤에 쪽을 사진으로 바꿀지 물어봐요.', 'info');
+      setTarget(v);
+    });
+    mbInput.addEventListener('input', () => {
+      const v = Number(mbInput.value.replace(',', '.'));
+      if (v > 0) setTarget(v * MB, true);
+    });
+    mbInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+    document.querySelectorAll('input[name="cmp-basis"]').forEach((r) => r.addEventListener('change', () => { clearResults(); setupTarget(); }));
+
+    // ── 줄이기 ──
+    function clearResults() {
+      files.forEach((f) => { delete f.result; delete f.target; });
+      $('cmp-result').hidden = true;
+    }
+    async function go() {
+      const ready = readyFiles();
+      if (!ready.length) return toast('줄일 파일을 먼저 넣어 주세요.', '');
+      if (!(target > 0)) return mbInput.focus();
+      clearResults();
+      const total = ready.length > 1 && ready.every((f) => f.kind === 'image') && basis() === 'total';
+      try {
+        await withBusy('줄이는 중…', async (progress, signal) => {
+          if (total) {
+            await shrinkPhotosTotal(ready, target, progress, signal);
+          } else {
+            for (let i = 0; i < ready.length; i++) {
+              const f = ready[i];
+              f.target = target;
+              const label = ready.length > 1 ? `${i + 1}/${ready.length} · ` : '';
+              if (f.kind === 'pdf') {
+                const r = await squeezePdf(f.bytes, target, progress, signal, { label });
+                f.result = { bytes: r.bytes, size: r.bytes.length, stage: r.result.stage, status: r.result.status, type: 'application/pdf' };
+              } else {
+                await progress(`${label}사진 줄이는 중 ${i + 1}/${ready.length}`, i, ready.length);
+                const r = await Compress.compressImage(f.handle, f.size, target, Squeeze.codec(), { type: f.outType, signal });
+                const keep = r.bytes.length >= f.size && f.outType === f.file.type;
+                f.result = keep ? { bytes: f.bytes, size: f.size, stage: 1, type: f.file.type } : { bytes: r.bytes, size: r.bytes.length, stage: 2, type: r.type || f.outType };
+              }
+              render();
+            }
+          }
+        }, { cancellable: true });
+      } catch (e) {
+        showError(e);
+      }
+      render();
+      showResult();
+    }
+    // 사진 여러 장을 "전체 합쳐서" 목표에: 모든 사진에 같은 t를 쓰고 합계로 이진 탐색
+    async function shrinkPhotosTotal(list, tgt, progress, signal) {
+      const codec = Squeeze.codec();
+      const memo = new Map();
+      const encAll = async (t) => {
+        if (memo.has(t)) return memo.get(t);
+        const { scale, q } = Compress.params(t);
+        const out = [];
+        for (let i = 0; i < list.length; i++) {
+          if (signal.aborted) throw abortError();
+          await progress(`사진 줄이는 중 ${i + 1}/${list.length}`, i, list.length);
+          out.push(await codec.encode(list[i].handle, scale, q, list[i].outType));
+        }
+        memo.set(t, out);
+        return out;
+      };
+      const s = await Compress.searchT(async (t) => (await encAll(t)).reduce((a, r) => a + r.bytes.length, 0), tgt, { steps: 6, signal });
+      const out = await encAll(s.t);
+      list.forEach((f, i) => {
+        f.target = (tgt * f.size) / list.reduce((a, x) => a + x.size, 0);
+        f.result = { bytes: out[i].bytes, size: out[i].bytes.length, stage: 2, type: out[i].type || f.outType };
+      });
+      list.totalTarget = tgt;
+    }
+
+    function showResult() {
+      const done = files.filter((f) => f.result);
+      if (!done.length) return;
+      const before = done.reduce((s, f) => s + f.size, 0);
+      const after = done.reduce((s, f) => s + f.result.size, 0);
+      const totalMode = done.length > 1 && done.every((f) => f.kind === 'image') && basis() === 'total';
+      const over = totalMode ? after > target : done.some((f) => f.result.size > f.target);
+      const box = $('cmp-summary');
+      box.className = `cmp-summary ${over ? 'over' : 'ok'}`;
+      box.replaceChildren(
+        h('span', null, fmtMB(before)), ' → ', h('b', null, fmtMB(after)), ' ',
+        over
+          ? h('span', { class: 'bad' }, totalMode ? `목표보다 ${fmtMB(after - target)} 커요` : `${done.filter((f) => f.result.size > f.target).length}개 파일이 목표보다 커요`)
+          : h('span', { class: 'good' }, `✓ 목표(${fmtMB(target)}) 이하`));
+      const advice = [];
+      done.filter((f) => f.result.size > f.target).forEach((f) => {
+        if (f.kind === 'pdf' && f.result.status === 'raster') {
+          advice.push(h('p', null, `"${f.name}": 목표보다 ${fmtMB(f.result.size - f.target)} 커요. 쪽을 사진으로 바꾸면 더 줄일 수 있어요(글자 선택 불가). `,
+            h('button', { type: 'button', class: 'btn sm', 'data-raster': f.id }, '쪽을 사진으로 바꿔 더 줄이기…')));
+        } else if (f.kind === 'pdf' && f.result.status === 'cannot') {
+          advice.push(h('p', null, `"${f.name}": 줄일 사진이 없어요. 이 파일은 약 ${fmtMB(f.result.size)}까지만 줄일 수 있어요(대부분 글꼴이라서). 쪽을 나눠 저장하는 방법도 있어요.`));
+        } else {
+          advice.push(h('p', null, `"${f.name}": 목표를 조금 올리거나(약 ${fmtMB(f.result.size)}), 사진 크기를 줄여 다시 넣어 보세요.`));
+        }
+      });
+      $('cmp-advice').replaceChildren(...advice);
+      $('cmp-result').hidden = false;
+      $('cmp-save-opts').disabled = !done.some((f) => f.kind === 'pdf');
+      $('cmp-save-opts').title = done.some((f) => f.kind === 'pdf') ? '쪽번호 · 워터마크 · 도장 · 암호 (Ctrl+Shift+S)' : '설정하고 저장은 PDF에만 쓸 수 있어요';
+      $('cmp-result').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+    $('cmp-advice').addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-raster]');
+      if (!b) return;
+      const f = files.find((x) => x.id === b.dataset.raster);
+      if (!f) return;
+      const ok = await confirmBox({
+        title: '쪽을 사진으로 바꿀까요?',
+        body: '쪽 전체를 그림으로 바꾸면 더 줄어들지만, 글자를 선택하거나 검색할 수 없어요.',
+        yes: '그래도 줄이기',
+        no: '여기까지만',
+      });
+      if (!ok) return;
+      try {
+        const out = await withBusy('쪽을 사진으로 바꾸는 중…', (progress, signal) => rasterToTarget(f.result.bytes, f.target, progress, signal), { cancellable: true });
+        if (out.length < f.result.size) f.result = { ...f.result, bytes: out, size: out.length, stage: 3, status: out.length <= f.target ? 'done' : 'raster' };
+      } catch (err) { showError(err); }
+      render();
+      showResult();
+    });
+    $('cmp-go').addEventListener('click', go);
+
+    $('cmp-compare').addEventListener('click', () => {
+      const done = files.filter((f) => f.result);
+      if (!done.length) return;
+      Compare.open(done.map((f) => ({
+        name: f.name,
+        kind: f.kind,
+        a: f.kind === 'pdf' ? f.bytes : new Blob([f.bytes], { type: f.file.type }),
+        b: f.kind === 'pdf' ? f.result.bytes : new Blob([f.result.bytes], { type: f.result.type }),
+        aSize: f.size,
+        bSize: f.result.size,
+      })));
+    });
+
+    const outName = (f, suffix = '_줄임') => {
+      const ext = f.kind === 'pdf' ? 'pdf' : (IMG_TYPES[f.result.type] || 'jpg');
+      return `${safeName(baseName(f.name))}${suffix}.${ext}`;
+    };
+    async function saveNow() {
+      const done = files.filter((f) => f.result);
+      if (!done.length) return toast('먼저 [줄이기]를 눌러 주세요.', '');
+      if (done.length === 1) return download(done[0].result.bytes, outName(done[0]), done[0].result.type);
+      try {
+        const blob = await withBusy('zip으로 묶는 중…', async () => {
+          const zip = new JSZip();
+          done.forEach((f) => zip.file(outName(f), f.result.bytes));
+          return zip.generateAsync({ type: 'blob', compression: 'STORE' });
+        });
+        download(blob, `용량줄이기_${ymd()}.zip`, 'application/zip');
+      } catch (e) { showError(e); }
+    }
+    async function openDialog() {
+      const done = files.filter((f) => f.result && f.kind === 'pdf');
+      if (!done.length) return toast('설정하고 저장은 줄인 PDF에 쓸 수 있어요.', '먼저 [줄이기]를 눌러 주세요.', 'info');
+      const first = done[0];
+      const pdf = await openPdfjs(first.result.bytes);
+      SaveDialog.open({
+        name: done.length === 1 ? `${safeName(baseName(first.name))}_줄임` : `용량줄이기_${ymd()}`,
+        meta: `${done.length}개 파일 · ${fmtMB(done.reduce((s, f) => s + f.result.size, 0))}`,
+        source: { count: pdf.numPages, selected: [], getPage: async (i) => ({ page: await pdf.getPage(i + 1), rot: 0 }) },
+        onClose: () => setTimeout(() => pdf.destroy(), 1000),
+        run: async (o, name) => {
+          try {
+            const out = await withBusy('저장 준비 중…', async (progress, signal) => {
+              const res = [];
+              for (let i = 0; i < done.length; i++) {
+                const f = done[i];
+                const label = done.length > 1 ? `${i + 1}/${done.length} · ` : '';
+                const doc = await PDFDocument.load(f.result.bytes.slice(), { updateMetadata: false });
+                const r = await applyOptions(doc, o, progress, signal, { label });
+                res.push({ name: done.length === 1 ? `${name}.pdf` : outName(f), bytes: r.bytes });
+              }
+              if (res.length === 1) return res[0];
+              const zip = new JSZip();
+              res.forEach((x) => zip.file(x.name, x.bytes));
+              return { name: `${name}.zip`, blob: await zip.generateAsync({ type: 'blob', compression: 'STORE' }) };
+            }, { cancellable: true });
+            download(out.blob || out.bytes, out.name, out.blob ? 'application/zip' : 'application/pdf');
+          } catch (e) { showError(e); }
+        },
+      });
+    }
+    $('cmp-save').addEventListener('click', saveNow);
+    $('cmp-save-opts').addEventListener('click', openDialog);
+    wireDrop($('cmp-drop'), $('cmp-input'), (list) => addFiles(list));
+    document.addEventListener('busyend', () => { if (readyFiles().length) $('cmp-go').disabled = false; });
+
+    function reset() {
+      files.forEach((f) => f.handle && Squeeze.codec().release(f.handle));
+      files = [];
+      target = 0;
+      render();
+      $('cmp-target').hidden = true;
+      $('cmp-result').hidden = true;
+    }
+    return {
+      addFiles,
+      reset,
+      shortcutSave: (withOpts) => (withOpts ? openDialog() : saveNow()),
+      state: () => ({ target, range, files: files.map((f) => ({ name: f.name, size: f.size, min: f.min, result: f.result && f.result.size, stage: f.result && f.result.stage })) }),
+    };
   })();
 
   // ═══════════════════════════════════════════════════════════
@@ -2292,7 +4258,9 @@
     Img.reset();
     P2I.reset();
     Lock.reset();
-    Num.reset();
+    Decor.reset();
+    Shrink.reset();
+    SaveDialog.close();
     toastBox.replaceChildren();
     showTab('edit');
     showView('home');
@@ -2334,7 +4302,6 @@
   const Guide = (() => {
     const aside = $('edit-guide');
     const layout = aside.parentElement;
-    const openBtn = $('guide-open');
     const foldBtn = $('guide-fold');
     const rail = $('guide-rail');
     const backdrop = $('guide-backdrop');
@@ -2549,15 +4516,17 @@
 
     /** 패널이 실제로 보이는가 (접힘 · 서랍 닫힘 · 다른 도구 · 백그라운드 탭이면 아니다) */
     function isShown() {
-      if (document.hidden || activeView !== 'work' || activeTab !== 'edit') return false;
+      if (document.hidden || activeView !== 'work') return false;
       return wide.matches ? !collapsed : drawer;
     }
     function sync() {
+      // 지금 도구의 사용법만 보인다. 움직이는 예시는 편집에만 있다.
+      aside.querySelectorAll('.guide-sec').forEach((sec) => { sec.hidden = sec.dataset.guide !== activeTab; });
       if (still.matches) {
         demos.forEach((d) => d.showLast());
         return;
       }
-      const on = isShown();
+      const on = isShown() && activeTab === 'edit';
       demos.forEach((d) => (on ? d.play() : d.pause()));
     }
 
@@ -2571,7 +4540,7 @@
       foldBtn.textContent = isWide ? '접기' : '닫기';
       foldBtn.setAttribute('aria-expanded', String(isWide ? !collapsed : drawer));
       rail.setAttribute('aria-expanded', String(isWide && !collapsed));
-      openBtn.setAttribute('aria-expanded', String(!isWide && drawer));
+      document.querySelectorAll('.guide-open').forEach((b) => b.setAttribute('aria-expanded', String(!isWide && drawer)));
       if (!isWide) aside.setAttribute('aria-hidden', String(!drawer)); else aside.removeAttribute('aria-hidden');
       sync();
     }
@@ -2589,7 +4558,7 @@
       if (lastFocus && lastFocus.isConnected) lastFocus.focus();
     }
 
-    openBtn.addEventListener('click', openDrawer);
+    document.querySelectorAll('.guide-open').forEach((b) => b.addEventListener('click', openDrawer));
     backdrop.addEventListener('click', closeDrawer);
     foldBtn.addEventListener('click', () => {
       if (wide.matches) {
@@ -2636,5 +4605,32 @@
     })
     .catch(() => { /* 버전 표시는 없어도 쓰는 데 지장 없다 */ });
 
-  window.__pdfWorkshop = { version: 3, ready: true, guide: Guide.state };
+  // 저장 단축키: Ctrl+S = 바로 저장, Ctrl+Shift+S = 설정하고 저장… (브라우저의 "페이지 저장"은 막는다)
+  document.addEventListener('keydown', (e) => {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey || e.key.toLowerCase() !== 's') return;
+    e.preventDefault();
+    if (activeView !== 'work' || isBusy() || document.querySelector('dialog[open]')) return;
+    const withOpts = e.shiftKey;
+    const run = {
+      edit: () => Edit.shortcutSave(withOpts),
+      pdf2img: () => P2I.shortcutSave(withOpts),
+      decorate: () => Decor.shortcutSave(withOpts),
+      compress: () => Shrink.shortcutSave(withOpts),
+      img2pdf: () => $('img-save').click(),
+    }[activeTab];
+    if (run) run();
+    else toast('이 도구는 아래 버튼으로 저장해요.', '', 'info');
+  });
+
+  // 주소에 #도구 이름이 있으면 그 도구로 연다(예전 #lock, #number도).
+  {
+    const t = toolFromHash();
+    if (t) openTool(t);
+  }
+  window.addEventListener('hashchange', () => {
+    const t = toolFromHash();
+    if (t && (t !== activeTab || activeView !== 'work')) openTool(t);
+  });
+
+  window.__pdfWorkshop = { version: 4, ready: true, guide: Guide.state, compress: Shrink.state, worker: Squeeze.inWorker };
 })();

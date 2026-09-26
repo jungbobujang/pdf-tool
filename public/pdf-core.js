@@ -308,7 +308,230 @@
     return normAngle((Number(deg) || 0) + step);
   }
 
+  // ── 보이는 방향 기준 좌표 (쪽 회전 /Rotate 와 CropBox 반영) ──
+
+  /** 쪽의 보이는 크기와, 보이는 좌표(왼쪽 아래 원점) → PDF 좌표 변환 */
+  function pageFrame(page) {
+    const box = page.getCropBox();
+    const rot = normAngle(page.getRotation().angle);
+    const side = rot === 90 || rot === 270;
+    const visW = side ? box.height : box.width;
+    const visH = side ? box.width : box.height;
+    const toUser = (vx, vy) => {
+      if (rot === 90) return { x: box.x + box.width - vy, y: box.y + vx };
+      if (rot === 180) return { x: box.x + box.width - vx, y: box.y + box.height - vy };
+      if (rot === 270) return { x: box.x + vy, y: box.y + box.height - vx };
+      return { x: box.x + vx, y: box.y + vy };
+    };
+    return { box, rot, visW, visH, toUser };
+  }
+
+  // ── 워터마크 ──
+  const WM_COLORS = { red: [0.84, 0.18, 0.18], gray: [0.35, 0.37, 0.42], blue: [0.2, 0.33, 1] };
+  const WM_OPACITY = { light: 0.12, normal: 0.2, dark: 0.32 };
+  const isAscii = (s) => /^[\x20-\x7e]*$/.test(s);
+
+  /** 한글 워터마크용 글꼴을 문서에 넣는다(서브셋). fontkit은 @cantoo/fontkit */
+  async function embedFont(doc, fontkit, bytes) {
+    doc.registerFontkit(fontkit);
+    return doc.embedFont(bytes, { subset: true });
+  }
+
+  /**
+   * 보이는 쪽 크기에서 워터마크 글자들의 자리(보이는 좌표, 가운데 기준)와 크기, 각도
+   * @returns {{size:number, angle:number, spots:Array<{cx:number, cy:number}>}}
+   */
+  function watermarkLayout(visW, visH, textW1, layout) {
+    if (layout === 'center') {
+      const size = Math.min((visW * 0.7) / textW1, visH * 0.12);
+      return { size, angle: 0, spots: [{ cx: visW / 2, cy: visH / 2 }] };
+    }
+    if (layout === 'tile') {
+      const size = Math.min(visW, visH) * 0.05;
+      const stepX = textW1 * size + size * 3;
+      const stepY = size * 5;
+      const spots = [];
+      let row = 0;
+      for (let cy = stepY / 2; cy < visH + stepY; cy += stepY, row++) {
+        for (let cx = (row % 2 ? stepX / 2 : 0); cx < visW + stepX; cx += stepX) spots.push({ cx, cy });
+      }
+      return { size, angle: 30, spots };
+    }
+    // 대각선: 왼쪽 아래 → 오른쪽 위
+    const diag = Math.hypot(visW, visH);
+    const size = Math.min((diag * 0.62) / textW1, Math.min(visW, visH) * 0.22);
+    return { size, angle: (Math.atan2(visH, visW) * 180) / Math.PI, spots: [{ cx: visW / 2, cy: visH / 2 }] };
+  }
+
+  /**
+   * 모든 쪽에 워터마크 글자를 넣는다.
+   * opts: {text, layout:'diagonal'|'center'|'tile', strength:'light'|'normal'|'dark' 또는 opacity, color:'red'|'gray'|'blue'}
+   * font: embedFont로 넣은 글꼴(한글이면 필수). 없으면 영문만 Helvetica-Bold로.
+   */
+  async function addWatermark(doc, opts, font, onProgress) {
+    const text = String(opts.text || '').trim();
+    if (!text) throw new UserError('워터마크 글자를 적어 주세요.', '예: 내부 자료');
+    if (!font) {
+      if (!isAscii(text)) throw new UserError('한글 글꼴을 불러오지 못했어요.', '잠시 뒤 다시 해 주세요.');
+      font = await doc.embedFont(StandardFonts.HelveticaBold);
+    }
+    const [r, g, b] = WM_COLORS[opts.color] || WM_COLORS.red;
+    const opacity = opts.opacity != null ? opts.opacity : (WM_OPACITY[opts.strength] || WM_OPACITY.normal);
+    const textW1 = font.widthOfTextAtSize(text, 1);
+    const pages = doc.getPages();
+    for (let i = 0; i < pages.length; i++) {
+      const page = pages[i];
+      const f = pageFrame(page);
+      const { size, angle, spots } = watermarkLayout(f.visW, f.visH, textW1, opts.layout);
+      const a = (angle * Math.PI) / 180;
+      const ux = Math.cos(a);
+      const uy = Math.sin(a);
+      const tw = textW1 * size;
+      for (const s of spots) {
+        // 글자 덩어리의 가운데가 (cx, cy)에 오도록 기준선 시작점을 구한다.
+        const vx = s.cx - ux * (tw / 2) + uy * (size * 0.35);
+        const vy = s.cy - uy * (tw / 2) - ux * (size * 0.35);
+        const p = f.toUser(vx, vy);
+        page.drawText(text, { x: p.x, y: p.y, size, font, color: rgb(r, g, b), opacity, rotate: degrees(normAngleFree(angle + f.rot)) });
+      }
+      if (onProgress) await onProgress(i + 1, pages.length);
+    }
+    return pages.length;
+  }
+  const normAngleFree = (a) => ((a % 360) + 360) % 360;
+
+  // ── 서명 · 도장 이미지 ──
+
+  /**
+   * 도장 자리: 보이는 쪽 기준 비율 {x, y(위에서부터), w(폭 비율)}와 그림 비율(높이/폭)로
+   * PDF 좌표의 drawImage 인자를 만든다. 크기가 다른 쪽에도 같은 자리에 들어간다.
+   */
+  function stampPlacement(frame, place, aspect) {
+    const width = place.w * frame.visW;
+    const height = width * aspect;
+    const left = place.x * frame.visW;
+    const bottom = frame.visH - place.y * frame.visH - height;
+    const p = frame.toUser(left, bottom);
+    return { x: p.x, y: p.y, width, height, rotate: degrees(frame.rot) };
+  }
+
+  /** 어느 쪽에 넣을지: 'last' | 'all' | [0부터 쪽 번호…] */
+  function stampPages(target, count) {
+    if (target === 'all') return Array.from({ length: count }, (_, i) => i);
+    if (Array.isArray(target)) return target.filter((i) => Number.isInteger(i) && i >= 0 && i < count);
+    return count ? [count - 1] : [];
+  }
+
+  /**
+   * 서명 · 도장을 넣는다.
+   * stamps: [{bytes: PNG|JPG Uint8Array, place:{x,y,w}}], target: stampPages 인자
+   */
+  async function addStamps(doc, stamps, target) {
+    const pages = doc.getPages();
+    const idx = stampPages(target, pages.length);
+    for (const s of stamps) {
+      const isPng = s.bytes[0] === 0x89 && s.bytes[1] === 0x50;
+      const img = isPng ? await doc.embedPng(s.bytes) : await doc.embedJpg(s.bytes);
+      const aspect = img.height / img.width;
+      for (const i of idx) {
+        const page = pages[i];
+        page.drawImage(img, stampPlacement(pageFrame(page), s.place, aspect));
+      }
+    }
+    return idx.length;
+  }
+
+  // ── 나눠 저장 ──
+
+  /**
+   * 쪽 목록을 파일 단위로 나눈다. 삭제 예정(deleted)인 쪽은 먼저 뺀다.
+   * mode: 'each' | 'every'(n쪽씩) | 'parts'(n개 파일로 똑같이) | 'cuts'(n: 자를 위치 배열, k쪽 다음에서 자름)
+   */
+  function splitGroups(items, mode, n) {
+    const list = items.filter((it) => !(it && it.deleted));
+    const total = list.length;
+    if (!total) return [];
+    let sizes = [];
+    if (mode === 'each') sizes = Array(total).fill(1);
+    else if (mode === 'every') {
+      const k = Number(n);
+      if (!Number.isInteger(k) || k < 1) throw new UserError('몇 쪽씩 나눌지 1 이상의 숫자로 적어 주세요.', '예: 10');
+      for (let left = total; left > 0; left -= k) sizes.push(Math.min(k, left));
+    } else if (mode === 'parts') {
+      const k = Number(n);
+      if (!Number.isInteger(k) || k < 1) throw new UserError('파일 수를 1 이상의 숫자로 적어 주세요.', '예: 4');
+      if (k > total) throw new UserError(`${total}쪽은 ${total}개 파일까지만 나눌 수 있어요.`, `1~${total} 사이 숫자를 넣어 주세요.`);
+      const base = Math.floor(total / k);
+      const extra = total % k;
+      sizes = Array.from({ length: k }, (_, i) => base + (i < extra ? 1 : 0));
+    } else if (mode === 'cuts') {
+      const cuts = [...new Set((n || []).map(Number))].filter((c) => Number.isInteger(c) && c > 0 && c < total).sort((a, b) => a - b);
+      let prev = 0;
+      for (const c of cuts) { sizes.push(c - prev); prev = c; }
+      sizes.push(total - prev);
+    } else throw new UserError('나누는 방식을 골라 주세요.', '');
+    const out = [];
+    let at = 0;
+    for (const s of sizes) {
+      out.push({ from: at + 1, to: at + s, items: list.slice(at, at + s) });
+      at += s;
+    }
+    return out;
+  }
+
+  /** 원본이름_01_1-10쪽.pdf (번호는 파일 수 자릿수만큼 0 채움) */
+  function splitFileName(stem, index, count, from, to) {
+    const width = Math.max(2, String(count).length);
+    const no = String(index + 1).padStart(width, '0');
+    return `${stem}_${no}_${from === to ? from : `${from}-${to}`}쪽.pdf`;
+  }
+
+  // ── 걸린 제한 보기 ──
+
+  /**
+   * 파일의 암호 · 권한 제한을 읽는다(제한을 푸는 기능은 없다).
+   * @returns {Promise<{encrypted, needsPassword, print, copy, edit, annotate, forms, assemble, algorithm}>}
+   */
+  async function readRestrictions(bytes) {
+    if (!looksLikePdf(bytes)) throw new UserError('PDF 파일이 아니에요.', 'PDF로 저장된 파일만 넣을 수 있어요.');
+    const doc = await PDFDocument.load(copy(bytes), { ignoreEncryption: true, updateMetadata: false });
+    const encRef = doc.context.trailerInfo.Encrypt;
+    const all = { print: true, copy: true, edit: true, annotate: true, forms: true, assemble: true };
+    if (!encRef) return { encrypted: false, needsPassword: false, algorithm: '', ...all };
+    const enc = doc.context.lookup(encRef);
+    const num = (k) => {
+      const v = enc && enc.get(PDFLib.PDFName.of(k));
+      return v && typeof v.asNumber === 'function' ? v.asNumber() : null;
+    };
+    const P = num('P');
+    const V = num('V');
+    const bit = (b) => (P == null ? true : (P & (1 << (b - 1))) !== 0);
+    const info = await openPdf(bytes);
+    return {
+      encrypted: true,
+      needsPassword: info.locked,
+      algorithm: V >= 5 ? 'AES-256' : V === 4 ? 'AES-128 또는 RC4-128' : 'RC4',
+      print: bit(3),
+      edit: bit(4),
+      copy: bit(5),
+      annotate: bit(6),
+      forms: bit(9) || bit(6),
+      assemble: bit(11) || bit(4),
+    };
+  }
+
   return {
+    pageFrame,
+    embedFont,
+    watermarkLayout,
+    addWatermark,
+    stampPlacement,
+    stampPages,
+    addStamps,
+    splitGroups,
+    splitFileName,
+    readRestrictions,
+    WM_OPACITY,
     moveGroup,
     moveToFront,
     moveToEnd,

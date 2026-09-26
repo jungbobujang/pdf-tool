@@ -323,6 +323,169 @@ await step('선택한 쪽만 저장 (쪽수·순서)', async () => {
     `${back.getPageCount()}쪽, 폭 ${w.join(',')} (B4, B1, A3)`);
 });
 
+// 9. 나눠 저장 계획
+await step('나눠 저장: 10쪽씩 · 4개로 똑같이 · 자르기 · 삭제 예정 제외', async () => {
+  const p23 = Array.from({ length: 23 }, (_, i) => ({ n: i + 1 }));
+  const sizes = (g) => g.map((x) => x.items.length).join(',');
+  const every = Core.splitGroups(p23, 'every', 10);
+  const parts = Core.splitGroups(p23, 'parts', 4);
+  const cuts = Core.splitGroups(p23, 'cuts', [3, 10]);
+  const each = Core.splitGroups(p23.slice(0, 5), 'each');
+  const withDel = [...p23.slice(0, 5)];
+  withDel[1] = { ...withDel[1], deleted: true };
+  const del = Core.splitGroups(withDel, 'every', 2);
+  let tooMany = null;
+  try { Core.splitGroups(p23.slice(0, 3), 'parts', 5); } catch (e) { tooMany = e.title; }
+  const name = Core.splitFileName('수업자료', 0, 3, 1, 10);
+  const name12 = Core.splitFileName('A', 11, 120, 23, 23);
+  check('나눠 저장: 10쪽씩 · 4개로 똑같이 · 자르기 · 삭제 예정 제외',
+    sizes(every) === '10,10,3' && sizes(parts) === '6,6,6,5' && sizes(cuts) === '3,7,13' && cuts[1].from === 4 && cuts[1].to === 10 &&
+    sizes(each) === '1,1,1,1,1' && del.map((g) => g.items.map((x) => x.n).join('+')).join(',') === '1+3,4+5' &&
+    tooMany === '3쪽은 3개 파일까지만 나눌 수 있어요.' && name === '수업자료_01_1-10쪽.pdf' && name12 === 'A_012_23쪽.pdf',
+    `10쪽씩 ${sizes(every)} / 4개 ${sizes(parts)} / [3,10] ${sizes(cuts)} / 2쪽 삭제 예정 → ${del.map((g) => g.items.map((x) => x.n).join('+')).join(', ')} / ${name}`);
+});
+
+// 10. 워터마크 · 도장 · 적용 순서
+const fontkit = require('@cantoo/fontkit');
+const fs = require('node:fs');
+const FONT = fs.readFileSync(new URL('../node_modules/pretendard/dist/public/static/Pretendard-Bold.otf', import.meta.url));
+
+await step('한글 워터마크 (서브셋 글꼴)', async () => {
+  const doc = await PDFDocument.load(B);
+  const font = await Core.embedFont(doc, fontkit, FONT);
+  await Core.addWatermark(doc, { text: '내부 자료', layout: 'diagonal', strength: 'normal', color: 'red' }, font);
+  const bytes = await doc.save();
+  const back = await PDFDocument.load(bytes);
+  const grow = bytes.length - B.length;
+  let text = 'pdf.js 없음';
+  let ok = true;
+  if (pdfjs) {
+    text = await pdfjsText(bytes, 3); // 270도 회전된 쪽
+    ok = text.includes('내부 자료');
+  }
+  const tile = Core.watermarkLayout(595, 842, 4, 'tile');
+  check('한글 워터마크 (서브셋 글꼴)', back.getPageCount() === 4 && grow < 1024 * 1024 && ok && tile.spots.length > 10,
+    `4쪽 유지, 크기 +${(grow / 1024).toFixed(1)}KB (1MB 미만), 회전된 3쪽 글자 "${text.slice(0, 20)}", 바둑판 ${tile.spots.length}자리`);
+});
+
+// content stream을 풀어 마지막 이미지가 놓인 자리(보이는 좌표 비율)를 구한다.
+function lastImageBox(page) {
+  const contents = page.node.Contents();
+  const arr = contents instanceof PDFLib.PDFArray ? contents.asArray() : [contents];
+  const src = arr.map((r) => {
+    const s = page.doc.context.lookup(r);
+    const raw = Buffer.from(s.getContents());
+    const f = s.dict.get(PDFLib.PDFName.of('Filter'));
+    return (f && String(f) === '/FlateDecode' ? zlib.inflateSync(raw) : raw).toString('latin1');
+  }).join('\n');
+  const toks = src.split(/\s+/).filter(Boolean);
+  const doAt = toks.lastIndexOf('Do');
+  let qAt = doAt;
+  while (qAt > 0 && toks[qAt] !== 'q') qAt--;
+  let M = [1, 0, 0, 1, 0, 0];
+  const mul = (a, b) => [a[0] * b[0] + a[1] * b[2], a[0] * b[1] + a[1] * b[3], a[2] * b[0] + a[3] * b[2], a[2] * b[1] + a[3] * b[3], a[4] * b[0] + a[5] * b[2] + b[4], a[4] * b[1] + a[5] * b[3] + b[5]];
+  for (let i = qAt; i < doAt; i++) if (toks[i] === 'cm') M = mul(toks.slice(i - 6, i).map(Number), M);
+  const pts = [[0, 0], [1, 0], [0, 1], [1, 1]].map(([u, v]) => [u * M[0] + v * M[2] + M[4], u * M[1] + v * M[3] + M[5]]);
+  const f = Core.pageFrame(page);
+  const { x: bx, y: by, width: bw, height: bh } = f.box;
+  const vis = pts.map(([x, y]) => {
+    if (f.rot === 90) return [y - by, bx + bw - x];
+    if (f.rot === 180) return [bx + bw - x, by + bh - y];
+    if (f.rot === 270) return [by + bh - y, x - bx];
+    return [x - bx, y - by];
+  });
+  const xs = vis.map((p) => p[0]);
+  const ys = vis.map((p) => p[1]);
+  return {
+    x: Math.min(...xs) / f.visW, y: (f.visH - Math.max(...ys)) / f.visH,
+    w: (Math.max(...xs) - Math.min(...xs)) / f.visW, h: (Math.max(...ys) - Math.min(...ys)) / f.visH, visW: f.visW, visH: f.visH,
+  };
+}
+
+await step('도장 이미지가 비율 위치에 (회전된 쪽 포함)', async () => {
+  const doc = await PDFDocument.load(B); // 3쪽은 270도 회전
+  const png = makePng(40, 30);
+  const place = { x: 0.7, y: 0.8, w: 0.2 };
+  const n = await Core.addStamps(doc, [{ bytes: png, place }], 'all');
+  const back = await PDFDocument.load(await doc.save());
+  const boxes = [0, 2].map((i) => lastImageBox(back.getPage(i)));
+  const near = (a, b) => Math.abs(a - b) < 0.002;
+  const ok = boxes.every((b) => near(b.x, 0.7) && near(b.y, 0.8) && near(b.w, 0.2) && near(b.h, (0.2 * b.visW * 0.75) / b.visH));
+  const last = Core.stampPages('last', 4);
+  check('도장 이미지가 비율 위치에 (회전된 쪽 포함)', n === 4 && ok && last.join() === '3',
+    boxes.map((b, k) => `${k ? '3쪽(270°)' : '1쪽'} x${b.x.toFixed(3)} y${b.y.toFixed(3)} w${b.w.toFixed(3)}`).join(' / '));
+});
+
+await step('적용 순서: 쪽번호→워터마크→도장→암호', async () => {
+  const doc = await PDFDocument.load(A);
+  await Core.addPageNumbers(doc, { position: 'bc', format: 'total', start: 1 });
+  const font = await Core.embedFont(doc, fontkit, FONT);
+  await Core.addWatermark(doc, { text: '대외비', layout: 'tile', strength: 'light', color: 'gray' }, font);
+  await Core.addStamps(doc, [{ bytes: makePng(20, 20), place: { x: 0.8, y: 0.85, w: 0.1 } }], 'last');
+  Core.encrypt(doc, { userPassword: 'pw1234' });
+  const bytes = await doc.save({ useObjectStreams: false });
+  const noPw = await errMsg(PDFDocument.load(bytes));
+  const back = await PDFDocument.load(bytes, { password: 'pw1234' });
+  const img = lastImageBox(back.getPage(2));
+  let text = '';
+  if (pdfjs) text = await pdfjsText(bytes, 3, 'pw1234');
+  check('적용 순서: 쪽번호→워터마크→도장→암호', /encrypted/i.test(noPw || '') && back.getPageCount() === 3 && Math.abs(img.x - 0.8) < 0.002 &&
+    (!pdfjs || (text.includes('3 / 3') && text.includes('대외비'))),
+  `암호 없이 못 엶, 비밀번호로 3쪽 · 3쪽 글자 "${text.replace(/\s+/g, ' ').slice(0, 40)}…" · 도장 x=${img.x.toFixed(2)}`);
+});
+
+// 11. 용량 줄이기 엔진
+const Compress = require('../public/compress.js')(PDFLib, require('pako'));
+const { nodeCodec, photoJpeg } = await import('./node-codec.mjs');
+const MBf = (n) => `${(n / 1024 / 1024).toFixed(1)}MB`;
+const measures = [];
+
+async function photoPdf(count) {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  for (let i = 0; i < count; i++) {
+    const img = await doc.embedJpg(photoJpeg(1200, 1000, i + 1));
+    const p = doc.addPage([595, 842]);
+    p.drawImage(img, { x: 40, y: 250, width: 515, height: 430 });
+    p.drawText(`Photo page ${i + 1}`, { x: 40, y: 760, size: 24, font });
+  }
+  return doc.save();
+}
+const photos = await photoPdf(20);
+await step('용량 줄이기: 사진 20장 PDF → 목표 10MB', async () => {
+  const r = await Compress.compressPdf(photos, 10 * 1024 * 1024, nodeCodec);
+  const back = await PDFDocument.load(r.bytes);
+  const text = pdfjs ? await pdfjsText(r.bytes, 7) : 'pdf.js 없음';
+  measures.push(`사진 20장 PDF ${MBf(photos.length)} → 목표 10MB: ${MBf(r.size)} · ${(r.ms / 1000).toFixed(1)}초 · ${r.stage}단계`);
+  check('용량 줄이기: 사진 20장 PDF → 목표 10MB', photos.length > 25 * 1024 * 1024 && r.status === 'done' && r.size <= 10 * 1024 * 1024 &&
+    back.getPageCount() === 20 && (!pdfjs || text.includes('Photo page 7')),
+  `${MBf(photos.length)} → ${MBf(r.size)} (${r.stage}단계, 화질 ${r.quality}, ${(r.ms / 1000).toFixed(1)}초), 20쪽, 7쪽 글자 "${text}"`);
+});
+await step('용량 줄이기: 목표 2MB · 0.2MB (3단계 제안)', async () => {
+  const r2 = await Compress.compressPdf(photos, 2 * 1024 * 1024, nodeCodec);
+  const r0 = await Compress.compressPdf(photos, 0.2 * 1024 * 1024, nodeCodec);
+  measures.push(`사진 20장 PDF → 목표 2MB: ${MBf(r2.size)} · ${(r2.ms / 1000).toFixed(1)}초 · ${r2.status === 'done' ? `${r2.stage}단계에서 끝` : '3단계 제안'}`);
+  measures.push(`사진 20장 PDF → 목표 0.2MB: ${MBf(r0.size)} · ${(r0.ms / 1000).toFixed(1)}초 · ${r0.status === 'raster' ? '2단계로 부족 → 3단계 제안' : r0.status}`);
+  const ok2 = (r2.status === 'done' && r2.size <= 2 * 1024 * 1024) || r2.status === 'raster';
+  check('용량 줄이기: 목표 2MB · 0.2MB (3단계 제안)', ok2 && r0.status === 'raster' && r0.stage === 2 && r0.size < r2.size + 1,
+    `2MB → ${r2.status === 'done' ? `${MBf(r2.size)} 성공` : `3단계 제안 (${MBf(r2.size)})`} / 0.2MB → "${r0.status}" 가장 세게 ${MBf(r0.size)}`);
+});
+await step('용량 줄이기: 글자만 있는 PDF는 "더 못 줄임"', async () => {
+  const a = await Compress.analyzePdf(A, nodeCodec);
+  const r = await Compress.compressPdf(A, 200, nodeCodec);
+  check('용량 줄이기: 글자만 있는 PDF는 "더 못 줄임"', r.status === 'cannot' && a.mostlyText && a.images === 0,
+    `${A.length}B → 목표 200B: "${r.status}", 분석 mostlyText=${a.mostlyText}`);
+});
+await step('사진 줄이기: 5MB JPG → 1MB 이하', async () => {
+  const big = photoJpeg(2400, 1500, 7, 93);
+  const hd = nodeCodec.decodeJpeg(big);
+  const t0 = Date.now();
+  const r = await Compress.compressImage(hd, big.length, 1024 * 1024, nodeCodec);
+  measures.push(`사진 JPG ${MBf(big.length)} → 목표 1MB: ${MBf(r.bytes.length)} · ${((Date.now() - t0) / 1000).toFixed(1)}초 · ${r.w}×${r.h}`);
+  check('사진 줄이기: 5MB JPG → 1MB 이하', big.length > 4.5 * 1024 * 1024 && r.reached && r.bytes.length <= 1024 * 1024,
+    `${MBf(big.length)} → ${MBf(r.bytes.length)} (${r.w}×${r.h}, 화질 ${r.quality})`);
+});
+
 // ── 결과 표 ─────────────────────────────────────────
 const width = (s) => [...s].reduce((n, ch) => n + (/[ᄀ-ᇿ㄰-㆏가-힣]/.test(ch) ? 2 : 1), 0);
 const padR = (s, n) => s + ' '.repeat(Math.max(0, n - width(s)));
@@ -331,5 +494,6 @@ console.log(`\n| ${padR('항목', c1)} | 결과 | 세부`);
 console.log(`|${'-'.repeat(c1 + 2)}|------|${'-'.repeat(40)}`);
 for (const r of rows) console.log(`| ${padR(r.name, c1)} | ${r.ok ? '통과' : '실패'} | ${r.detail}`);
 const failed = rows.filter((r) => !r.ok).length;
+if (measures.length) console.log(`\n용량 줄이기 실측\n- ${measures.join('\n- ')}`);
 console.log(`\n${rows.length}개 중 ${rows.length - failed}개 통과${failed ? `, ${failed}개 실패` : ''}${pdfjs ? '' : ' (pdf.js 교차 확인은 건너뜀)'}`);
 process.exit(failed ? 1 : 0);

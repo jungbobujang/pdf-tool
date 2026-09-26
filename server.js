@@ -41,7 +41,7 @@ const COMMIT = VERSION.commit;
 
 // index.html의 app.js · style.css · pdf-core.js 주소에 ?v=커밋 을 붙인다.
 // 커밋이 바뀌면 주소가 바뀌므로 브라우저나 중간 캐시에 옛 파일이 남지 않는다.
-const ASSETS = ['style.css', 'pdf-core.js', 'app.js'];
+const ASSETS = ['style.css', 'pdf-core.js', 'compress.js', 'app.js'];
 function renderIndex() {
   let html = fs.readFileSync(path.join(PUBLIC, 'index.html'), 'utf8');
   for (const a of ASSETS) {
@@ -57,6 +57,8 @@ const VENDOR = {
   'pdf.min.js': nm('pdfjs-dist', 'build', 'pdf.min.js'),
   'pdf.worker.min.js': nm('pdfjs-dist', 'build', 'pdf.worker.min.js'),
   'jszip.min.js': nm('jszip', 'dist', 'jszip.min.js'),
+  'pako.min.js': nm('pako', 'dist', 'pako.min.js'),
+  'fontkit.min.js': nm('@cantoo', 'fontkit', 'dist', 'fontkit.umd.min.js'),
 };
 
 app.disable('x-powered-by');
@@ -92,6 +94,12 @@ app.get('/vendor/pretendard/pretendardvariable.min.css', (req, res) => {
   res.set('Cache-Control', 'public, max-age=86400');
   res.type('text/css');
   res.sendFile(nm('pretendard', 'dist', 'web', 'variable', 'pretendardvariable.css'));
+});
+// 한글 워터마크용 글꼴 (워터마크를 쓸 때만 불러온다)
+app.get('/vendor/fonts/Pretendard-Bold.otf', (req, res) => {
+  res.set('Cache-Control', 'public, max-age=604800');
+  res.type('font/otf');
+  res.sendFile(nm('pretendard', 'dist', 'public', 'static', 'Pretendard-Bold.otf'));
 });
 app.use('/vendor/pretendard/woff2', express.static(nm('pretendard', 'dist', 'web', 'variable', 'woff2'), { maxAge: '7d' }));
 
