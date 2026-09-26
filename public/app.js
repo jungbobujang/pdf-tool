@@ -604,6 +604,7 @@
   let activeTab = 'edit';
   let activeView = 'home';
   let guideSync = () => {}; // 사용법 패널 애니메이션 켜고 끄기 (Guide가 채운다)
+  let editChanged = () => {}; // 편집 상태가 바뀔 때 (최근 작업 이어하기가 채운다)
 
   /** 처음 화면(home) ↔ 작업 화면(work) */
   function showView(name) {
@@ -940,6 +941,7 @@
       updateBlank();
       updateDuplex();
       $('edit-find-bar').hidden = !has;
+      editChanged();
       if (find.q && find.sig !== srcSig()) scheduleFind(0);
       else applyFind();
     }
@@ -2371,7 +2373,43 @@
 
     render();
 
+    /** 최근 작업 이어하기용: 풀린 파일의 바이트와 쪽 상태 */
+    function exportSession() {
+      const keep = sources.filter((x) => x.doc && !x.locked && x.bytes && x.bytes.byteLength);
+      const ids = new Set(keep.map((x) => x.id));
+      return {
+        sources: keep.map((x) => ({ id: x.id, name: x.name, bytes: x.bytes })),
+        pages: pages.filter((p) => ids.has(p.srcId)).map((p) => ({ srcId: p.srcId, index: p.index, rot: p.rot, deleted: p.deleted })),
+      };
+    }
+    async function importSession(data) {
+      reset();
+      const map = new Map();
+      await withBusy('지난 작업 불러오는 중…', async (progress) => {
+        for (let i = 0; i < data.sources.length; i++) {
+          const it = data.sources[i];
+          await progress(`지난 작업 불러오는 중 (${i + 1}/${data.sources.length}) · ${it.name}`, i, data.sources.length);
+          try {
+            const bytes = new Uint8Array(it.bytes);
+            const info = await Core.openPdf(bytes);
+            const src = createSource(it.name, info);
+            map.set(it.id, src);
+          } catch (e) { showError(e, it.name); }
+        }
+      });
+      for (const p of data.pages) {
+        const src = map.get(p.srcId);
+        if (!src || src.locked || p.index >= src.pageCount) continue;
+        pages.push({ key: `p${++seq}`, srcId: src.id, index: p.index, rot: p.rot || 0, deleted: !!p.deleted });
+      }
+      render();
+      setTimeout(scanBlanks, 0);
+      return { files: map.size, pages: pages.length };
+    }
+
     return {
+      exportSession,
+      importSession,
       viewerState: () => ({ open: vdlg.open, i: view.i, zoom: view.zoom, rendered: view.rendered, canvas: (() => { const c = vstage.querySelector('canvas'); return c ? { w: c.width, h: c.height, cssW: parseFloat(c.style.width), cssH: parseFloat(c.style.height) } : null; })() }),
       findState: () => ({ q: find.q, hits: find.hits.map((p) => pages.indexOf(p)), at: find.at }),
       addFiles, addDecrypted, reset, render, removeSource, shortcutSave,
@@ -2667,37 +2705,47 @@
     });
   }
 
+  // ── 이 브라우저의 IndexedDB 'pdf-workshop' (stamps: 서명 · 도장, session: 최근 작업 이어하기) ──
+  let workshopDb = null;
+  function openWorkshopDb() {
+    if (!workshopDb) {
+      workshopDb = new Promise((resolve) => {
+        try {
+          const req = indexedDB.open('pdf-workshop', 2);
+          req.onupgradeneeded = () => {
+            const d = req.result;
+            if (!d.objectStoreNames.contains('stamps')) d.createObjectStore('stamps', { keyPath: 'id' });
+            if (!d.objectStoreNames.contains('session')) d.createObjectStore('session', { keyPath: 'id' });
+          };
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => resolve(null);
+          req.onblocked = () => resolve(null);
+        } catch { resolve(null); }
+      });
+    }
+    return workshopDb;
+  }
+  /** store에 fn을 돌린다. 저장소를 못 쓰면 null */
+  async function dbTx(store, mode, fn) {
+    const d = await openWorkshopDb();
+    if (!d) return null;
+    return new Promise((resolve) => {
+      try {
+        const t = d.transaction(store, mode);
+        const r = fn(t.objectStore(store));
+        // 쓰기는 key, 읽기는 값(없으면 undefined)을 돌려준다
+        t.oncomplete = () => resolve(r ? r.result : null);
+        t.onerror = () => resolve(null);
+        t.onabort = () => resolve(null);
+      } catch { resolve(null); }
+    });
+  }
+
   // ── 서명 · 도장 보관 (이 브라우저에만: IndexedDB, 안 되면 이번 방문 동안만) ──
   const Stamps = (() => {
     let items = null;
-    let dbp = null;
     const listeners = new Set();
-    function db() {
-      if (!dbp) {
-        dbp = new Promise((resolve) => {
-          try {
-            const req = indexedDB.open('pdf-workshop', 1);
-            req.onupgradeneeded = () => req.result.createObjectStore('stamps', { keyPath: 'id' });
-            req.onsuccess = () => resolve(req.result);
-            req.onerror = () => resolve(null);
-            req.onblocked = () => resolve(null);
-          } catch { resolve(null); }
-        });
-      }
-      return dbp;
-    }
-    const tx = async (mode, fn) => {
-      const d = await db();
-      if (!d) return null;
-      return new Promise((resolve) => {
-        try {
-          const t = d.transaction('stamps', mode);
-          const r = fn(t.objectStore('stamps'));
-          t.oncomplete = () => resolve(r && r.result);
-          t.onerror = () => resolve(null);
-        } catch { resolve(null); }
-      });
-    };
+    const tx = (mode, fn) => dbTx('stamps', mode, fn);
     async function list() {
       if (!items) {
         const rows = (await tx('readonly', (st) => st.getAll())) || [];
@@ -2739,7 +2787,14 @@
       return it.url;
     }
     const byId = (id) => (items || []).find((x) => x.id === id);
-    return { list, add, update, remove, pngOf, urlOf, byId, onChange: (f) => listeners.add(f) };
+    /** 이 브라우저에 보관한 서명 · 도장을 모두 지운다(설정 → 모두 지우기) */
+    async function clearAll() {
+      (items || []).forEach((it) => it.url && URL.revokeObjectURL(it.url));
+      items = [];
+      await tx('readwrite', (st) => st.clear());
+      notify();
+    }
+    return { list, add, update, remove, pngOf, urlOf, byId, clearAll, onChange: (f) => listeners.add(f) };
   })();
 
   /** 밝은(흰) 부분을 투명하게. 스캔한 도장용 */
@@ -5776,6 +5831,142 @@
   })();
 
   // ═══════════════════════════════════════════════════════════
+  // 설정: 브라우저를 닫아도 작업 이어하기(기본 꺼짐) · 이 브라우저에 저장된 것 모두 지우기
+  // ═══════════════════════════════════════════════════════════
+  const Resume = (() => {
+    const KEY = 'pdfws.resume';
+    let LIMIT = 500 * 1024 * 1024;
+    const isOn = () => { try { return localStorage.getItem(KEY) === '1'; } catch { return false; } };
+    const setOn = (v) => { try { if (v) localStorage.setItem(KEY, '1'); else localStorage.removeItem(KEY); } catch { /* 저장소를 못 쓰면 켜지지 않는다 */ } };
+    let timer = 0;
+    let pending = null; // 아직 [이어하기]/[지우기]를 고르지 않은 지난 작업
+    let warned = false;
+    let lastSaved = 0;
+    const note = $('resume-note');
+    const get = () => dbTx('session', 'readonly', (st) => st.get('edit'));
+    const clear = () => dbTx('session', 'readwrite', (st) => st.delete('edit'));
+    async function save() {
+      // 지난 작업을 고르기 전에는 덮어쓰지 않는다(고르지 않은 채 새 파일을 넣어도 지난 작업이 남는다)
+      if (!isOn() || pending) return;
+      // 불러오는 중 · 처리 중에는 반쯤 된 상태를 저장하지 않고 끝난 뒤로 미룬다
+      if (isBusy()) { editChanged(); return; }
+      const data = Edit.exportSession();
+      if (!data.sources.length) { await clear(); lastSaved = Date.now(); return; }
+      const total = data.sources.reduce((a, x) => a + x.bytes.byteLength, 0);
+      if (total > LIMIT) {
+        await clear();
+        if (!warned) {
+          warned = true;
+          toast('파일이 500MB를 넘어 이어하기용으로 저장하지 않았어요.', '브라우저를 닫으면 이 작업은 이어서 할 수 없어요. 저장을 먼저 해 두세요.', 'info');
+        }
+        return;
+      }
+      warned = false;
+      const ok = await dbTx('session', 'readwrite', (st) => st.put({ id: 'edit', savedAt: Date.now(), ...data })); // 성공하면 key('edit')
+      if (ok) lastSaved = Date.now();
+    }
+    editChanged = () => {
+      if (!isOn()) return;
+      clearTimeout(timer);
+      timer = setTimeout(() => { save().catch(() => {}); }, 700);
+    };
+    const ago = (t) => {
+      const m = Math.round((Date.now() - t) / 60000);
+      if (m < 1) return '방금';
+      if (m < 60) return `${m}분 전`;
+      const hh = Math.round(m / 60);
+      if (hh < 24) return `${hh}시간 전`;
+      return `${Math.round(hh / 24)}일 전`;
+    };
+    async function offer() {
+      if (!isOn()) return;
+      const s = await get();
+      if (!s || !s.sources || !s.sources.length) return;
+      pending = s;
+      $('resume-text').textContent = `지난 작업을 이어 할까요? (파일 ${s.sources.length}개 · ${ago(s.savedAt)})`;
+      note.hidden = false;
+    }
+    $('resume-go').addEventListener('click', async () => {
+      if (!pending || isBusy()) return;
+      const s = pending;
+      pending = null;
+      note.hidden = true;
+      openTool('edit');
+      const r = await Edit.importSession(s);
+      toast(`지난 작업을 불러왔어요. (파일 ${r.files}개 · ${r.pages}쪽)`, '', 'ok');
+    });
+    $('resume-drop').addEventListener('click', async () => {
+      pending = null;
+      note.hidden = true;
+      await clear();
+      editChanged();
+      toast('지난 작업을 지웠어요.', '', 'ok');
+    });
+
+    // 설정 창
+    const dlg = $('settings-dialog');
+    const sw = $('set-resume');
+    async function usage() {
+      const s = await get();
+      $('set-usage').textContent = !isOn() ? '' : s && s.sources && s.sources.length
+        ? `지금 저장된 작업: 파일 ${s.sources.length}개 · ${(s.sources.reduce((a, x) => a + x.bytes.byteLength, 0) / 1048576).toFixed(1)}MB · ${ago(s.savedAt)}`
+        : '지금 저장된 작업은 없어요. 편집 · 합치기에 파일을 넣으면 저장돼요.';
+    }
+    function openSettings() {
+      sw.checked = isOn();
+      usage();
+      if (!dlg.open) dlg.showModal();
+    }
+    sw.addEventListener('change', async () => {
+      setOn(sw.checked);
+      if (sw.checked) {
+        await save();
+        toast('작업 이어하기를 켰어요.', '편집 · 합치기의 파일과 순서를 이 브라우저에만 저장해요. 공용 컴퓨터에서는 꺼 주세요.', 'info');
+      } else {
+        clearTimeout(timer);
+        pending = null;
+        note.hidden = true;
+        await clear();
+        toast('작업 이어하기를 껐어요.', '저장해 둔 지난 작업도 지웠어요.', 'info');
+      }
+      usage();
+    });
+    $('set-wipe').addEventListener('click', async () => {
+      const yes = await confirmBox({ title: '이 브라우저에 저장된 것을 모두 지울까요?', body: '설정, 서명 · 도장, 최근 작업, 오프라인용 파일(캐시)을 지워요. 넣은 PDF 원본 파일은 그대로예요.', yes: '모두 지우기' });
+      if (!yes) return;
+      clearTimeout(timer);
+      pending = null;
+      note.hidden = true;
+      try {
+        Object.keys(localStorage).filter((k) => /^pdfws\./.test(k)).forEach((k) => localStorage.removeItem(k));
+      } catch { /* 없음 */ }
+      await clear();
+      await Stamps.clearAll();
+      try {
+        const names = await caches.keys();
+        await Promise.all(names.filter((n) => n.startsWith('pdfws-')).map((n) => caches.delete(n)));
+      } catch { /* 캐시를 못 쓰는 환경 */ }
+      try {
+        const regs = navigator.serviceWorker ? await navigator.serviceWorker.getRegistrations() : [];
+        await Promise.all(regs.map((r) => r.unregister()));
+      } catch { /* 없음 */ }
+      sw.checked = false;
+      usage();
+      if (!dlg.open) dlg.showModal();
+      toast('이 브라우저에 저장된 것을 모두 지웠어요.', '다음에 열 때 오프라인용 파일을 다시 받아요.', 'ok');
+    });
+    document.querySelectorAll('[data-settings]').forEach((b) => b.addEventListener('click', () => { if (!isBusy()) openSettings(); }));
+    offer();
+    return {
+      open: openSettings,
+      state: () => ({ on: isOn(), pending: !!pending, lastSaved }),
+      stored: async () => { const s = await get(); return s ? { files: s.sources.length, pages: s.pages.length, savedAt: s.savedAt } : null; },
+      setLimitForTest: (n) => { LIMIT = n; },
+      flush: () => { clearTimeout(timer); return save(); },
+    };
+  })();
+
+  // ═══════════════════════════════════════════════════════════
   // 탭 제목(지금 상태) · 작업 중 탭 닫기 확인
   // ═══════════════════════════════════════════════════════════
   const Title = (() => {
@@ -6217,5 +6408,5 @@
     if (t && (t !== activeTab || activeView !== 'work')) openTool(t);
   });
 
-  window.__pdfWorkshop = { version: 5, ready: true, guide: Guide.state, compress: Shrink.state, worker: Squeeze.inWorker, lastStage: () => errCtx.stage, pwa: Pwa.state, hasWork, viewer: Edit.viewerState, find: Edit.findState, news: News.state, feedback: Feedback.state, title: Title.compute };
+  window.__pdfWorkshop = { version: 5, ready: true, guide: Guide.state, compress: Shrink.state, worker: Squeeze.inWorker, lastStage: () => errCtx.stage, pwa: Pwa.state, hasWork, resume: Resume.state, resumeStored: Resume.stored, resumeLimit: Resume.setLimitForTest, resumeFlush: Resume.flush, viewer: Edit.viewerState, find: Edit.findState, news: News.state, feedback: Feedback.state, title: Title.compute };
 })();

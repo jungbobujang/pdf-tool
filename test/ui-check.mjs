@@ -2319,6 +2319,109 @@ try {
     uiMeasures.push(`CPU 4배 느리게 153쪽: 카드 ${(cardsAt / 1000).toFixed(1)}초, 썸네일 전부 ${(allAt / 1000).toFixed(1)}초, 가장 긴 멈춤 ${maxLong}ms`);
   }
 
+  // ── 11-i. 최근 작업 이어하기(기본 꺼짐) · 이 브라우저에 저장된 것 모두 지우기 ──
+  {
+    const rctx2 = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: 'light' });
+    const r = await rctx2.newPage();
+    r.setDefaultTimeout(10000);
+    let rStep = '시작';
+    try {
+    const rerr2 = [];
+    watch(r, rerr2);
+    await r.goto(BASE, { waitUntil: 'networkidle' });
+    await until(r, () => !!navigator.serviceWorker.controller, undefined, { timeout: 60000 });
+    // 기본 꺼짐: 파일을 넣어도 저장하지 않는다
+    await r.setInputFiles('#home-input', [fileA, fileB]);
+    await until(r, () => document.querySelectorAll('#edit-grid .page-card').length === 7);
+    await r.waitForTimeout(1200);
+    const off = await r.evaluate(async () => ({ st: window.__pdfWorkshop.resume(), stored: await window.__pdfWorkshop.resumeStored() }));
+    // 설정에서 켜기
+    rStep = '설정 열기';
+    await r.click('.sidebar [data-settings]');
+    await until(r, () => document.getElementById('settings-dialog').open);
+    const setText = await r.evaluate(() => document.getElementById('settings-dialog').textContent);
+    const swDefault = await r.evaluate(() => document.getElementById('set-resume').checked);
+    await r.click('label.set-row');
+    await r.keyboard.press('Escape');
+    // 1쪽 오른쪽 90°, 2쪽 삭제 예정, 3쪽을 맨 앞으로(Alt+←)
+    rStep = '카드 조작';
+    await r.locator('#edit-grid .page-card').nth(0).hover();
+    await r.locator('#edit-grid .page-card').nth(0).locator('[data-act="rot"]').click();
+    await r.locator('#edit-grid .page-card').nth(1).hover();
+    await r.locator('#edit-grid .page-card').nth(1).locator('.card-tools [data-act="del"]').click();
+    await r.locator('#edit-grid .page-card').nth(2).focus();
+    await r.keyboard.press('Alt+ArrowLeft');
+    await r.keyboard.press('Alt+ArrowLeft');
+    await r.evaluate(() => window.__pdfWorkshop.resumeFlush());
+    const before = await r.evaluate(() => [...document.querySelectorAll('#edit-grid .page-card')].map((c) => c.dataset.label + (c.classList.contains('deleted') ? '(삭제)' : '') + (/90도/.test(c.getAttribute('aria-label')) ? '(90)' : '')));
+    const on = await r.evaluate(async () => ({ st: window.__pdfWorkshop.resume(), stored: await window.__pdfWorkshop.resumeStored() }));
+    // 브라우저를 닫았다 연 것처럼 새로고침 → 제안 → 이어하기
+    rStep = '다시 열기(제안)';
+    await r.reload({ waitUntil: 'networkidle' });
+    await until(r, () => !document.getElementById('resume-note').hidden, undefined, { timeout: 5000 });
+    const offerText = await r.textContent('#resume-text');
+    if (SCREENS) await r.screenshot({ path: path.join(root, 'docs', 'screens', 'resume.png') });
+    rStep = '이어하기';
+    await r.click('#resume-go');
+    await until(r, () => document.querySelectorAll('#edit-grid .page-card').length === 7, undefined, { timeout: 20000 });
+    const after = await r.evaluate(() => [...document.querySelectorAll('#edit-grid .page-card')].map((c) => c.dataset.label + (c.classList.contains('deleted') ? '(삭제)' : '') + (/90도/.test(c.getAttribute('aria-label')) ? '(90)' : '')));
+    check('작업 이어하기: 기본 꺼짐(저장 안 함) → 설정에서 켜면 파일 · 순서 · 회전 · 삭제 예정 저장 → 다시 열면 "지난 작업을 이어 할까요? (파일 2개 · 방금)" → 그대로 복원',
+      !swDefault && !off.st.on && !off.stored && /IndexedDB.*공용 컴퓨터에서는 끄는 게 좋아요/.test(setText) && on.stored && on.stored.files === 2 && on.stored.pages === 7 &&
+      /지난 작업을 이어 할까요\? \(파일 2개 · 방금\)/.test(offerText) && after.join('|') === before.join('|'),
+      `꺼짐: 저장 ${off.stored ? '있음' : '없음'} → 켜짐: 파일 ${on.stored && on.stored.files}개 · ${on.stored && on.stored.pages}쪽 → "${offerText}" → ${after.slice(0, 3).join(', ')}…`);
+
+    // 지우기 → 다시 열어도 제안 없음
+    await r.evaluate(() => window.__pdfWorkshop.resumeFlush());
+    await r.reload({ waitUntil: 'networkidle' });
+    await until(r, () => !document.getElementById('resume-note').hidden, undefined, { timeout: 5000 });
+    rStep = '지우기';
+    await r.click('#resume-drop');
+    await r.reload({ waitUntil: 'networkidle' });
+    await r.waitForTimeout(600);
+    const noteAfterDrop = await r.evaluate(async () => ({ hidden: document.getElementById('resume-note').hidden, stored: await window.__pdfWorkshop.resumeStored() }));
+    // 500MB 제한(점검에서는 제한을 1KB로 낮춰 흉내)
+    await r.evaluate(() => window.__pdfWorkshop.resumeLimit(1024));
+    await r.evaluate(() => document.getElementById('toasts').replaceChildren());
+    await r.setInputFiles('#home-input', [fileA]);
+    await until(r, () => document.querySelectorAll('#edit-grid .page-card').length === 3);
+    await r.evaluate(() => window.__pdfWorkshop.resumeFlush());
+    const limit = await r.evaluate(async () => ({ toast: document.getElementById('toasts').textContent, stored: await window.__pdfWorkshop.resumeStored() }));
+    check('작업 이어하기: [지우기] 후에는 제안 없음 · 500MB를 넘으면 저장하지 않고 안내', noteAfterDrop.hidden && !noteAfterDrop.stored && /500MB를 넘어 이어하기용으로 저장하지 않았어요/.test(limit.toast) && !limit.stored,
+      `지우기 후 제안 ${noteAfterDrop.hidden ? '없음' : '있음'} · 제한 넘음 → "${limit.toast.slice(0, 32)}…"`);
+
+    // 모두 지우기: localStorage · 서명 · 최근 작업 · 캐시 · 서비스 워커
+    await r.evaluate(async () => {
+      localStorage.setItem('pdfws.saveOpts', '{"x":1}');
+      const d = await new Promise((res) => { const q = indexedDB.open('pdf-workshop', 2); q.onsuccess = () => res(q.result); });
+      await new Promise((res) => { const t = d.transaction('stamps', 'readwrite'); t.objectStore('stamps').put({ id: 'test-stamp', created: 1, bytes: new ArrayBuffer(4) }); t.oncomplete = res; });
+      d.close();
+    });
+    rStep = '푸터 설정';
+    await r.click('.site-foot [data-settings]').catch(async () => { await r.click('#logo'); await r.click('.site-foot [data-settings]'); });
+    await until(r, () => document.getElementById('settings-dialog').open);
+    rStep = '모두 지우기';
+    await r.click('#set-wipe');
+    await until(r, () => document.getElementById('confirm-dialog').open);
+    await r.click('#cf-yes');
+    await r.waitForTimeout(800);
+    const wiped = await r.evaluate(async () => {
+      const keys = Object.keys(localStorage).filter((k) => k.startsWith('pdfws.'));
+      const d = await new Promise((res) => { const q = indexedDB.open('pdf-workshop', 2); q.onsuccess = () => res(q.result); });
+      const n = await new Promise((res) => { const t = d.transaction(['stamps', 'session'], 'readonly'); const a = t.objectStore('stamps').count(); const b = t.objectStore('session').count(); t.oncomplete = () => res(a.result + b.result); });
+      d.close();
+      const cacheNames = (await caches.keys()).filter((c) => c.startsWith('pdfws-'));
+      const regs = await navigator.serviceWorker.getRegistrations();
+      return { keys, n, caches: cacheNames.length, regs: regs.length, sw: document.getElementById('set-resume').checked, toast: document.getElementById('toasts').textContent };
+    });
+    check('설정 → "이 브라우저에 저장된 것 모두 지우기": 확인 후 설정 · 서명 · 최근 작업 · 캐시 · 서비스 워커 모두 지움',
+      wiped.keys.length === 0 && wiped.n === 0 && wiped.caches === 0 && wiped.regs === 0 && !wiped.sw && /모두 지웠어요/.test(wiped.toast) && rerr2.length === 0,
+      `localStorage ${wiped.keys.length} · IndexedDB ${wiped.n} · 캐시 ${wiped.caches} · 서비스 워커 ${wiped.regs}${rerr2.length ? ` · 에러 ${rerr2.join(' | ').slice(0, 120)}` : ''}`);
+    } catch (e) {
+      check(`작업 이어하기 흐름 (${rStep})`, false, String(e.message || e).split('\n').slice(0, 4).join(' ').slice(0, 300));
+    }
+    await rctx2.close();
+  }
+
   // ── 12. 스크린샷 ──
   if (SCREENS) {
     const out = path.join(root, 'docs', 'screens');

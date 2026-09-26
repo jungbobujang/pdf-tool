@@ -83,6 +83,16 @@
 
   <div id="toasts" class="toasts" aria-live="assertive" popover="manual"></div>
 
+  <!-- 지난 작업 이어하기 제안 (설정에서 켠 경우에만) -->
+  <div class="resume-note" id="resume-note" role="status" hidden>
+    <svg class="ic" aria-hidden="true"><use href="#i-undo"/></svg>
+    <span id="resume-text">지난 작업을 이어 할까요?</span>
+    <span class="btn-row">
+      <button type="button" class="btn primary sm" id="resume-go">이어하기</button>
+      <button type="button" class="btn sm" id="resume-drop">지우기</button>
+    </span>
+  </div>
+
   <!-- 새 버전 알림 (서비스 워커가 새 버전을 받아 두면) -->
   <div class="update-bar" id="update-bar" role="status" hidden>
     <span id="update-text">새 버전이 있어요.</span>
@@ -204,6 +214,7 @@
           <a href="/privacy">개인정보 안내</a>
           <a href="/licenses">사용한 라이브러리</a>
           <button type="button" class="link-btn" data-feedback aria-haspopup="dialog">의견 보내기</button>
+          <button type="button" class="link-btn" data-settings aria-haspopup="dialog">설정</button>
         </p>
         <p class="site-foot-limit">이 도구는 원본 파일을 바꾸지 않습니다. 결과물은 저장 후 열어서 확인해 주세요.</p>
       </div>
@@ -247,6 +258,7 @@
       <p class="side-foot">
         <button type="button" class="app-version side-version news-open" id="side-version" aria-haspopup="dialog" title="새 소식 보기"></button>
         <button type="button" class="link-btn side-feedback" data-feedback aria-haspopup="dialog">의견 보내기</button>
+        <button type="button" class="side-gear" data-settings aria-haspopup="dialog" aria-label="설정" title="설정"><svg class="ic sm" aria-hidden="true"><use href="#i-settings"/></svg></button>
       </p>
     </aside>
 
@@ -918,6 +930,33 @@
       </header>
       <p class="sub" id="news-ver"></p>
       <ul class="news-full" id="news-full" tabindex="0" aria-label="새 소식 목록"></ul>
+    </form>
+  </dialog>
+
+  <!-- 설정 -->
+  <dialog id="settings-dialog" class="dialog settings-dialog" aria-labelledby="set-title">
+    <form method="dialog">
+      <header class="dlg-head">
+        <h2 id="set-title">설정</h2>
+        <button type="submit" class="icon-btn" aria-label="닫기" title="닫기 (Esc)"><svg class="ic sm" aria-hidden="true"><use href="#i-x"/></svg></button>
+      </header>
+      <label class="set-row">
+        <span class="set-text">
+          <strong>브라우저를 닫아도 작업 이어하기</strong>
+          <span>편집 · 합치기에 넣은 파일과 순서 · 회전 · 삭제 예정을 저장해 두었다가, 다음에 열 때 이어서 할 수 있어요. 기본은 꺼져 있어요.</span>
+        </span>
+        <input type="checkbox" class="switch-input" role="switch" id="set-resume">
+        <span class="switch" aria-hidden="true"></span>
+      </label>
+      <p class="notice">파일은 이 브라우저 안(IndexedDB)에만 저장돼요. 공용 컴퓨터에서는 끄는 게 좋아요.</p>
+      <p class="sub" id="set-usage" role="status"></p>
+      <div class="set-danger">
+        <div>
+          <strong>이 브라우저에 저장된 것 모두 지우기</strong>
+          <span>설정 · 서명 · 도장 · 최근 작업 · 오프라인용 파일(캐시)을 모두 지워요. 넣은 PDF 원본은 그대로예요.</span>
+        </div>
+        <button type="button" class="btn danger" id="set-wipe">모두 지우기</button>
+      </div>
     </form>
   </dialog>
 
