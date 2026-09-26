@@ -82,6 +82,8 @@ function watch(pg, list) {
   pg.on('console', (m) => m.type() === 'error' && list.push(m.text()));
   pg.on('pageerror', (e) => list.push(String(e)));
   pg.on('response', (r) => r.status() >= 400 && list.push(`${r.status()} ${r.url()}`));
+  // 작업 중 새로고침 · 이동에는 "작업 중인 내용이 사라져요" 확인이 뜬다. 점검에서는 그대로 진행한다.
+  pg.on('dialog', (d) => (d.type() === 'beforeunload' ? d.accept() : d.dismiss()).catch(() => {}));
 }
 
 const server = spawn(process.execPath, ['server.js'], { cwd: root, env: { ...process.env, PORT: String(PORT) }, stdio: 'pipe' });
@@ -1751,6 +1753,118 @@ try {
     }
     check('400px: 처음 화면 전체 · 안내 페이지 3곳 가로 스크롤 없음', msw.every((x) => Number(x.split(' ')[1]) <= 400), msw.join(' · '));
     await mctx2.close();
+  }
+
+  // ── 11-e. 새 소식 · 의견 보내기 · 오래된 브라우저 · 탭 제목 · 공유 미리보기 ──
+  {
+    const nctx3 = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: 'light', acceptDownloads: true, permissions: ['clipboard-read', 'clipboard-write'] });
+    const q = await nctx3.newPage();
+    const qerr = [];
+    watch(q, qerr);
+    await q.goto(BASE, { waitUntil: 'networkidle' });
+    await until(q, () => /^v /.test(document.getElementById('home-version').textContent));
+    const first = await q.evaluate(() => window.__pdfWorkshop.news());
+    // 예전에 써 본 사람 + 옛 새 소식만 본 상태 → 새로고침하면 점
+    await q.evaluate(() => { localStorage.setItem('pdfws.tab', 'edit'); localStorage.setItem('pdfws.newsSeen', '2026-09-25-1'); });
+    await q.reload({ waitUntil: 'networkidle' });
+    await until(q, () => window.__pdfWorkshop.news().dot, undefined, { timeout: 5000 }).catch(() => {});
+    const dotOn = await q.evaluate(() => ({ st: window.__pdfWorkshop.news(), label: document.getElementById('home-version').getAttribute('aria-label') }));
+    await q.click('#home-version');
+    await until(q, () => document.getElementById('news-dialog').open);
+    const dlgInfo = await q.evaluate(() => ({ n: document.querySelectorAll('#news-full > li').length, ver: document.getElementById('news-ver').textContent, dot: window.__pdfWorkshop.news().dot }));
+    await q.keyboard.press('Escape');
+    await q.reload({ waitUntil: 'networkidle' });
+    await q.waitForTimeout(500);
+    const dotAfter = await q.evaluate(() => window.__pdfWorkshop.news().dot);
+    check('버전 표시를 누르면 새 소식 창 · 새 버전이면 점(처음 온 사람은 없음) → 한 번 보면 꺼짐',
+      !first.dot && dotOn.st.dot && /새 소식 있음/.test(dotOn.label) && dlgInfo.n >= 7 && /지금 버전: v /.test(dlgInfo.ver) && !dlgInfo.dot && !dotAfter,
+      `처음 점 ${first.dot} · 옛 소식만 본 사람 점 ${dotOn.st.dot} → 창(${dlgInfo.n}개) 연 뒤 ${dotAfter}`);
+
+    // 의견 보내기: 설문 주소가 비었으면 안내 + 오류 내용 복사
+    await q.click('.site-foot [data-feedback]');
+    await until(q, () => document.getElementById('feedback-dialog').open);
+    const fbInfo = await q.evaluate(() => ({ none: !document.getElementById('fb-none').hidden, dis: document.getElementById('fb-open').getAttribute('aria-disabled'), href: document.getElementById('fb-open').getAttribute('href'), text: document.getElementById('feedback-dialog').textContent }));
+    await q.click('#fb-open');
+    const stillOpen = await q.evaluate(() => document.getElementById('feedback-dialog').open);
+    await q.click('#fb-copy');
+    await q.waitForTimeout(200);
+    const clip = await q.evaluate(() => navigator.clipboard.readText());
+    const copyMsg = await q.textContent('#fb-err');
+    await q.keyboard.press('Escape');
+    // 안내 페이지의 /#feedback
+    await q.goto(`${BASE}/#feedback`, { waitUntil: 'networkidle' });
+    const hashOpen = await q.evaluate(() => ({ open: document.getElementById('feedback-dialog').open, hash: location.hash }));
+    await q.keyboard.press('Escape');
+    const sideFb = await q.evaluate(() => !!document.querySelector('.sidebar [data-feedback]'));
+    check('의견 보내기: "파일 · 화면 내용은 전송되지 않아요" · 설문 주소 없으면 안내 · [오류 내용 복사] · /#feedback · 사이드바에도',
+      fbInfo.none && fbInfo.dis === 'true' && !fbInfo.href && /전송되지 않아요/.test(fbInfo.text) && stillOpen && /\[PDF 작업실 오류 보고\]/.test(clip) && /브라우저/.test(copyMsg) && hashOpen.open && hashOpen.hash === '' && sideFb,
+      `설문 없음 안내 ${fbInfo.none} · 복사 ${clip.split('\n')[0]} · "${copyMsg.slice(0, 30)}…"`);
+
+    // 탭 제목: 처음 → 편집 파일 2개 → 줄이는 중 %
+    const tHome = await q.title();
+    await q.setInputFiles('#home-input', [fileA, fileB]);
+    await until(q, () => document.querySelectorAll('#edit-grid .page-card').length === 7);
+    const tEdit = await q.title();
+    // (진행 표시는 "사진 줄이는 중 3/8" 같은 글에서 %를 계산한다)
+    const hv = await PDFDocument.create();
+    for (let i = 0; i < 6; i++) hv.addPage([595, 842]).drawImage(await hv.embedJpg(photoJpeg(1400, 1100, i + 21)), { x: 20, y: 200, width: 555, height: 440 });
+    const hvFile = await writePdf('제목확인.pdf', hv);
+    await q.click('#tab-compress');
+    await q.evaluate(() => {
+      window.__titles = new Set();
+      new MutationObserver(() => window.__titles.add(document.title)).observe(document.querySelector('title'), { childList: true, characterData: true, subtree: true });
+    });
+    await q.setInputFiles('#cmp-input', [hvFile]);
+    await q.waitForSelector('#cmp-target:not([hidden])', { timeout: 60000 });
+    await q.fill('#cmp-mb', String(Math.max(1, Math.floor(fs.statSync(hvFile).size / 1024 / 1024 / 2))));
+    await q.click('#cmp-go');
+    await q.waitForSelector('#cmp-result:not([hidden])', { timeout: 120000 });
+    const titles = await q.evaluate(() => [...window.__titles]);
+    const tCmp = await q.title();
+    check('탭 제목: "PDF 작업실" → "편집 중 · 파일 2개" → 진행 중 "…%"', tHome === 'PDF 작업실' && tEdit === '편집 중 · 파일 2개' && titles.some((t) => /\d+%$/.test(t)) && tCmp === '용량 줄이기 · 파일 1개',
+      `${tHome} → ${tEdit} → ${titles.filter((t) => /%$/.test(t)).slice(0, 2).join(' / ')} → ${tCmp}`);
+
+    // 작업 중 탭 닫기 · 새로고침 → 확인
+    let asked = '';
+    q.on('dialog', (d) => { if (d.type() === 'beforeunload') asked = d.type(); });
+    await q.mouse.click(5, 5);
+    await q.reload({ waitUntil: 'load' });
+    await until(q, () => window.__pdfWorkshop && window.__pdfWorkshop.ready);
+    let asked2 = 'none';
+    q.removeAllListeners('dialog');
+    q.on('dialog', (d) => { asked2 = d.type(); d.accept().catch(() => {}); });
+    await q.reload({ waitUntil: 'load' }); // 파일이 없으면 묻지 않는다
+    check('작업 중 새로고침 · 탭 닫기 → "작업 중인 내용이 사라져요" 확인 (파일 없으면 안 물음)', asked === 'beforeunload' && asked2 === 'none', `파일 있을 때 ${asked || '안 물음'} · 없을 때 ${asked2}`);
+    check('새 소식 · 의견 · 제목 흐름 콘솔 에러 0개', qerr.length === 0, qerr.length ? qerr.join(' | ').slice(0, 200) : '0개');
+
+    // 공유 미리보기 · 파비콘
+    const html = await (await nctx3.request.get(BASE)).text();
+    const og = (p) => ((html.match(new RegExp(`<meta property="${p}" content="([^"]+)"`)) || [])[1] || '');
+    const ogImg = await nctx3.request.get(`${BASE}/icons/og-image.png`);
+    const buf = await ogImg.body();
+    const pngW = buf.readUInt32BE(16);
+    const pngH = buf.readUInt32BE(20);
+    const icons = await Promise.all(['/icons/logo.svg', '/icons/favicon-32.png', '/icons/apple-touch-icon.png'].map(async (u) => (await nctx3.request.get(BASE + u)).status()));
+    check('공유 미리보기(Open Graph) 제목 · 설명 · 1200×630 그림(절대 주소) · 파비콘 SVG · PNG · apple-touch-icon',
+      og('og:title') === 'PDF 작업실' && /파일은 컴퓨터 밖으로 안 나가요/.test(og('og:description')) && /^https:\/\/.+\/icons\/og-image\.png$/.test(og('og:image')) && pngW === 1200 && pngH === 630 && icons.every((c) => c === 200) && /summary_large_image/.test(html),
+      `${og('og:image')} ${pngW}×${pngH} · 파비콘 ${icons.join('/')}`);
+    await nctx3.close();
+
+    // 오래된 브라우저(ES2020 없음) · 자바스크립트 꺼짐
+    const octx2 = await browser.newContext({ viewport: { width: 1000, height: 700 } });
+    await octx2.addInitScript(() => { delete Promise.allSettled; });
+    const ob = await octx2.newPage();
+    await ob.goto(BASE, { waitUntil: 'load' });
+    const old = await ob.evaluate(() => ({ note: document.getElementById('old-browser').getBoundingClientRect().height, text: document.getElementById('old-browser').textContent, home: document.getElementById('view-home').getBoundingClientRect().height }));
+    await octx2.close();
+    const jctx = await browser.newContext({ viewport: { width: 1000, height: 700 }, javaScriptEnabled: false });
+    const jp = await jctx.newPage();
+    await jp.goto(BASE, { waitUntil: 'load' });
+    const nojs = await jp.evaluate(() => document.body.innerText);
+    await jctx.close();
+    check('오래된 브라우저 · 자바스크립트 꺼짐: "이 브라우저에서는 열 수 없어요. 엣지, 크롬, 웨일로…" 안내만 보임',
+      old.note > 50 && old.home === 0 && /엣지, 크롬, 웨일/.test(old.text) && /이 브라우저에서는 열 수 없어요/.test(nojs),
+      `ES2020 없음 → 안내 ${Math.round(old.note)}px · 앱 ${old.home}px · JS 꺼짐 → 안내 글 ${/열 수 없어요/.test(nojs) ? '보임' : '없음'}`);
   }
 
   // ── 12. 스크린샷 ──

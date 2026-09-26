@@ -2,10 +2,23 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8">
+  <script src="compat.js"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light dark">
   <title>PDF 작업실</title>
-  <meta name="description" content="PDF 합치기, 자르기, 회전, 사진 변환, 암호, 쪽번호를 파일을 올리지 않고 브라우저 안에서 처리합니다.">
+  <meta name="description" content="PDF 합치기 · 나누기 · 암호 · 용량 줄이기. 파일은 컴퓨터 밖으로 안 나가요.">
+  <!-- 공유 미리보기(카카오톡 · 메신저 · SNS) -->
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="PDF 작업실">
+  <meta property="og:title" content="PDF 작업실">
+  <meta property="og:description" content="PDF 합치기·나누기·암호·용량 줄이기, 파일은 컴퓨터 밖으로 안 나가요">
+  <meta property="og:url" content="__ORIGIN__/">
+  <meta property="og:image" content="__ORIGIN__/icons/og-image.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="PDF 작업실 — PDF 합치기 · 나누기 · 암호 · 용량 줄이기">
+  <meta property="og:locale" content="ko_KR">
+  <meta name="twitter:card" content="summary_large_image">
   <meta name="app-version" content="">
   <meta name="theme-color" content="#141B2E">
   <link rel="manifest" href="/manifest.webmanifest">
@@ -16,6 +29,18 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <!-- 자바스크립트가 꺼져 있거나 오래된 브라우저면 앱 대신 이 안내만 보인다 -->
+  <noscript>
+    <div class="old-browser-note">
+      <h1>이 브라우저에서는 열 수 없어요</h1>
+      <p>자바스크립트가 꺼져 있어요. 엣지, 크롬, 웨일로 열어 주세요.</p>
+    </div>
+  </noscript>
+  <div class="old-browser-note" id="old-browser" hidden>
+    <h1>이 브라우저에서는 열 수 없어요</h1>
+    <p>엣지, 크롬, 웨일로 열어 주세요.</p>
+    <p>인터넷 익스플로러나 오래된 브라우저에서는 PDF를 브라우저 안에서 처리하는 기능을 쓸 수 없어요.</p>
+  </div>
   <!-- 선 아이콘 모음 -->
   <svg class="sprite" aria-hidden="true" focusable="false">
     <defs>
@@ -154,6 +179,7 @@
       <section class="home-sec" aria-labelledby="news-h" id="home-news" hidden>
         <div class="home-sec-head">
           <h2 id="news-h">새 소식</h2>
+          <button type="button" class="btn sm news-open" aria-haspopup="dialog">전체 보기</button>
         </div>
         <ul class="news-list" id="news-list"></ul>
       </section>
@@ -162,10 +188,11 @@
     <footer class="site-foot">
       <div class="site-foot-in">
         <p class="site-foot-links">
-          <span class="app-version" id="home-version" aria-label="배포 버전"></span>
+          <button type="button" class="app-version news-open" id="home-version" aria-haspopup="dialog" title="새 소식 보기"></button>
           <a href="/check">직접 확인하는 법</a>
           <a href="/privacy">개인정보 안내</a>
           <a href="/licenses">사용한 라이브러리</a>
+          <button type="button" class="link-btn" data-feedback aria-haspopup="dialog">의견 보내기</button>
         </p>
         <p class="site-foot-limit">이 도구는 원본 파일을 바꾸지 않습니다. 결과물은 저장 후 열어서 확인해 주세요.</p>
       </div>
@@ -206,7 +233,10 @@
         </button>
       </nav>
       <p class="side-safe"><svg class="ic" aria-hidden="true"><use href="#i-shield"/></svg><span>파일은 이 컴퓨터 밖으로 나가지 않아요.<span class="offline-badge" hidden>지금 인터넷 없이 작동 중</span></span></p>
-      <p class="app-version side-version" id="side-version" aria-label="배포 버전"></p>
+      <p class="side-foot">
+        <button type="button" class="app-version side-version news-open" id="side-version" aria-haspopup="dialog" title="새 소식 보기"></button>
+        <button type="button" class="link-btn side-feedback" data-feedback aria-haspopup="dialog">의견 보내기</button>
+      </p>
     </aside>
 
     <main class="work">
@@ -831,6 +861,35 @@
     </form>
   </dialog>
 
+  <!-- 새 소식 -->
+  <dialog id="news-dialog" class="dialog news-dialog" aria-labelledby="news-title">
+    <form method="dialog">
+      <header class="dlg-head">
+        <h2 id="news-title">새 소식</h2>
+        <button type="submit" class="icon-btn" aria-label="닫기" title="닫기 (Esc)"><svg class="ic sm" aria-hidden="true"><use href="#i-x"/></svg></button>
+      </header>
+      <p class="sub" id="news-ver"></p>
+      <ul class="news-full" id="news-full"></ul>
+    </form>
+  </dialog>
+
+  <!-- 의견 보내기 -->
+  <dialog id="feedback-dialog" class="dialog feedback-dialog" aria-labelledby="fb-title">
+    <form method="dialog">
+      <header class="dlg-head">
+        <h2 id="fb-title">의견 보내기</h2>
+        <button type="submit" class="icon-btn" aria-label="닫기" title="닫기 (Esc)"><svg class="ic sm" aria-hidden="true"><use href="#i-x"/></svg></button>
+      </header>
+      <p>의견은 외부 설문 페이지(새 창)에서 받아요. 파일이나 화면 내용은 전송되지 않아요.</p>
+      <p class="notice" id="fb-none" hidden>아직 설문 주소가 없어요. 사이트 주인이 설문을 준비하면 여기서 바로 열 수 있어요.</p>
+      <p class="sub" id="fb-err"></p>
+      <div class="btn-row end">
+        <button type="button" class="btn" id="fb-copy">오류 내용 복사</button>
+        <a class="btn primary" id="fb-open" href="#" target="_blank" rel="noopener noreferrer">설문 열기</a>
+      </div>
+    </form>
+  </dialog>
+
   <!-- 설정하고 저장 -->
   <dialog id="save-dialog" class="dialog sd" aria-labelledby="sd-title">
     <form id="sd-form" method="dialog" novalidate>
@@ -992,6 +1051,7 @@
   <script src="/vendor/pdf.min.js"></script>
   <script src="/vendor/jszip.min.js"></script>
   <script src="/vendor/pako.min.js"></script>
+  <script src="config.js"></script>
   <script src="pdf-core.js"></script>
   <script src="compress.js"></script>
   <script src="guide-anim.js"></script>

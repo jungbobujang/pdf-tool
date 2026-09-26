@@ -95,7 +95,9 @@
   /**
    * 알림. 오류 알림에는 [오류 내용 복사] 버튼이 붙는다(report: 복사할 글, 없으면 제목·안내·상황으로 만든다).
    */
+  let lastErrorReport = '';
   function toast(title, fix, kind = 'error', ms, report) {
+    if (kind === 'error') lastErrorReport = report || errorReport(null, { title, fix });
     const copyBtn = kind === 'error'
       ? h('button', { class: 'toast-copy', type: 'button', title: '오류 내용(파일 이름 · 내용 제외)을 복사해요' }, '오류 내용 복사')
       : null;
@@ -5377,8 +5379,127 @@
       $('news-list').replaceChildren(...entries.slice(0, 3).map(entryEl));
       $('home-news').hidden = false;
     }
-    return { ready, entryEl, all: () => entries };
+    // 새 소식 창 + 새 버전 점(한 번 보면 꺼진다)
+    const SEEN = 'pdfws.newsSeen';
+    const dlg = $('news-dialog');
+    const load = () => { try { return localStorage.getItem(SEEN); } catch { return null; } };
+    const save = (v) => { try { localStorage.setItem(SEEN, v); } catch { /* 저장소를 못 써도 된다 */ } };
+    function returning() {
+      try {
+        for (let i = 0; i < localStorage.length; i++) if (/^pdfws\./.test(localStorage.key(i)) && localStorage.key(i) !== SEEN) return true;
+      } catch { /* 없음 */ }
+      return false;
+    }
+    function markDot() {
+      const latest = entries[0] && entries[0].id;
+      if (!latest) return;
+      const seen = load();
+      // 처음 온 사람에게는 점을 켜지 않는다(전부 새 소식이라 의미가 없다). 예전에 써 본 사람이면 켠다.
+      if (!seen && !returning()) { save(latest); return; }
+      const on = seen !== latest;
+      document.querySelectorAll('.app-version.news-open').forEach((b) => {
+        b.classList.toggle('has-news', on);
+        b.setAttribute('aria-label', on ? `${b.textContent}, 새 소식 있음` : `${b.textContent}, 새 소식 보기`);
+      });
+    }
+    ready.then(markDot);
+    function open() {
+      $('news-full').replaceChildren(...(entries.length ? entries.map(entryEl) : [h('li', { class: 'news-item' }, '새 소식을 불러오지 못했어요. 인터넷 연결을 확인해 주세요.')]));
+      const v = document.querySelector('meta[name="app-version"]');
+      $('news-ver').textContent = `지금 버전: v ${(v && v.content) || VER}`;
+      if (entries[0]) save(entries[0].id);
+      markDot();
+      if (!dlg.open) dlg.showModal();
+    }
+    document.querySelectorAll('.news-open').forEach((b) => b.addEventListener('click', () => { if (!isBusy()) ready.then(open); }));
+    return { ready, entryEl, all: () => entries, open, state: () => ({ dot: !!document.querySelector('.has-news'), seen: load() }) };
   })();
+
+  // ═══════════════════════════════════════════════════════════
+  // 의견 보내기 (외부 설문을 새 창으로. 파일 · 화면 내용은 보내지 않는다)
+  // ═══════════════════════════════════════════════════════════
+  const Feedback = (() => {
+    const dlg = $('feedback-dialog');
+    const url = String((window.PDFWS_CONFIG && window.PDFWS_CONFIG.FEEDBACK_URL) || '').trim();
+    const valid = /^https:\/\//.test(url);
+    const openLink = $('fb-open');
+    if (valid) openLink.href = url;
+    else openLink.removeAttribute('href');
+    openLink.classList.toggle('disabled', !valid);
+    openLink.setAttribute('aria-disabled', String(!valid));
+    $('fb-none').hidden = valid;
+    openLink.addEventListener('click', (e) => {
+      if (!valid) { e.preventDefault(); return; }
+      dlg.close();
+    });
+    $('fb-copy').addEventListener('click', async () => {
+      const text = lastErrorReport || errorReport(null, { title: '최근 오류 없음 (환경 정보만)' });
+      try {
+        await navigator.clipboard.writeText(text);
+        $('fb-err').textContent = lastErrorReport ? '최근 오류 내용을 복사했어요. 설문에 붙여 넣어 주세요.' : '최근 오류는 없어서 브라우저 · 버전 정보만 복사했어요.';
+      } catch {
+        $('fb-err').textContent = '복사하지 못했어요. 브라우저가 클립보드를 막았을 수 있어요.';
+      }
+    });
+    function open() {
+      $('fb-err').textContent = lastErrorReport ? '최근에 난 오류가 있어요. [오류 내용 복사]로 설문에 붙여 넣을 수 있어요(파일 이름 · 내용은 빠져요).' : '';
+      if (!dlg.open) dlg.showModal();
+    }
+    document.querySelectorAll('[data-feedback]').forEach((b) => b.addEventListener('click', () => { if (!isBusy()) open(); }));
+    return { open, state: () => ({ url, valid }) };
+  })();
+
+  // ═══════════════════════════════════════════════════════════
+  // 탭 제목(지금 상태) · 작업 중 탭 닫기 확인
+  // ═══════════════════════════════════════════════════════════
+  const Title = (() => {
+    const BASE_TITLE = 'PDF 작업실';
+    const LABEL = { edit: '편집 중', img2pdf: '사진→PDF', pdf2img: 'PDF→사진', decorate: '꾸미기', compress: '용량 줄이기', security: '보안' };
+    function fileCount(tool) {
+      const n = (sel) => document.querySelectorAll(sel).length;
+      if (tool === 'edit') return { n: n('#edit-chips > li.chip'), unit: '파일' };
+      if (tool === 'img2pdf') return { n: n('#img-grid .img-card'), unit: '사진' };
+      if (tool === 'pdf2img') return { n: $('p2i-file').hidden ? 0 : 1, unit: '파일' };
+      if (tool === 'decorate') return { n: $('decor-file').hidden ? 0 : 1, unit: '파일' };
+      if (tool === 'compress') return { n: n('#cmp-files > li'), unit: '파일' };
+      return { n: 0, unit: '파일' };
+    }
+    function compute() {
+      if (isBusy()) {
+        // "사진 줄이는 중 3/8" · "알맞은 크기 찾는 중 (2/6)" → "사진 줄이는 중 38%"
+        const raw = busy.text.textContent;
+        const nm = /(\d+)\s*\/\s*(\d+)/.exec(raw);
+        const w = parseFloat(busy.fill.style.width) || 0;
+        const pct = w > 0 ? Math.round(w) : nm && Number(nm[2]) ? Math.round((Number(nm[1]) / Number(nm[2])) * 100) : null;
+        const t = raw.replace(/…/g, '').replace(/\(?\s*\d+\s*\/\s*\d+\s*\)?/g, ' ').replace(/\s+/g, ' ').trim();
+        return pct == null ? t : `${t} ${Math.min(100, pct)}%`;
+      }
+      if (activeView !== 'work') return BASE_TITLE;
+      const { n, unit } = fileCount(activeTab);
+      if (!n) return `${LABEL[activeTab]} · ${BASE_TITLE}`;
+      return `${LABEL[activeTab]} · ${unit} ${n}${unit === '사진' ? '장' : '개'}`;
+    }
+    let last = '';
+    function update() {
+      const t = compute();
+      if (t !== last) { last = t; document.title = t; }
+    }
+    // 진행 글자 · 파일 목록 · 화면 전환이 바뀔 때 다시 계산한다
+    const mo = new MutationObserver(() => update());
+    [busy.text, busy.fill, busy.el].forEach((el) => el && mo.observe(el, { attributes: true, childList: true, characterData: true, subtree: true }));
+    ['edit-chips', 'img-grid', 'p2i-file', 'decor-file', 'cmp-files', 'view-work', 'view-home'].forEach((id) => { const el = $(id); if (el) mo.observe(el, { attributes: true, attributeFilter: ['hidden'], childList: true }); });
+    document.querySelectorAll('.tab').forEach((t) => mo.observe(t, { attributes: true, attributeFilter: ['aria-selected'] }));
+    update();
+    return { update, compute };
+  })();
+
+  window.addEventListener('beforeunload', (e) => {
+    // 새 버전 띠에서 [그래도 새로고침]을 눌렀을 때는 묻지 않는다
+    if (!hasWork() || window.__pdfwsReloading) return undefined;
+    e.preventDefault();
+    e.returnValue = '작업 중인 내용이 사라져요.';
+    return '작업 중인 내용이 사라져요.';
+  });
 
   // ═══════════════════════════════════════════════════════════
   // 처음 화면: 파일을 넣으면 알맞은 도구로 보낸다
@@ -5622,6 +5743,7 @@
         return;
       }
       wantReload = true;
+      window.__pdfwsReloading = true;
       waiting.postMessage('SKIP_WAITING');
     });
     $('update-x').addEventListener('click', () => { bar.hidden = true; });
@@ -5694,11 +5816,21 @@
   {
     const t = toolFromHash();
     if (t) openTool(t);
+    // 안내 페이지의 [의견 보내기](/#feedback)로 오면 의견 창
+    if (location.hash === '#feedback') {
+      history.replaceState(null, '', location.pathname + location.search);
+      Feedback.open();
+    }
   }
   window.addEventListener('hashchange', () => {
+    if (location.hash === '#feedback') {
+      history.replaceState(null, '', location.pathname + location.search);
+      Feedback.open();
+      return;
+    }
     const t = toolFromHash();
     if (t && (t !== activeTab || activeView !== 'work')) openTool(t);
   });
 
-  window.__pdfWorkshop = { version: 5, ready: true, guide: Guide.state, compress: Shrink.state, worker: Squeeze.inWorker, lastStage: () => errCtx.stage, pwa: Pwa.state, hasWork };
+  window.__pdfWorkshop = { version: 5, ready: true, guide: Guide.state, compress: Shrink.state, worker: Squeeze.inWorker, lastStage: () => errCtx.stage, pwa: Pwa.state, hasWork, news: News.state, feedback: Feedback.state, title: Title.compute };
 })();

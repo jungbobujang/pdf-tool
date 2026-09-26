@@ -41,13 +41,17 @@ const COMMIT = VERSION.commit;
 
 // index.html의 app.js · style.css · pdf-core.js 주소에 ?v=커밋 을 붙인다.
 // 커밋이 바뀌면 주소가 바뀌므로 브라우저나 중간 캐시에 옛 파일이 남지 않는다.
-const ASSETS = ['style.css', 'pdf-core.js', 'compress.js', 'guide-anim.js', 'app.js'];
+// 공유 미리보기(Open Graph)에 쓰는 사이트 주소. 다른 주소로 배포하면 PUBLIC_URL 환경 변수로 바꾼다.
+const PUBLIC_URL = (process.env.PUBLIC_URL || 'https://pdf-tool-production-a037.up.railway.app').replace(/\/$/, '');
+const ASSETS = ['style.css', 'compat.js', 'config.js', 'pdf-core.js', 'compress.js', 'guide-anim.js', 'app.js'];
 // 안내 페이지(/check · /privacy · /licenses)가 쓰는 파일
 const PAGE_ASSETS = ['pages.js'];
 function renderHtml(file) {
   let html = fs.readFileSync(file, 'utf8');
   html = html.replace('<meta name="app-version" content="">', `<meta name="app-version" content="${COMMIT}">`);
   html = html.replace('<!-- CSP_LIST -->', () => CSP_LIST_HTML);
+  // 공유 미리보기 그림은 절대 주소여야 메신저가 가져간다
+  html = html.replace(/__ORIGIN__/g, PUBLIC_URL);
   for (const a of [...ASSETS, ...PAGE_ASSETS]) {
     html = html.replace(new RegExp(`(href|src)="${a.replace('.', '\.')}"`, 'g'), `$1="${a}?v=${COMMIT}"`);
   }
