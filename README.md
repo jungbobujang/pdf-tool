@@ -53,6 +53,10 @@
 ![저장 위치 안내](docs/screens/guide-download.png)
 ![1920px 빈 화면](docs/screens/wide-empty.png)
 
+1920px 넓은 화면에서는 여섯 도구 모두 파일 넣기 전 화면(제목 · 파일 넣기 상자 · 3단계)이 같은 1100px 컨테이너로 가운데에 놓입니다. 사용법 패널이 열려 있으면 남은 폭, 접혀 있으면 전체 폭 기준이고 접고 펼 때 0.2초 동안 옮겨 갑니다. 파일을 넣은 뒤 카드 그리드(편집 · 사진 → PDF · PDF → 사진)는 가로로 꽉 채우고, 목록 하나인 꾸미기 · 용량 줄이기 · 보안은 1100px 가운데를 유지합니다.
+
+<img src="docs/screens/wide-empty-img2pdf.png" alt="1920px 사진 → PDF 빈 화면" width="320"> <img src="docs/screens/wide-empty-pdf2img.png" alt="1920px PDF → 사진 빈 화면" width="320"> <img src="docs/screens/wide-empty-decorate.png" alt="1920px 꾸미기 빈 화면" width="320"> <img src="docs/screens/wide-empty-compress.png" alt="1920px 용량 줄이기 빈 화면" width="320"> <img src="docs/screens/wide-empty-security.png" alt="1920px 보안 빈 화면" width="320">
+
 ![설정하고 저장](docs/screens/save-dialog.png)
 
 **설정하고 저장…** — 쪽번호 · 워터마크 · 서명/도장 · 암호 · 용량 목표를 켜고 끄며 오른쪽 미리보기로 확인합니다.

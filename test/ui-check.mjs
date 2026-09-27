@@ -1686,6 +1686,7 @@ try {
     // 1600px 이상: 패널 360px, 빈 화면 카드는 가운데 최대 1100px
     await g.setViewportSize({ width: 1920, height: 1000 });
     await gotoTool(g, 'img2pdf');
+    await g.waitForTimeout(300); // 패널 칸 폭이 0.2초 동안 바뀐다
     const wideBox = await g.evaluate(() => {
       const gd = document.getElementById('edit-guide').getBoundingClientRect();
       const e = document.querySelector('#panel-img2pdf .empty').getBoundingClientRect();
@@ -2729,6 +2730,99 @@ try {
     await rctx2.close();
   }
 
+  // ── 11-i. 컴퓨터: 여섯 도구 빈 화면이 같은 규칙(1100px 가운데) · 사용법 패널 접기 전후 · 휴대폰은 그대로 ──
+  {
+    const TOOLS6 = ['edit', 'img2pdf', 'pdf2img', 'decorate', 'compress', 'security'];
+    const dropOf = { edit: '#edit-drop', img2pdf: '#img-drop', pdf2img: '#p2i-drop', decorate: '#decor-drop', compress: '#cmp-drop', security: '#panel-security .two-col' };
+    const measure = (pg, sel) => pg.evaluate((sel) => {
+      const e = document.querySelector(sel).getBoundingClientRect();
+      const head = document.querySelector('.panel:not([hidden]) .tool-head').getBoundingClientRect();
+      const main = document.querySelector('.work-main').getBoundingClientRect();
+      const lay = document.querySelector('.work-layout');
+      const folded = lay.classList.contains('guide-collapsed');
+      // 패널이 열려 있으면 패널을 뺀 폭, 접혀 있으면 오른쪽 막대까지 전체 폭이 기준
+      const ref = folded ? { left: main.left, right: lay.getBoundingClientRect().right } : { left: main.left, right: main.right };
+      const l = e.left - ref.left;
+      const r = ref.right - e.right;
+      const fills = e.width >= main.width - 1; // 1100px보다 좁아 칸을 꽉 채우면 옮길 여유가 없다
+      return { l: Math.round(l), r: Math.round(r), w: Math.round(e.width), fills, folded, headOff: Math.round(head.left - e.left), ok: (Math.abs(l - r) <= 8 || (fills && Math.abs(l) <= 1)) && e.width <= 1101 && Math.abs(head.left - e.left) <= 1 };
+    }, sel);
+    for (const W of [1280, 1920]) {
+      const cctx = await browser.newContext({ viewport: { width: W, height: 1000 }, colorScheme: 'light' });
+      const cp = await cctx.newPage();
+      const cerr = [];
+      watch(cp, cerr);
+      await cp.goto(`${BASE}/#edit`, { waitUntil: 'networkidle' });
+      const res = [];
+      for (const folded of [false, true]) {
+        for (const t of TOOLS6) {
+          await cp.click(`#tab-${t}`);
+          if (folded) await cp.click('#guide-fold'); // 접힘은 도구마다 따로 기억한다
+          await cp.waitForTimeout(350);
+          res.push({ t, folded, ...(await measure(cp, dropOf[t])) });
+        }
+      }
+      const tr = await cp.evaluate(() => [getComputedStyle(document.querySelector('.work-layout')).transitionDuration, getComputedStyle(document.querySelector('.narrow')).transitionDuration]);
+      const fmt = (x) => `${x.t} ${x.l}/${x.r}${x.fills ? '(꽉)' : ''}${x.ok ? '' : '✗'}`;
+      check(`${W}px: 여섯 도구 빈 화면 파일 넣기 상자 가운데(사용법 패널 열림 · 접힘, 좌우 여백 차이 8px 이내) · 제목은 같은 컨테이너 왼쪽`,
+        res.length === 12 && res.every((x) => x.ok) && res.filter((x) => x.folded).every((x) => x.folded),
+        `열림 ${res.filter((x) => !x.folded).map(fmt).join(' · ')} ‖ 접힘 ${res.filter((x) => x.folded).map(fmt).join(' · ')}`);
+      if (W === 1920) {
+        check('1920px: 접고 펼 때 0.2초 동안 옮겨감(transition)', tr[0] === '0.2s' && tr[1] === '0.2s', `막대 칸 ${tr[0]} · 가운데 컨테이너 ${tr[1]}`);
+        // 파일을 넣은 뒤: 편집 그리드는 꽉, 꾸미기(목록 하나)는 1100px 가운데
+        for (const t of TOOLS6) { await cp.click(`#tab-${t}`); await cp.click('#guide-rail', { timeout: 2000 }).catch(() => {}); }
+        await cp.click('#tab-edit');
+        await cp.setInputFiles('#edit-input', [fileA, fileB]);
+        await until(cp, () => document.querySelectorAll('#edit-grid .page-card').length === 7);
+        await cp.waitForTimeout(300);
+        const gridW = await cp.evaluate(() => {
+          const g = document.getElementById('edit-grid').getBoundingClientRect();
+          const m = document.querySelector('.work-main').getBoundingClientRect();
+          const h = document.querySelector('#panel-edit .tool-head').getBoundingClientRect();
+          return { g: Math.round(g.width), m: Math.round(m.width), gl: Math.round(g.left - m.left), hl: Math.round(h.left - m.left) };
+        });
+        check('1920px: 파일을 넣은 편집 그리드는 가로로 꽉 참(제목도 왼쪽 끝으로)', gridW.g === gridW.m && gridW.gl === 0 && gridW.hl === 0, `그리드 ${gridW.g}px = 칸 ${gridW.m}px`);
+        await cp.click('#tab-decorate');
+        await cp.setInputFiles('#decor-input', [fileA]);
+        await until(cp, () => !document.getElementById('decor-layout').hidden);
+        await cp.waitForTimeout(300);
+        const dec = await cp.evaluate(() => {
+          const d = document.getElementById('decor-layout').getBoundingClientRect();
+          const m = document.querySelector('.work-main').getBoundingClientRect();
+          return { w: Math.round(d.width), l: Math.round(d.left - m.left), r: Math.round(m.right - d.right) };
+        });
+        check('1920px: 파일을 넣은 꾸미기(목록 하나)는 1100px 컨테이너 가운데', dec.w === 1100 && Math.abs(dec.l - dec.r) <= 8, `폭 ${dec.w}px · 여백 ${dec.l}/${dec.r}`);
+      }
+      check(`${W}px 가운데 정렬 흐름 콘솔 에러 0개`, cerr.length === 0, cerr.length ? cerr.join(' | ').slice(0, 200) : '0개');
+      await cctx.close();
+    }
+    // 움직임 줄이기: 옮겨가는 효과 없음
+    const rctx = await browser.newContext({ viewport: { width: 1920, height: 1000 }, reducedMotion: 'reduce' });
+    const rp = await rctx.newPage();
+    await rp.goto(`${BASE}/#img2pdf`, { waitUntil: 'networkidle' });
+    const rtr = await rp.evaluate(() => [getComputedStyle(document.querySelector('.work-layout')).transitionDuration, getComputedStyle(document.getElementById('img-empty')).transitionDuration]);
+    check('움직임 줄이기 설정이면 접고 펼 때 옮겨가는 효과 없음', rtr.every((d) => d === '0s'), rtr.join(' · '));
+    await rctx.close();
+    // 휴대폰(390px): 가운데 컨테이너 규칙이 끼어들지 않음(여백 16px 그대로)
+    const pctx2 = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+    const pp = await pctx2.newPage();
+    const perr = [];
+    watch(pp, perr);
+    await pp.goto(`${BASE}/#edit`, { waitUntil: 'networkidle' });
+    const ph = [];
+    for (const t of TOOLS6) {
+      await pp.locator(`#tab-${t}`).tap();
+      ph.push(await pp.evaluate(([t, sel]) => {
+        const e = document.querySelector(sel).getBoundingClientRect();
+        const p = document.querySelector('.panel:not([hidden])');
+        return { t, l: Math.round(e.left), w: Math.round(e.width), left: getComputedStyle(p).left, sw: document.documentElement.scrollWidth };
+      }, [t, dropOf[t]]));
+    }
+    check('390px 휴대폰: 여섯 도구 빈 화면은 그대로(좌우 16px, 폭 358px, 가로 스크롤 없음)', ph.every((x) => x.l === 16 && x.w === 358 && x.sw <= 390 && (x.left === 'auto' || x.left === '0px')) && perr.length === 0,
+      ph.map((x) => `${x.t} ${x.l}+${x.w}`).join(' · '));
+    await pctx2.close();
+  }
+
   // ── 12. 스크린샷 ──
   if (SCREENS) {
     const out = path.join(root, 'docs', 'screens');
@@ -2837,6 +2931,14 @@ try {
     await gp.mouse.move(5, 5);
     await gp.waitForTimeout(3000);
     await gp.screenshot({ path: path.join(out, 'wide-empty.png') });
+    // 1920px 여섯 도구 빈 화면(같은 1100px 가운데 규칙)
+    for (const t of ['edit', 'img2pdf', 'pdf2img', 'decorate', 'compress', 'security']) {
+      await gp.click(`#tab-${t}`);
+      await gp.evaluate(() => window.scrollTo(0, 0));
+      await gp.mouse.move(5, 5);
+      await gp.waitForTimeout(2500);
+      await gp.screenshot({ path: path.join(out, `wide-empty-${t}.png`) });
+    }
     await gd.close();
     console.log(`스크린샷: ${out}`);
   }

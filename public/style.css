@@ -1856,7 +1856,6 @@ kbd {
 .busy-cancel { margin-top: 12px; }
 
 /* 파일 넣기 · 도구 6개 (400px: 아이콘 + 이름 2칸) */
-.panel#panel-compress, .panel#panel-decorate { max-width: 1180px; }
 
 /* ── 용량 줄이기: 한 칸 · 안내 · 잠김 ── */
 .cmp-step { margin-left: 6px; font-size: 12.5px; font-weight: 700; color: var(--muted); }
@@ -2175,8 +2174,30 @@ legend.sr-only { width: 1px !important; }
 }
 .img-card .rot-btn:hover { background: var(--accent); }
 
-/* 넓은 화면: 빈 화면 카드는 1100px로 가운데, 사용법 패널은 1600px 이상에서 360px */
-.empty { width: 100%; max-width: 1100px; margin-inline: auto; }
+/* 컴퓨터(821px 이상): 가운데 1100px 컨테이너 .narrow — 모든 도구가 같은 규칙.
+   - 파일 넣기 전 화면(.empty)과 그 위 제목, 목록 하나만 있는 도구(꾸미기 · 용량 줄이기 · 보안)는 패널째 1100px 가운데.
+   - 카드 그리드(편집 · 사진 → PDF · PDF → 사진)는 파일을 넣으면 가로로 꽉 채운다.
+   - 사용법 패널이 열리면 남은 폭 기준으로, 접히면(오른쪽 44px 막대) 전체 폭 기준으로 가운데 — 막대 + 틈(72px)의 절반만큼 오른쪽으로. */
+@media (min-width: 821px) {
+  .panel { max-width: none; }
+  .narrow, .tool-head:has(~ .narrow:not([hidden])) {
+    position: relative;
+    left: 0;
+    width: 100%;
+    max-width: 1100px;
+    margin-inline: auto;
+  }
+}
+@media (min-width: 1280px) {
+  .work-layout { transition: grid-template-columns .2s ease; }
+  .narrow, .tool-head:has(~ .narrow:not([hidden])) { transition: left .2s ease; }
+  .work-layout.guide-collapsed .narrow,
+  .work-layout.guide-collapsed .tool-head:has(~ .narrow:not([hidden])) { left: clamp(0px, calc((100% - 1100px) / 2), 36px); }
+}
+@media (min-width: 1280px) and (prefers-reduced-motion: reduce) {
+  .work-layout, .narrow, .tool-head { transition: none; }
+}
+/* 사용법 패널은 1600px 이상에서 360px */
 @media (min-width: 1600px) {
   .work-layout { grid-template-columns: minmax(0, 1fr) 360px; }
 }
