@@ -90,12 +90,30 @@
     return f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
   }
 
+  // ── 파일 고르기 라벨(label for=파일 입력)을 키보드로도 누를 수 있게 ──
+  function keyboardFileLabels(root = document) {
+    root.querySelectorAll('label[for]').forEach((lb) => {
+      const input = document.getElementById(lb.htmlFor);
+      if (!input || input.type !== 'file' || lb.hasAttribute('tabindex')) return;
+      lb.tabIndex = 0;
+      lb.setAttribute('role', 'button');
+      lb.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault();
+        input.click();
+      });
+    });
+  }
+  keyboardFileLabels();
+
   // ── 알림 ───────────────────────────────────────────────────
   const toastBox = $('toasts');
   /**
    * 알림. 오류 알림에는 [오류 내용 복사] 버튼이 붙는다(report: 복사할 글, 없으면 제목·안내·상황으로 만든다).
    */
+  let lastErrorReport = '';
   function toast(title, fix, kind = 'error', ms, report) {
+    if (kind === 'error') lastErrorReport = report || errorReport(null, { title, fix });
     const copyBtn = kind === 'error'
       ? h('button', { class: 'toast-copy', type: 'button', title: '오류 내용(파일 이름 · 내용 제외)을 복사해요' }, '오류 내용 복사')
       : null;
@@ -586,6 +604,7 @@
   let activeTab = 'edit';
   let activeView = 'home';
   let guideSync = () => {}; // 사용법 패널 애니메이션 켜고 끄기 (Guide가 채운다)
+  let editChanged = () => {}; // 편집 상태가 바뀔 때 (최근 작업 이어하기가 채운다)
 
   /** 처음 화면(home) ↔ 작업 화면(work) */
   function showView(name) {
@@ -660,7 +679,7 @@
   });
 
   // ═══════════════════════════════════════════════════════════
-  // 탭1: 편집 · 합치기 · 자르기
+  // 탭1: 편집 · 합치기
   // ═══════════════════════════════════════════════════════════
   const Edit = (() => {
     const grid = $('edit-grid');
@@ -712,7 +731,7 @@
       const others = files.filter((f) => !isPdfFile(f));
       if (others.length) {
         toast(`PDF가 아닌 파일 ${others.length}개는 넣지 않았어요.`,
-          '사진은 "이미지 → PDF" 탭에서 PDF로 바꿀 수 있어요.', 'error');
+          '사진은 왼쪽 "사진 → PDF"에서 PDF로 바꿀 수 있어요.', 'error');
       }
       if (!pdfs.length) return [];
       const added = [];
@@ -739,7 +758,7 @@
       return added;
     }
 
-    /** 이미 풀린 문서를 받아서 넣는다(암호 탭에서 보내기). */
+    /** 이미 풀린 문서를 받아서 넣는다(보안에서 보내기). */
     function addDecrypted(name, bytes, doc) {
       const src = createSource(name, { bytes, doc, locked: false });
       appendPages(src);
@@ -817,11 +836,13 @@
     }
 
     function makeCard(p) {
-      const el = h('div', { class: 'page-card sort-item', tabindex: '0', 'data-key': p.key, role: 'option', 'aria-selected': 'false' },
+      // (카드 안에 버튼이 있어 option이 아니라 listitem. 선택 여부는 읽기 글에 "선택됨"으로 넣는다)
+      const el = h('div', { class: 'page-card sort-item', tabindex: '0', 'data-key': p.key, role: 'listitem' },
         h('div', { class: 'paper' },
           h('div', { class: 'thumb' }, h('span', { class: 'loading' }, '불러오는 중…')),
           h('span', { class: 'page-no' }),
           h('span', { class: 'blank-badge', title: '거의 흰 쪽이에요. 위 안내줄에서 확인할 수 있어요.' }, '빈 쪽?'),
+          h('span', { class: 'find-badge', 'aria-hidden': 'true' }),
           h('button', { type: 'button', class: 'del-band', 'data-act': 'del', tabindex: '-1' }, '삭제 예정 · 되돌리기')),
         h('button', { type: 'button', class: 'sel-check', 'data-act': 'check', role: 'checkbox', 'aria-checked': 'false', 'aria-label': '이 쪽 선택', title: '선택 (Ctrl+클릭과 같아요)', tabindex: '-1' },
           icon('check')),
@@ -905,7 +926,9 @@
         const del = el.querySelector('.card-tools [data-act="del"]');
         del.title = p.deleted ? '되돌리기' : '삭제 (다시 누르면 되돌리기)';
         del.setAttribute('aria-label', p.deleted ? '되돌리기' : '삭제');
-        el.setAttribute('aria-label', `${p.deleted ? '삭제 예정' : n + '번'}, ${label}${p.rot ? `, ${p.rot}도 회전` : ''}`);
+        el.dataset.no = p.deleted ? '' : String(n);
+        el.dataset.label = label;
+        setCardLabel(p, el);
         if (el.dataset.painted && el.dataset.painted !== `${p.srcId}:${p.index}:${p.rot}`) paintThumb(el);
       });
       const has = pages.length > 0 || sources.length > 0;
@@ -917,6 +940,10 @@
       updateSizes();
       updateBlank();
       updateDuplex();
+      $('edit-find-bar').hidden = !has;
+      editChanged();
+      if (find.q && find.sig !== srcSig()) scheduleFind(0);
+      else applyFind();
     }
 
     function updateCount() {
@@ -994,6 +1021,15 @@
     const selMore = $('sel-more');
     const selectedPages = () => pages.filter((p) => sel.has(p.key));
 
+    /** 화면 읽기용: "3번째 쪽, 보고서A · 3쪽, 선택됨, 삭제 예정, 90도 회전" */
+    function setCardLabel(p, el) {
+      const parts = [p.deleted ? '삭제 예정 쪽' : `${el.dataset.no}번째 쪽`, el.dataset.label];
+      if (sel.has(p.key)) parts.push('선택됨');
+      if (p.deleted) parts.push('삭제 예정');
+      if (p.rot) parts.push(`${p.rot}도 회전`);
+      if (el.dataset.found) parts.push(`찾은 글자 ${el.dataset.found}곳`);
+      el.setAttribute('aria-label', parts.filter(Boolean).join(', '));
+    }
     function updateSelection() {
       const alive = new Set(pages.map((p) => p.key));
       for (const k of sel) if (!alive.has(k)) sel.delete(k);
@@ -1002,7 +1038,8 @@
       for (const [k, el] of cards) {
         const on = sel.has(k);
         el.classList.toggle('selected', on);
-        el.setAttribute('aria-selected', on ? 'true' : 'false');
+        const pp = pages.find((x) => x.key === k);
+        if (pp && el.dataset.label) setCardLabel(pp, el);
         el.querySelector('.sel-check').setAttribute('aria-checked', on ? 'true' : 'false');
       }
       grid.classList.toggle('select-mode', selectMode);
@@ -1394,6 +1431,11 @@
         clickSelect(el.dataset.key, { ctrl: !e.shiftKey || e.ctrlKey || e.metaKey, shift: e.shiftKey });
         return;
       }
+      if (e.key === 'Enter' && !e.altKey && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        openViewer(pages.findIndex((p) => p.key === el.dataset.key));
+        return;
+      }
       if (!e.altKey || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
       e.preventDefault();
       const i = pages.findIndex((p) => p.key === el.dataset.key);
@@ -1539,6 +1581,19 @@
       box.hidden = sum.length < 2;
       if (sum.length < 2) return;
       $('edit-sizes-text').textContent = `쪽 크기가 섞여 있어요 (${sum.map(([k, n]) => `${k} ${n}`).join(' · ')}). 인쇄하면 들쭉날쭉할 수 있어요.`;
+      // 크기를 맞추면 쪽을 그림처럼 옮겨 그리므로 링크 · 주석이 사라진다 → 미리 알린다
+      const an = { links: 0, notes: 0 };
+      kept.forEach((p) => {
+        const src = srcById(p.srcId);
+        if (!src.annots) src.annots = [];
+        if (!src.annots[p.index]) src.annots[p.index] = Core.countAnnots(src.doc.getPage(p.index));
+        an.links += src.annots[p.index].links;
+        an.notes += src.annots[p.index].notes;
+      });
+      const parts = [an.links && `링크 ${an.links}개`, an.notes && `주석 ${an.notes}개`].filter(Boolean);
+      const note = $('edit-sizes-annot');
+      note.hidden = !parts.length || sizeFix.mode === 'keep';
+      note.textContent = parts.length ? `이 파일의 ${parts.join('와 ')}는 크기를 맞추면 사라져요.` : '';
     }
     const PAPER_NAME = { a4: 'A4', letter: 'Letter' };
     function syncSizeUi() {
@@ -1551,6 +1606,7 @@
       if (e.target.name === 'sizefix') sizeFix.mode = e.target.value;
       if (e.target.id === 'sizefix-paper') sizeFix.paper = e.target.value;
       syncSizeUi();
+      updateSizes();
       if (sizeFix.mode !== 'keep') toast(`저장할 때 모든 쪽을 ${PAPER_NAME[sizeFix.paper]} 세로에 맞춰요.`, sizeFix.mode === 'rotate' ? '가로 쪽은 90° 돌려서 넣어요. 글자는 그대로 선택돼요.' : '가로 쪽은 줄여서 가운데에 넣어요. 글자는 그대로 선택돼요.', 'info');
     });
     /** 쪽들을 모으고(필요하면) 한 종이에 맞춘다 */
@@ -2043,12 +2099,319 @@
       Object.assign(sizeFix, { mode: 'keep', paper: 'a4' });
       syncSizeUi();
       openSplit(false);
+      if (vdlg.open) vdlg.close();
+      clearTimeout(find.timer);
+      find.token++;
+      findInput.value = '';
+      Object.assign(find, { q: '', hits: [], at: -1, counts: new Map() });
+      $('edit-find-status').textContent = '';
+      $('edit-find-note').hidden = true;
       render();
     }
 
+    // ── 쪽 크게 보기 (더블클릭 · Enter) ──
+    const vdlg = $('viewer');
+    const vstage = $('viewer-stage');
+    const ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3];
+    const view = { i: -1, zoom: 1, token: 0, rendered: '' };
+    function openViewer(i) {
+      if (i < 0 || i >= pages.length || isBusy()) return;
+      view.i = i;
+      view.zoom = 1;
+      if (!vdlg.open) vdlg.showModal();
+      renderViewer();
+    }
+    function viewerInfo() {
+      const p = pages[view.i];
+      const src = p && srcById(p.srcId);
+      if (!p || !src) return;
+      const kept = keptPages();
+      const no = p.deleted ? '삭제 예정' : `${kept.indexOf(p) + 1}번째 쪽`;
+      $('viewer-title').textContent = `${view.i + 1} / ${pages.length} · ${src.name} ${p.index + 1}쪽`;
+      $('viewer-state').textContent = [no, p.rot ? `${p.rot}° 회전` : ''].filter(Boolean).join(' · ');
+      vdlg.classList.toggle('deleted', p.deleted);
+      $('vw-del').textContent = p.deleted ? '되돌리기' : '삭제 예정';
+      $('vw-del').setAttribute('aria-pressed', String(p.deleted));
+      $('vw-prev').disabled = view.i <= 0;
+      $('vw-next').disabled = view.i >= pages.length - 1;
+      $('vw-zoom').textContent = `${Math.round(view.zoom * 100)}%`;
+      $('vw-out').disabled = view.zoom <= ZOOMS[0];
+      $('vw-in').disabled = view.zoom >= ZOOMS[ZOOMS.length - 1];
+      $('vw-rep').disabled = sources.filter((x) => x.doc).length === 0;
+    }
+    /** 보고 있는 쪽 하나만 화면 해상도로 그린다 */
+    async function renderViewer() {
+      const my = ++view.token;
+      const p = pages[view.i];
+      if (!p) { vdlg.close(); return; }
+      viewerInfo();
+      const src = srcById(p.srcId);
+      const want = `${p.key}:${p.srcId}:${p.index}:${p.rot}:${view.zoom}:${vstage.clientWidth}x${vstage.clientHeight}`;
+      if (view.rendered === want && vstage.querySelector('canvas')) return;
+      if (!vstage.querySelector('canvas')) vstage.replaceChildren(h('span', { class: 'loading' }, '그리는 중…'));
+      try {
+        const pdf = await getPdfjs(src);
+        if (my !== view.token) return;
+        const page = await pdf.getPage(p.index + 1);
+        const rotation = Core.normAngle(page.rotate + p.rot);
+        const vp1 = page.getViewport({ scale: 1, rotation });
+        const fit = Math.max(0.05, Math.min((vstage.clientWidth - 32) / vp1.width, (vstage.clientHeight - 32) / vp1.height));
+        const css = fit * view.zoom;
+        let scale = css * Math.min(window.devicePixelRatio || 1, 2);
+        // 캔버스 한계(아이폰 사파리 약 16MP) 안에서
+        const px = vp1.width * vp1.height * scale * scale;
+        if (px > MAX_CANVAS_PIXELS * 0.95) scale *= Math.sqrt((MAX_CANVAS_PIXELS * 0.95) / px);
+        scale = Math.min(scale, (MAX_CANVAS_SIDE - 1) / Math.max(vp1.width, vp1.height));
+        const vp = page.getViewport({ scale, rotation });
+        const canvas = makeCanvas(vp.width, vp.height);
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        await page.render({ canvasContext: ctx, viewport: vp }).promise;
+        page.cleanup();
+        if (my !== view.token) return;
+        canvas.className = 'viewer-canvas';
+        canvas.style.width = `${Math.round(vp1.width * css)}px`;
+        canvas.style.height = `${Math.round(vp1.height * css)}px`;
+        canvas.setAttribute('role', 'img');
+        canvas.setAttribute('aria-label', `${src.name} ${p.index + 1}쪽 크게 보기`);
+        vstage.replaceChildren(canvas);
+        vstage.classList.toggle('zoomed', view.zoom > 1);
+        view.rendered = want;
+      } catch (e) {
+        if (my !== view.token) return;
+        vstage.replaceChildren(h('p', { class: 'viewer-error' }, `이 쪽을 크게 그리지 못했어요. ${explain(e, src.name).title}`));
+      }
+    }
+    function viewerGo(d) {
+      const j = view.i + d;
+      if (j < 0 || j >= pages.length) return;
+      view.i = j;
+      renderViewer();
+    }
+    function viewerZoom(dir) {
+      if (dir === 0) view.zoom = 1;
+      else {
+        const k = ZOOMS.indexOf(view.zoom);
+        view.zoom = ZOOMS[Math.max(0, Math.min(ZOOMS.length - 1, (k < 0 ? 2 : k) + dir))];
+      }
+      renderViewer();
+    }
+    function viewerAct(act) {
+      const p = pages[view.i];
+      if (!p || isBusy()) return;
+      const no = p.deleted ? '삭제 예정 쪽' : `${keptPages().indexOf(p) + 1}번째 쪽`;
+      if (act === 'rotl' || act === 'rot') {
+        const dir = act === 'rotl' ? 'left' : 'right';
+        record(`${no} ${dir === 'left' ? '왼쪽' : '오른쪽'} 90°`, () => (p.rot = Core.rotate(p.rot, dir)));
+      } else if (act === 'del') {
+        record(p.deleted ? `${no} 복구` : `${no} 삭제`, () => (p.deleted = !p.deleted));
+      } else if (act === 'rep') {
+        Replace.open(p);
+        return;
+      }
+      renderViewer();
+    }
+    $('vw-prev').addEventListener('click', () => viewerGo(-1));
+    $('vw-next').addEventListener('click', () => viewerGo(1));
+    $('vw-in').addEventListener('click', () => viewerZoom(1));
+    $('vw-out').addEventListener('click', () => viewerZoom(-1));
+    $('vw-zoom').addEventListener('click', () => viewerZoom(0));
+    $('vw-rotl').addEventListener('click', () => viewerAct('rotl'));
+    $('vw-rot').addEventListener('click', () => viewerAct('rot'));
+    $('vw-rep').addEventListener('click', () => viewerAct('rep'));
+    $('vw-del').addEventListener('click', () => viewerAct('del'));
+    $('vw-close').addEventListener('click', () => vdlg.close());
+    vdlg.addEventListener('keydown', (e) => {
+      if (e.target.closest('button') && (e.key === 'Enter' || e.key === ' ')) return;
+      const k = e.key;
+      if (k === 'ArrowLeft' || k === 'PageUp') { e.preventDefault(); viewerGo(-1); }
+      else if (k === 'ArrowRight' || k === 'PageDown') { e.preventDefault(); viewerGo(1); }
+      else if (k === '+' || k === '=') { e.preventDefault(); viewerZoom(1); }
+      else if (k === '-' || k === '_') { e.preventDefault(); viewerZoom(-1); }
+      else if (k === '0') { e.preventDefault(); viewerZoom(0); }
+      else if (k === 'Delete') { e.preventDefault(); viewerAct('del'); }
+    });
+    vdlg.addEventListener('close', () => {
+      view.token++;
+      vstage.replaceChildren();
+      view.rendered = '';
+      const p = pages[view.i];
+      const card = p && cards.get(p.key);
+      if (card && card.isConnected) card.focus();
+    });
+    // 교체 창을 닫으면 보던 쪽을 다시 그린다
+    $('replace-dialog').addEventListener('close', () => { if (vdlg.open) { view.rendered = ''; renderViewer(); } });
+    let vResize = 0;
+    window.addEventListener('resize', () => {
+      if (!vdlg.open) return;
+      clearTimeout(vResize);
+      vResize = setTimeout(renderViewer, 150);
+    });
+    grid.addEventListener('dblclick', (e) => {
+      if (e.target.closest('button, input, a')) return;
+      const el = e.target.closest('.page-card');
+      if (!el) return;
+      e.preventDefault();
+      openViewer(pages.findIndex((p) => p.key === el.dataset.key));
+    });
+
+    // ── 글자로 쪽 찾기 (pdf.js 글자 레이어, 파일마다 한 번 만들어 둔다) ──
+    const findInput = $('edit-find');
+    const find = { q: '', token: 0, hits: [], at: -1, sig: '', counts: new Map(), timer: 0 };
+    const norm = (t) => String(t).normalize('NFC').replace(/\s+/g, '').toLowerCase();
+    const srcSig = () => sources.map((x) => `${x.id}${x.doc ? '' : '!'}`).join(',');
+    function textIndex(src, onPage) {
+      if (!src.textIdx) {
+        src.textIdx = (async () => {
+          const pdf = await getPdfjs(src);
+          const out = [];
+          for (let i = 0; i < src.pageCount; i++) {
+            const pg = await pdf.getPage(i + 1);
+            const tc = await pg.getTextContent();
+            out.push(norm(tc.items.map((it) => it.str || '').join('')));
+            pg.cleanup();
+            src.textDone = i + 1;
+            if (onPage) onPage();
+            await breathe();
+          }
+          return out;
+        })();
+        src.textIdx.catch(() => { src.textIdx = null; });
+      }
+      return src.textIdx;
+    }
+    function countIn(text, q) {
+      let n = 0;
+      for (let i = text.indexOf(q); i >= 0; i = text.indexOf(q, i + q.length)) n++;
+      return n;
+    }
+    function scheduleFind(delay = 250) {
+      clearTimeout(find.timer);
+      find.timer = setTimeout(runFind, delay);
+    }
+    async function runFind() {
+      const my = ++find.token;
+      find.q = norm(findInput.value);
+      find.sig = srcSig();
+      find.counts = new Map();
+      find.hits = [];
+      find.at = -1;
+      const status = $('edit-find-status');
+      const note = $('edit-find-note');
+      if (!find.q) {
+        status.textContent = '';
+        note.hidden = true;
+        applyFind();
+        return;
+      }
+      const readable = sources.filter((x) => x.doc && !x.locked);
+      const total = readable.reduce((a, x) => a + x.pageCount, 0);
+      const progress = () => {
+        if (my !== find.token) return;
+        const done = readable.reduce((a, x) => a + (x.textDone || 0), 0);
+        if (done < total) status.textContent = `글자 읽는 중 ${done}/${total}쪽`;
+      };
+      progress();
+      const scans = [];
+      for (const src of readable) {
+        let idx;
+        try { idx = await textIndex(src, progress); } catch { idx = null; }
+        if (my !== find.token) return;
+        if (!idx) continue;
+        if (idx.every((t) => !t)) { scans.push(src.name); continue; }
+        idx.forEach((t, i) => {
+          const n = t ? countIn(t, find.q) : 0;
+          if (n) find.counts.set(`${src.id}:${i}`, n);
+        });
+      }
+      find.hits = pages.filter((p) => find.counts.has(`${p.srcId}:${p.index}`));
+      const places = find.hits.reduce((a, p) => a + find.counts.get(`${p.srcId}:${p.index}`), 0);
+      status.textContent = find.hits.length ? `${find.hits.length}쪽에서 ${places}곳 · Enter로 다음` : '찾는 글자가 없어요';
+      note.hidden = !scans.length;
+      note.textContent = scans.length ? `${scans.map((n) => `"${n}"`).join(', ')}: 이 파일은 글자가 없어 검색할 수 없어요(스캔본). 쪽 미리보기를 보며 찾아 주세요.` : '';
+      applyFind();
+    }
+    function applyFind() {
+      const on = !!find.q;
+      for (const p of pages) {
+        const el = cards.get(p.key);
+        if (!el) continue;
+        const n = on ? find.counts.get(`${p.srcId}:${p.index}`) || 0 : 0;
+        el.classList.toggle('found', n > 0);
+        el.classList.toggle('found-now', n > 0 && find.at >= 0 && find.hits[find.at] === p);
+        const b = el.querySelector('.find-badge');
+        if (b) b.textContent = n ? `${n}곳` : '';
+        el.dataset.found = n ? String(n) : '';
+        if (el.dataset.label) setCardLabel(p, el);
+      }
+      $('edit-find-prev').disabled = find.hits.length < 1;
+      $('edit-find-next').disabled = find.hits.length < 1;
+    }
+    function findGo(d) {
+      if (!find.hits.length) return;
+      find.at = (find.at + d + find.hits.length) % find.hits.length;
+      applyFind();
+      const el = cards.get(find.hits[find.at].key);
+      if (el) el.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+      $('edit-find-status').textContent = `${find.at + 1} / ${find.hits.length}쪽 · ${find.counts.get(`${find.hits[find.at].srcId}:${find.hits[find.at].index}`)}곳`;
+    }
+    findInput.addEventListener('input', () => scheduleFind());
+    findInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (find.q !== norm(findInput.value)) { clearTimeout(find.timer); runFind().then(() => findGo(1)); } else findGo(e.shiftKey ? -1 : 1);
+      } else if (e.key === 'Escape' && findInput.value) {
+        e.preventDefault();
+        e.stopPropagation();
+        findInput.value = '';
+        runFind();
+      }
+    });
+    $('edit-find-next').addEventListener('click', () => findGo(1));
+    $('edit-find-prev').addEventListener('click', () => findGo(-1));
+
     render();
 
+    /** 최근 작업 이어하기용: 풀린 파일의 바이트와 쪽 상태 */
+    function exportSession() {
+      const keep = sources.filter((x) => x.doc && !x.locked && x.bytes && x.bytes.byteLength);
+      const ids = new Set(keep.map((x) => x.id));
+      return {
+        sources: keep.map((x) => ({ id: x.id, name: x.name, bytes: x.bytes })),
+        pages: pages.filter((p) => ids.has(p.srcId)).map((p) => ({ srcId: p.srcId, index: p.index, rot: p.rot, deleted: p.deleted })),
+      };
+    }
+    async function importSession(data) {
+      reset();
+      const map = new Map();
+      await withBusy('지난 작업 불러오는 중…', async (progress) => {
+        for (let i = 0; i < data.sources.length; i++) {
+          const it = data.sources[i];
+          await progress(`지난 작업 불러오는 중 (${i + 1}/${data.sources.length}) · ${it.name}`, i, data.sources.length);
+          try {
+            const bytes = new Uint8Array(it.bytes);
+            const info = await Core.openPdf(bytes);
+            const src = createSource(it.name, info);
+            map.set(it.id, src);
+          } catch (e) { showError(e, it.name); }
+        }
+      });
+      for (const p of data.pages) {
+        const src = map.get(p.srcId);
+        if (!src || src.locked || p.index >= src.pageCount) continue;
+        pages.push({ key: `p${++seq}`, srcId: src.id, index: p.index, rot: p.rot || 0, deleted: !!p.deleted });
+      }
+      render();
+      setTimeout(scanBlanks, 0);
+      return { files: map.size, pages: pages.length };
+    }
+
     return {
+      exportSession,
+      importSession,
+      viewerState: () => ({ open: vdlg.open, i: view.i, zoom: view.zoom, rendered: view.rendered, canvas: (() => { const c = vstage.querySelector('canvas'); return c ? { w: c.width, h: c.height, cssW: parseFloat(c.style.width), cssH: parseFloat(c.style.height) } : null; })() }),
+      findState: () => ({ q: find.q, hits: find.hits.map((p) => pages.indexOf(p)), at: find.at }),
       addFiles, addDecrypted, reset, render, removeSource, shortcutSave,
       get sources() { return sources; },
       getPdfjs, srcById,
@@ -2342,37 +2705,47 @@
     });
   }
 
+  // ── 이 브라우저의 IndexedDB 'pdf-workshop' (stamps: 서명 · 도장, session: 최근 작업 이어하기) ──
+  let workshopDb = null;
+  function openWorkshopDb() {
+    if (!workshopDb) {
+      workshopDb = new Promise((resolve) => {
+        try {
+          const req = indexedDB.open('pdf-workshop', 2);
+          req.onupgradeneeded = () => {
+            const d = req.result;
+            if (!d.objectStoreNames.contains('stamps')) d.createObjectStore('stamps', { keyPath: 'id' });
+            if (!d.objectStoreNames.contains('session')) d.createObjectStore('session', { keyPath: 'id' });
+          };
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => resolve(null);
+          req.onblocked = () => resolve(null);
+        } catch { resolve(null); }
+      });
+    }
+    return workshopDb;
+  }
+  /** store에 fn을 돌린다. 저장소를 못 쓰면 null */
+  async function dbTx(store, mode, fn) {
+    const d = await openWorkshopDb();
+    if (!d) return null;
+    return new Promise((resolve) => {
+      try {
+        const t = d.transaction(store, mode);
+        const r = fn(t.objectStore(store));
+        // 쓰기는 key, 읽기는 값(없으면 undefined)을 돌려준다
+        t.oncomplete = () => resolve(r ? r.result : null);
+        t.onerror = () => resolve(null);
+        t.onabort = () => resolve(null);
+      } catch { resolve(null); }
+    });
+  }
+
   // ── 서명 · 도장 보관 (이 브라우저에만: IndexedDB, 안 되면 이번 방문 동안만) ──
   const Stamps = (() => {
     let items = null;
-    let dbp = null;
     const listeners = new Set();
-    function db() {
-      if (!dbp) {
-        dbp = new Promise((resolve) => {
-          try {
-            const req = indexedDB.open('pdf-workshop', 1);
-            req.onupgradeneeded = () => req.result.createObjectStore('stamps', { keyPath: 'id' });
-            req.onsuccess = () => resolve(req.result);
-            req.onerror = () => resolve(null);
-            req.onblocked = () => resolve(null);
-          } catch { resolve(null); }
-        });
-      }
-      return dbp;
-    }
-    const tx = async (mode, fn) => {
-      const d = await db();
-      if (!d) return null;
-      return new Promise((resolve) => {
-        try {
-          const t = d.transaction('stamps', mode);
-          const r = fn(t.objectStore('stamps'));
-          t.oncomplete = () => resolve(r && r.result);
-          t.onerror = () => resolve(null);
-        } catch { resolve(null); }
-      });
-    };
+    const tx = (mode, fn) => dbTx('stamps', mode, fn);
     async function list() {
       if (!items) {
         const rows = (await tx('readonly', (st) => st.getAll())) || [];
@@ -2414,7 +2787,14 @@
       return it.url;
     }
     const byId = (id) => (items || []).find((x) => x.id === id);
-    return { list, add, update, remove, pngOf, urlOf, byId, onChange: (f) => listeners.add(f) };
+    /** 이 브라우저에 보관한 서명 · 도장을 모두 지운다(설정 → 모두 지우기) */
+    async function clearAll() {
+      (items || []).forEach((it) => it.url && URL.revokeObjectURL(it.url));
+      items = [];
+      await tx('readwrite', (st) => st.clear());
+      notify();
+    }
+    return { list, add, update, remove, pngOf, urlOf, byId, clearAll, onChange: (f) => listeners.add(f) };
   })();
 
   /** 밝은(흰) 부분을 투명하게. 스캔한 도장용 */
@@ -3338,14 +3718,15 @@
   const HEIC_FIX = "아이폰 설정 → 카메라 → 포맷을 '높은 호환성'으로 바꾸면 JPG로 찍혀요.";
   const isImageLike = (f) => /^image\//.test(f.type || '') || /\.(jpe?g|png|webp|gif|bmp|heic|heif|avif|tiff?)$/i.test(f.name);
   let heicLoading = null;
+  let heicTries = 0; // 실패한 모듈 주소는 브라우저가 기억해 두므로, 다시 할 때는 주소를 살짝 바꾼다
   let heicLoadedMs = null;
   /** HEIC 변환기(heic-to, libheif)를 처음 쓸 때만 불러온다 */
   function heicConverter() {
     if (!heicLoading) {
       const t0 = performance.now();
-      heicLoading = import('/vendor/heic/heic-to.js')
+      heicLoading = import(`/vendor/heic/heic-to.js${heicTries ? `?r=${heicTries}` : ''}`)
         .then((m) => { heicLoadedMs = Math.round(performance.now() - t0); return m; })
-        .catch((e) => { heicLoading = null; throw e; });
+        .catch((e) => { heicLoading = null; heicTries++; throw e; });
     }
     return heicLoading;
   }
@@ -3374,7 +3755,12 @@
           mod = await heicConverter();
         } catch (e) {
           console.warn(e);
-          toast('아이폰 사진 변환기를 불러오지 못했어요.', `인터넷 연결을 확인하고 다시 해 주세요. 또는 ${HEIC_FIX}`);
+          // 변환기는 처음 쓸 때 받는다: 한 번도 안 받은 채 인터넷이 없으면 여기로 온다
+          if (!navigator.onLine || Net.isOffline()) {
+            toast('인터넷이 연결되면 아이폰 사진 변환기를 받아요.', '한 번 받아 두면 그다음부터는 인터넷 없이도 바꿀 수 있어요. 지금은 JPG · PNG 사진을 넣어 주세요.', 'info');
+          } else {
+            toast('아이폰 사진 변환기를 불러오지 못했어요.', `인터넷 연결을 확인하고 다시 해 주세요. 또는 ${HEIC_FIX}`);
+          }
           return;
         }
         for (let n = 0; n < heic.length; n++) {
@@ -3682,7 +4068,7 @@
   }
 
   // ═══════════════════════════════════════════════════════════
-  // 탭2: 이미지 → PDF
+  // 탭2: 사진 → PDF
   // ═══════════════════════════════════════════════════════════
   const Img = (() => {
     const grid = $('img-grid');
@@ -3911,7 +4297,7 @@
   })();
 
   // ═══════════════════════════════════════════════════════════
-  // 탭3: PDF → 이미지
+  // 탭3: PDF → 사진
   // ═══════════════════════════════════════════════════════════
   const P2I = (() => {
     const grid = $('p2i-grid');
@@ -4345,7 +4731,7 @@
       const name = unlockFile.name;
       Edit.addDecrypted(name, r.bytes, r.doc);
       showTab('edit');
-      toast(r.plain ? `"${name}"을(를) 편집 탭에 넣었어요.` : `"${name}" 암호를 풀어 편집 탭에 넣었어요.`,
+      toast(r.plain ? `"${name}"을(를) 편집 · 합치기에 넣었어요.` : `"${name}" 암호를 풀어 편집 · 합치기에 넣었어요.`,
         r.plain ? '원래 암호가 없는 파일이었어요.' : '저장하면 암호 없는 PDF가 돼요.', 'ok');
     });
 
@@ -4605,8 +4991,11 @@
       },
     });
     const stem = () => safeName(baseName(file.name));
-    async function saveNow(o = editor.getOpts(), name = `${stem()}_꾸미기`) {
+    async function saveNow(o, name) {
+      // (이름은 파일이 있을 때만 만든다: 파일 없이 Ctrl+S를 누르면 여기서 오류가 났었다)
       if (!file) return toast('PDF를 먼저 넣어 주세요.', '');
+      if (!o) o = editor.getOpts();
+      if (!name) name = `${stem()}_꾸미기`;
       const err = editor.validate();
       if (err) return toast(err, '');
       try {
@@ -4766,6 +5155,7 @@
     let files = [];
     let seq = 0;
     let target = 0; // 바이트
+    let preset = 0; // 처음 화면 바로가기로 정해 둔 목표(바이트)
     let range = { min: 0, max: 0 };
 
     const isPdf = (f) => f.kind === 'pdf';
@@ -4952,7 +5342,8 @@
       thumb.setAttribute('aria-disabled', String(locked));
       $('cmp-step').textContent = `한 칸 ${stepMB}MB`;
       // 기본 목표: 10MB 넘으면 10MB, 아니면 원래의 70%
-      const def = range.max > 10 * MB ? 10 * MB : range.max * 0.7;
+      // (처음 화면 "공문 첨부용 10MB 만들기"로 왔으면 그 목표)
+      const def = preset || (range.max > 10 * MB ? 10 * MB : range.max * 0.7);
       setTarget(Math.max(range.min, Math.min(range.max, snapV(def) || def)), false);
       // 눈금 칩: 원래 용량보다 작은 것만
       const ticks = TICKS.filter(([, v]) => v * MB < range.max);
@@ -5298,6 +5689,7 @@
       files.forEach((f) => f.handle && Squeeze.codec().release(f.handle));
       files = [];
       target = 0;
+      preset = 0;
       render();
       $('cmp-target').hidden = true;
       $('cmp-result').hidden = true;
@@ -5305,6 +5697,11 @@
     return {
       addFiles,
       reset,
+      /** 목표를 미리 정해 둔다(MB). 파일이 이미 있으면 바로 반영 */
+      presetTarget(mb) {
+        preset = mb * MB;
+        if (readyFiles().length) setupTarget();
+      },
       shortcutSave: (withOpts) => (withOpts ? openDialog() : saveNow()),
       state: () => ({ target, range, files: files.map((f) => ({ name: f.name, size: f.size, min: f.min, result: f.result && f.result.size, stage: f.result && f.result.stage })) }),
     };
@@ -5333,6 +5730,301 @@
   }));
 
   // ═══════════════════════════════════════════════════════════
+  // 처음 화면 아래: 자주 하는 작업 바로가기 · 새 소식
+  // ═══════════════════════════════════════════════════════════
+  document.querySelectorAll('.quick-card').forEach((b) => b.addEventListener('click', () => {
+    const q = b.dataset.quick;
+    if (q === 'compress10') {
+      Shrink.presetTarget(10);
+      openTool('compress');
+      toast('목표를 10MB로 맞춰 둘게요.', 'PDF를 넣으면 10MB 이하로 줄여요. 막대로 바꿀 수도 있어요.', 'info');
+    } else if (q === 'scan') {
+      openTool('edit');
+      toast('스캔한 PDF를 넣으세요.', '빈 쪽과 크기가 다른 쪽을 찾아 노란 줄로 알려 드려요. 앞 · 뒤를 따로 스캔했다면 저장 막대의 [양면 스캔]을 쓰세요.', 'info');
+    } else if (q === 'photos') {
+      openTool('img2pdf');
+    }
+  }));
+
+  const News = (() => {
+    let entries = [];
+    const ready = fetch('/changelog.json', { cache: 'no-cache' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        entries = (j && Array.isArray(j.entries)) ? j.entries : [];
+        renderHome();
+        return entries;
+      })
+      .catch(() => entries);
+    const fmtDate = (d) => { const [y, m, dd] = d.split('-').map(Number); return `${y}. ${m}. ${dd}.`; };
+    const entryEl = (e) => h('li', { class: 'news-item' },
+      h('p', { class: 'news-date' }, fmtDate(e.date)),
+      h('strong', null, e.title),
+      h('ul', null, ...e.items.map((t) => h('li', null, t))));
+    function renderHome() {
+      if (!entries.length) return;
+      $('news-list').replaceChildren(...entries.slice(0, 3).map(entryEl));
+      $('home-news').hidden = false;
+    }
+    // 새 소식 창 + 새 버전 점(한 번 보면 꺼진다)
+    const SEEN = 'pdfws.newsSeen';
+    const dlg = $('news-dialog');
+    const load = () => { try { return localStorage.getItem(SEEN); } catch { return null; } };
+    const save = (v) => { try { localStorage.setItem(SEEN, v); } catch { /* 저장소를 못 써도 된다 */ } };
+    function returning() {
+      try {
+        for (let i = 0; i < localStorage.length; i++) if (/^pdfws\./.test(localStorage.key(i)) && localStorage.key(i) !== SEEN) return true;
+      } catch { /* 없음 */ }
+      return false;
+    }
+    function markDot() {
+      const latest = entries[0] && entries[0].id;
+      if (!latest) return;
+      const seen = load();
+      // 처음 온 사람에게는 점을 켜지 않는다(전부 새 소식이라 의미가 없다). 예전에 써 본 사람이면 켠다.
+      if (!seen && !returning()) { save(latest); return; }
+      const on = seen !== latest;
+      document.querySelectorAll('.app-version.news-open').forEach((b) => {
+        b.classList.toggle('has-news', on);
+        b.setAttribute('aria-label', on ? `${b.textContent}, 새 소식 있음` : `${b.textContent}, 새 소식 보기`);
+      });
+    }
+    ready.then(markDot);
+    function open() {
+      $('news-full').replaceChildren(...(entries.length ? entries.map(entryEl) : [h('li', { class: 'news-item' }, '새 소식을 불러오지 못했어요. 인터넷 연결을 확인해 주세요.')]));
+      const v = document.querySelector('meta[name="app-version"]');
+      $('news-ver').textContent = `지금 버전: v ${(v && v.content) || VER}`;
+      if (entries[0]) save(entries[0].id);
+      markDot();
+      if (!dlg.open) dlg.showModal();
+    }
+    document.querySelectorAll('.news-open').forEach((b) => b.addEventListener('click', () => { if (!isBusy()) ready.then(open); }));
+    return { ready, entryEl, all: () => entries, open, state: () => ({ dot: !!document.querySelector('.has-news'), seen: load() }) };
+  })();
+
+  // ═══════════════════════════════════════════════════════════
+  // 의견 보내기 (외부 설문을 새 창으로. 파일 · 화면 내용은 보내지 않는다)
+  // ═══════════════════════════════════════════════════════════
+  const Feedback = (() => {
+    const dlg = $('feedback-dialog');
+    const url = String((window.PDFWS_CONFIG && window.PDFWS_CONFIG.FEEDBACK_URL) || '').trim();
+    const valid = /^https:\/\//.test(url);
+    const openLink = $('fb-open');
+    if (valid) openLink.href = url;
+    else openLink.removeAttribute('href');
+    openLink.classList.toggle('disabled', !valid);
+    openLink.setAttribute('aria-disabled', String(!valid));
+    $('fb-none').hidden = valid;
+    openLink.addEventListener('click', (e) => {
+      if (!valid) { e.preventDefault(); return; }
+      dlg.close();
+    });
+    $('fb-copy').addEventListener('click', async () => {
+      const text = lastErrorReport || errorReport(null, { title: '최근 오류 없음 (환경 정보만)' });
+      try {
+        await navigator.clipboard.writeText(text);
+        $('fb-err').textContent = lastErrorReport ? '최근 오류 내용을 복사했어요. 설문에 붙여 넣어 주세요.' : '최근 오류는 없어서 브라우저 · 버전 정보만 복사했어요.';
+      } catch {
+        $('fb-err').textContent = '복사하지 못했어요. 브라우저가 클립보드를 막았을 수 있어요.';
+      }
+    });
+    function open() {
+      $('fb-err').textContent = lastErrorReport ? '최근에 난 오류가 있어요. [오류 내용 복사]로 설문에 붙여 넣을 수 있어요(파일 이름 · 내용은 빠져요).' : '';
+      if (!dlg.open) dlg.showModal();
+    }
+    document.querySelectorAll('[data-feedback]').forEach((b) => b.addEventListener('click', () => { if (!isBusy()) open(); }));
+    return { open, state: () => ({ url, valid }) };
+  })();
+
+  // ═══════════════════════════════════════════════════════════
+  // 설정: 브라우저를 닫아도 작업 이어하기(기본 꺼짐) · 이 브라우저에 저장된 것 모두 지우기
+  // ═══════════════════════════════════════════════════════════
+  const Resume = (() => {
+    const KEY = 'pdfws.resume';
+    let LIMIT = 500 * 1024 * 1024;
+    const isOn = () => { try { return localStorage.getItem(KEY) === '1'; } catch { return false; } };
+    const setOn = (v) => { try { if (v) localStorage.setItem(KEY, '1'); else localStorage.removeItem(KEY); } catch { /* 저장소를 못 쓰면 켜지지 않는다 */ } };
+    let timer = 0;
+    let pending = null; // 아직 [이어하기]/[지우기]를 고르지 않은 지난 작업
+    let warned = false;
+    let lastSaved = 0;
+    const note = $('resume-note');
+    const get = () => dbTx('session', 'readonly', (st) => st.get('edit'));
+    const clear = () => dbTx('session', 'readwrite', (st) => st.delete('edit'));
+    async function save() {
+      // 지난 작업을 고르기 전에는 덮어쓰지 않는다(고르지 않은 채 새 파일을 넣어도 지난 작업이 남는다)
+      if (!isOn() || pending) return;
+      // 불러오는 중 · 처리 중에는 반쯤 된 상태를 저장하지 않고 끝난 뒤로 미룬다
+      if (isBusy()) { editChanged(); return; }
+      const data = Edit.exportSession();
+      if (!data.sources.length) { await clear(); lastSaved = Date.now(); return; }
+      const total = data.sources.reduce((a, x) => a + x.bytes.byteLength, 0);
+      if (total > LIMIT) {
+        await clear();
+        if (!warned) {
+          warned = true;
+          toast('파일이 500MB를 넘어 이어하기용으로 저장하지 않았어요.', '브라우저를 닫으면 이 작업은 이어서 할 수 없어요. 저장을 먼저 해 두세요.', 'info');
+        }
+        return;
+      }
+      warned = false;
+      const ok = await dbTx('session', 'readwrite', (st) => st.put({ id: 'edit', savedAt: Date.now(), ...data })); // 성공하면 key('edit')
+      if (ok) lastSaved = Date.now();
+    }
+    editChanged = () => {
+      if (!isOn()) return;
+      clearTimeout(timer);
+      timer = setTimeout(() => { save().catch(() => {}); }, 700);
+    };
+    const ago = (t) => {
+      const m = Math.round((Date.now() - t) / 60000);
+      if (m < 1) return '방금';
+      if (m < 60) return `${m}분 전`;
+      const hh = Math.round(m / 60);
+      if (hh < 24) return `${hh}시간 전`;
+      return `${Math.round(hh / 24)}일 전`;
+    };
+    async function offer() {
+      if (!isOn()) return;
+      const s = await get();
+      if (!s || !s.sources || !s.sources.length) return;
+      pending = s;
+      $('resume-text').textContent = `지난 작업을 이어 할까요? (파일 ${s.sources.length}개 · ${ago(s.savedAt)})`;
+      note.hidden = false;
+    }
+    $('resume-go').addEventListener('click', async () => {
+      if (!pending || isBusy()) return;
+      const s = pending;
+      pending = null;
+      note.hidden = true;
+      openTool('edit');
+      const r = await Edit.importSession(s);
+      toast(`지난 작업을 불러왔어요. (파일 ${r.files}개 · ${r.pages}쪽)`, '', 'ok');
+    });
+    $('resume-drop').addEventListener('click', async () => {
+      pending = null;
+      note.hidden = true;
+      await clear();
+      editChanged();
+      toast('지난 작업을 지웠어요.', '', 'ok');
+    });
+
+    // 설정 창
+    const dlg = $('settings-dialog');
+    const sw = $('set-resume');
+    async function usage() {
+      const s = await get();
+      $('set-usage').textContent = !isOn() ? '' : s && s.sources && s.sources.length
+        ? `지금 저장된 작업: 파일 ${s.sources.length}개 · ${(s.sources.reduce((a, x) => a + x.bytes.byteLength, 0) / 1048576).toFixed(1)}MB · ${ago(s.savedAt)}`
+        : '지금 저장된 작업은 없어요. 편집 · 합치기에 파일을 넣으면 저장돼요.';
+    }
+    function openSettings() {
+      sw.checked = isOn();
+      usage();
+      if (!dlg.open) dlg.showModal();
+    }
+    sw.addEventListener('change', async () => {
+      setOn(sw.checked);
+      if (sw.checked) {
+        await save();
+        toast('작업 이어하기를 켰어요.', '편집 · 합치기의 파일과 순서를 이 브라우저에만 저장해요. 공용 컴퓨터에서는 꺼 주세요.', 'info');
+      } else {
+        clearTimeout(timer);
+        pending = null;
+        note.hidden = true;
+        await clear();
+        toast('작업 이어하기를 껐어요.', '저장해 둔 지난 작업도 지웠어요.', 'info');
+      }
+      usage();
+    });
+    $('set-wipe').addEventListener('click', async () => {
+      const yes = await confirmBox({ title: '이 브라우저에 저장된 것을 모두 지울까요?', body: '설정, 서명 · 도장, 최근 작업, 오프라인용 파일(캐시)을 지워요. 넣은 PDF 원본 파일은 그대로예요.', yes: '모두 지우기' });
+      if (!yes) return;
+      clearTimeout(timer);
+      pending = null;
+      note.hidden = true;
+      try {
+        Object.keys(localStorage).filter((k) => /^pdfws\./.test(k)).forEach((k) => localStorage.removeItem(k));
+      } catch { /* 없음 */ }
+      await clear();
+      await Stamps.clearAll();
+      try {
+        const names = await caches.keys();
+        await Promise.all(names.filter((n) => n.startsWith('pdfws-')).map((n) => caches.delete(n)));
+      } catch { /* 캐시를 못 쓰는 환경 */ }
+      try {
+        const regs = navigator.serviceWorker ? await navigator.serviceWorker.getRegistrations() : [];
+        await Promise.all(regs.map((r) => r.unregister()));
+      } catch { /* 없음 */ }
+      sw.checked = false;
+      usage();
+      if (!dlg.open) dlg.showModal();
+      toast('이 브라우저에 저장된 것을 모두 지웠어요.', '다음에 열 때 오프라인용 파일을 다시 받아요.', 'ok');
+    });
+    document.querySelectorAll('[data-settings]').forEach((b) => b.addEventListener('click', () => { if (!isBusy()) openSettings(); }));
+    offer();
+    return {
+      open: openSettings,
+      state: () => ({ on: isOn(), pending: !!pending, lastSaved }),
+      stored: async () => { const s = await get(); return s ? { files: s.sources.length, pages: s.pages.length, savedAt: s.savedAt } : null; },
+      setLimitForTest: (n) => { LIMIT = n; },
+      flush: () => { clearTimeout(timer); return save(); },
+    };
+  })();
+
+  // ═══════════════════════════════════════════════════════════
+  // 탭 제목(지금 상태) · 작업 중 탭 닫기 확인
+  // ═══════════════════════════════════════════════════════════
+  const Title = (() => {
+    const BASE_TITLE = 'PDF 작업실';
+    const LABEL = { edit: '편집 중', img2pdf: '사진 → PDF', pdf2img: 'PDF → 사진', decorate: '꾸미기', compress: '용량 줄이기', security: '보안' };
+    function fileCount(tool) {
+      const n = (sel) => document.querySelectorAll(sel).length;
+      if (tool === 'edit') return { n: n('#edit-chips > li.chip'), unit: '파일' };
+      if (tool === 'img2pdf') return { n: n('#img-grid .img-card'), unit: '사진' };
+      if (tool === 'pdf2img') return { n: $('p2i-file').hidden ? 0 : 1, unit: '파일' };
+      if (tool === 'decorate') return { n: $('decor-file').hidden ? 0 : 1, unit: '파일' };
+      if (tool === 'compress') return { n: n('#cmp-files > li'), unit: '파일' };
+      return { n: 0, unit: '파일' };
+    }
+    function compute() {
+      if (isBusy()) {
+        // "사진 줄이는 중 3/8" · "알맞은 크기 찾는 중 (2/6)" → "사진 줄이는 중 38%"
+        const raw = busy.text.textContent;
+        const nm = /(\d+)\s*\/\s*(\d+)/.exec(raw);
+        const w = parseFloat(busy.fill.style.width) || 0;
+        const pct = w > 0 ? Math.round(w) : nm && Number(nm[2]) ? Math.round((Number(nm[1]) / Number(nm[2])) * 100) : null;
+        const t = raw.replace(/…/g, '').replace(/\(?\s*\d+\s*\/\s*\d+\s*\)?/g, ' ').replace(/\s+/g, ' ').trim();
+        return pct == null ? t : `${t} ${Math.min(100, pct)}%`;
+      }
+      if (activeView !== 'work') return BASE_TITLE;
+      const { n, unit } = fileCount(activeTab);
+      if (!n) return `${LABEL[activeTab]} · ${BASE_TITLE}`;
+      return `${LABEL[activeTab]} · ${unit} ${n}${unit === '사진' ? '장' : '개'}`;
+    }
+    let last = '';
+    function update() {
+      const t = compute();
+      if (t !== last) { last = t; document.title = t; }
+    }
+    // 진행 글자 · 파일 목록 · 화면 전환이 바뀔 때 다시 계산한다
+    const mo = new MutationObserver(() => update());
+    [busy.text, busy.fill, busy.el].forEach((el) => el && mo.observe(el, { attributes: true, childList: true, characterData: true, subtree: true }));
+    ['edit-chips', 'img-grid', 'p2i-file', 'decor-file', 'cmp-files', 'view-work', 'view-home'].forEach((id) => { const el = $(id); if (el) mo.observe(el, { attributes: true, attributeFilter: ['hidden'], childList: true }); });
+    document.querySelectorAll('.tab').forEach((t) => mo.observe(t, { attributes: true, attributeFilter: ['aria-selected'] }));
+    update();
+    return { update, compute };
+  })();
+
+  window.addEventListener('beforeunload', (e) => {
+    // 새 버전 띠에서 [그래도 새로고침]을 눌렀을 때는 묻지 않는다
+    if (!hasWork() || window.__pdfwsReloading) return undefined;
+    e.preventDefault();
+    e.returnValue = '작업 중인 내용이 사라져요.';
+    return '작업 중인 내용이 사라져요.';
+  });
+
+  // ═══════════════════════════════════════════════════════════
   // 처음 화면: 파일을 넣으면 알맞은 도구로 보낸다
   // ═══════════════════════════════════════════════════════════
   const Home = (() => {
@@ -5355,6 +6047,65 @@
     document.querySelectorAll('.tool-card').forEach((card) =>
       card.addEventListener('click', () => openTool(card.dataset.open, true)));
     return { route };
+  })();
+
+  // ═══════════════════════════════════════════════════════════
+  // Ctrl+V 붙여넣기: 클립보드의 사진은 사진 → PDF(또는 사진을 받는 지금 도구)로, PDF는 편집으로
+  // ═══════════════════════════════════════════════════════════
+  const Paste = (() => {
+    const EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif', 'image/bmp': 'bmp', 'application/pdf': 'pdf' };
+    function named(files) {
+      const d = new Date();
+      const p2 = (n) => String(n).padStart(2, '0');
+      const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}_${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`;
+      // 화면 캡처는 이름이 "image.png"로만 와서 겹치므로 알아볼 수 있는 이름을 붙인다
+      return files.map((f, i) => (f.name && !/^image\.(png|jpe?g|gif|webp|bmp)$/i.test(f.name)
+        ? f
+        : new File([f], `붙여넣은 사진_${stamp}${files.length > 1 ? `_${i + 1}` : ''}.${EXT[f.type] || 'png'}`, { type: f.type || 'image/png', lastModified: Date.now() })));
+    }
+    async function take(files) {
+      const list = named(files);
+      const pdfs = list.filter(isPdfFile);
+      const imgs = list.filter((f) => !isPdfFile(f));
+      const inWork = activeView === 'work';
+      if (imgs.length) {
+        let n = 0;
+        if (inWork && activeTab === 'compress') {
+          await Shrink.addFiles(imgs);
+          n = imgs.length;
+        } else {
+          if (!inWork || activeTab !== 'img2pdf') openTool('img2pdf');
+          n = (await Img.addFiles(imgs)) || 0;
+        }
+        if (n) toast(`클립보드의 사진 ${n}장을 넣었어요.`, '', 'ok');
+      }
+      if (pdfs.length) {
+        if (inWork && activeTab === 'compress' && !imgs.length) await Shrink.addFiles(pdfs);
+        else {
+          if (!imgs.length) openTool('edit');
+          await Edit.addFiles(pdfs);
+        }
+        toast(`클립보드의 PDF ${pdfs.length}개를 넣었어요.`, '', 'ok');
+      }
+    }
+    document.addEventListener('paste', (e) => {
+      const t = e.target;
+      if (t && t.closest && t.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"]')) return;
+      if (isBusy() || document.querySelector('dialog[open]')) return;
+      const dt = e.clipboardData;
+      const files = dt ? [...dt.files] : [];
+      if (!files.length && dt) {
+        for (const it of dt.items || []) if (it.kind === 'file') { const f = it.getAsFile(); if (f) files.push(f); }
+      }
+      const usable = files.filter((f) => isPdfFile(f) || /^image\//.test(f.type) || /\.(heic|heif)$/i.test(f.name));
+      if (!usable.length) {
+        if (files.length) toast('붙여 넣은 파일은 여기서 쓸 수 없어요.', 'PDF나 사진(JPG · PNG · WEBP · HEIC)만 넣을 수 있어요.', 'info');
+        return;
+      }
+      e.preventDefault();
+      take(usable).catch(showError);
+    });
+    return { take };
   })();
 
   // ═══════════════════════════════════════════════════════════
@@ -5503,16 +6254,128 @@
 
   // 검증용으로 상태를 살짝 드러낸다(개인 정보 없음).
   // 배포된 커밋을 화면 구석에 작게 보여 준다(옛 버전이 떠 있는지 바로 알 수 있게).
-  fetch('/version', { cache: 'no-store' })
-    .then((r) => (r.ok ? r.json() : null))
-    .then((v) => {
-      if (!v || !v.commit) return;
+  //   인터넷이 없으면(서비스 워커가 준 화면) HTML에 박힌 커밋으로 보여 주고 "인터넷 없이 작동 중"을 켠다.
+  const Net = (() => {
+    const meta = document.querySelector('meta[name="app-version"]');
+    const pageCommit = (meta && meta.content) || '';
+    let offline = false;
+    const showVersion = (commit, title) => {
+      if (!commit) return;
       document.querySelectorAll('.app-version').forEach((el) => {
-        el.textContent = `v ${v.commit}`;
-        el.title = `배포 시각 ${new Date(v.builtAt).toLocaleString('ko-KR')}`;
+        el.textContent = `v ${commit}`;
+        if (title) el.title = title;
       });
-    })
-    .catch(() => { /* 버전 표시는 없어도 쓰는 데 지장 없다 */ });
+    };
+    showVersion(pageCommit, '');
+    function setOffline(on) {
+      offline = on;
+      document.querySelectorAll('.offline-badge').forEach((b) => { b.hidden = !on; });
+    }
+    function probe() {
+      if (!navigator.onLine) { setOffline(true); return Promise.resolve(); }
+      return fetch('/version', { cache: 'no-store' })
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+        .then((v) => {
+          setOffline(false);
+          // 화면이 옛 버전 캐시에서 나왔으면 화면의 커밋을 그대로 둔다(새 버전은 위쪽 띠로 알린다)
+          if (v && v.commit && (!pageCommit || pageCommit === v.commit)) showVersion(v.commit, `배포 시각 ${new Date(v.builtAt).toLocaleString('ko-KR')}`);
+        })
+        .catch(() => setOffline(true));
+    }
+    probe();
+    window.addEventListener('online', probe);
+    window.addEventListener('offline', () => setOffline(true));
+    return { probe, isOffline: () => offline };
+  })();
+
+  /** 작업 중인 파일이 있는가 (새로고침 · 탭 닫기 전에 확인) */
+  function hasWork() {
+    if (isBusy()) return true;
+    const loaded = ['edit-empty', 'img-empty', 'p2i-empty', 'decor-empty', 'cmp-empty'].some((id) => { const e = $(id); return e && e.hidden; });
+    const lockPicked = ['unlock-file', 'lock-file', 'restrict-file'].some((id) => { const e = $(id); return e && e.textContent.trim() !== 'PDF 고르기'; });
+    return loaded || lockPicked;
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // 오프라인(서비스 워커) · 새 버전 띠 · 바탕화면에 설치
+  // ═══════════════════════════════════════════════════════════
+  const Pwa = (() => {
+    const bar = $('update-bar');
+    const go = $('update-go');
+    const text = $('update-text');
+    let waiting = null;
+    let wantReload = false;
+    let armed = false;
+    function showUpdate(w) {
+      waiting = w;
+      armed = false;
+      bar.classList.remove('warn');
+      text.textContent = '새 버전이 있어요.';
+      go.textContent = '새로고침';
+      bar.hidden = false;
+    }
+    go.addEventListener('click', () => {
+      if (!waiting) return;
+      // 작업 중이면 한 번 더 확인한다(강제로 새로고침하지 않는다)
+      if (hasWork() && !armed) {
+        armed = true;
+        bar.classList.add('warn');
+        text.textContent = '새로고침하면 지금 작업이 사라져요. 먼저 저장하세요.';
+        go.textContent = '그래도 새로고침';
+        return;
+      }
+      wantReload = true;
+      window.__pdfwsReloading = true;
+      waiting.postMessage('SKIP_WAITING');
+    });
+    $('update-x').addEventListener('click', () => { bar.hidden = true; });
+
+    let reg = null;
+    if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (wantReload) { wantReload = false; location.reload(); }
+      });
+      navigator.serviceWorker.register('/sw.js').then((r) => {
+        reg = r;
+        const offer = (w) => { if (w && navigator.serviceWorker.controller) showUpdate(w); };
+        if (r.waiting) offer(r.waiting);
+        r.addEventListener('updatefound', () => {
+          const w = r.installing;
+          if (!w) return;
+          w.addEventListener('statechange', () => { if (w.state === 'installed') offer(w); });
+        });
+      }).catch((e) => console.warn('서비스 워커 등록 실패(오프라인 사용만 안 됨):', e && e.message));
+      // 탭으로 돌아오면 새 버전이 있는지 가끔 확인
+      let lastCheck = Date.now();
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden || !reg || Date.now() - lastCheck < 30 * 60 * 1000) return;
+        lastCheck = Date.now();
+        reg.update().catch(() => {});
+      });
+    }
+
+    // 바탕화면에 설치 (브라우저가 설치를 제안할 수 있을 때만 버튼이 보인다)
+    const installBtn = $('install-btn');
+    let deferred = null;
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferred = e;
+      installBtn.hidden = false;
+    });
+    installBtn.addEventListener('click', async () => {
+      if (!deferred) return;
+      const d = deferred;
+      deferred = null;
+      installBtn.hidden = true;
+      d.prompt();
+      try { await d.userChoice; } catch { /* 취소해도 괜찮다 */ }
+    });
+    window.addEventListener('appinstalled', () => {
+      installBtn.hidden = true;
+      toast('바탕화면에 설치했어요.', '이제 인터넷이 없어도 바탕화면 아이콘으로 열 수 있어요.', 'ok');
+    });
+    return { state: () => ({ controlled: !!navigator.serviceWorker && !!navigator.serviceWorker.controller, updateShown: !bar.hidden, offline: Net.isOffline() }) };
+  })();
 
   // 저장 단축키: Ctrl+S = 바로 저장, Ctrl+Shift+S = 설정하고 저장… (브라우저의 "페이지 저장"은 막는다)
   document.addEventListener('keydown', (e) => {
@@ -5535,11 +6398,21 @@
   {
     const t = toolFromHash();
     if (t) openTool(t);
+    // 안내 페이지의 [의견 보내기](/#feedback)로 오면 의견 창
+    if (location.hash === '#feedback') {
+      history.replaceState(null, '', location.pathname + location.search);
+      Feedback.open();
+    }
   }
   window.addEventListener('hashchange', () => {
+    if (location.hash === '#feedback') {
+      history.replaceState(null, '', location.pathname + location.search);
+      Feedback.open();
+      return;
+    }
     const t = toolFromHash();
     if (t && (t !== activeTab || activeView !== 'work')) openTool(t);
   });
 
-  window.__pdfWorkshop = { version: 5, ready: true, guide: Guide.state, compress: Shrink.state, worker: Squeeze.inWorker, lastStage: () => errCtx.stage };
+  window.__pdfWorkshop = { version: 5, ready: true, guide: Guide.state, compress: Shrink.state, worker: Squeeze.inWorker, lastStage: () => errCtx.stage, pwa: Pwa.state, hasWork, resume: Resume.state, resumeStored: Resume.stored, resumeLimit: Resume.setLimitForTest, resumeFlush: Resume.flush, viewer: Edit.viewerState, find: Edit.findState, news: News.state, feedback: Feedback.state, title: Title.compute };
 })();

@@ -80,8 +80,10 @@ const check = (name, ok, detail = '') => rows.push({ name, ok: !!ok, detail });
 
 function watch(pg, list) {
   pg.on('console', (m) => m.type() === 'error' && list.push(m.text()));
-  pg.on('pageerror', (e) => list.push(String(e)));
+  pg.on('pageerror', (e) => list.push(String(e) + (e && e.stack ? ` @ ${String(e.stack).split('\n').slice(1, 3).join(' ').trim()}` : '')));
   pg.on('response', (r) => r.status() >= 400 && list.push(`${r.status()} ${r.url()}`));
+  // 작업 중 새로고침 · 이동에는 "작업 중인 내용이 사라져요" 확인이 뜬다. 점검에서는 그대로 진행한다.
+  pg.on('dialog', (d) => (d.type() === 'beforeunload' ? d.accept() : d.dismiss()).catch(() => {}));
 }
 
 const server = spawn(process.execPath, ['server.js'], { cwd: root, env: { ...process.env, PORT: String(PORT) }, stdio: 'pipe' });
@@ -1538,7 +1540,8 @@ try {
     await ap.goto(BASE, { waitUntil: 'networkidle' });
     await ap.addScriptTag({ path: axePath });
     const axeRun = () => ap.evaluate(async () => {
-      const res = await window.axe.run(document, { resultTypes: ['violations'] });
+      // 예시 무대는 aria-hidden 장식이고 움직이는 중에는 투명도가 바뀌므로 뺀다(설명 글은 검사한다)
+      const res = await window.axe.run({ exclude: [['.demo-stage']] }, { resultTypes: ['violations'] });
       return res.violations.map((v) => ({ id: v.id, impact: v.impact, n: v.nodes.length, where: v.nodes[0] && v.nodes[0].target.join(' ') }));
     });
     const axeAll = [];
@@ -1550,11 +1553,941 @@ try {
       axeAll.push({ where: t, v: await axeRun() });
     }
     const crit = axeAll.flatMap((x) => x.v.filter((v) => v.impact === 'critical').map((v) => `${x.where}:${v.id}(${v.where})`));
-    const serious = [...new Set(axeAll.flatMap((x) => x.v.filter((v) => v.impact === 'serious').map((v) => v.id)))];
+    const serious = [...new Set(axeAll.flatMap((x) => x.v.filter((v) => v.impact === 'serious').map((v) => `${x.where}:${v.id}(${v.where})`)))];
     const ver = JSON.parse(fs.readFileSync(path.join(path.dirname(axePath), 'package.json'), 'utf8')).version;
     check(`자동 접근성 검사(axe-core ${ver}): 처음 화면 + 도구 6곳 심각(critical) · 중대(serious) 0개`, crit.length === 0 && serious.length === 0,
       crit.length ? crit.join(' | ').slice(0, 300) : `critical 0개 · serious ${serious.length ? serious.join(',') : '0개'}`);
     await actx.close();
+  }
+
+  // ── 11-c. 전송 차단(CSP) · 오프라인(서비스 워커) · 설치 정보 ──
+  {
+    const octx = await browser.newContext({ viewport: { width: 1280, height: 900 }, acceptDownloads: true, colorScheme: 'light' });
+    const o = await octx.newPage();
+    const oerr = [];
+    const csp = [];
+    watch(o, oerr);
+    o.on('console', (m) => /Content Security Policy|Refused to/i.test(m.text()) && csp.push(m.text()));
+    await o.goto(BASE, { waitUntil: 'networkidle' });
+
+    const head = await octx.request.get(`${BASE}/`);
+    const cspHeader = head.headers()['content-security-policy'] || '';
+    const need = ["default-src 'self'", "script-src 'self'", "connect-src 'self'", "frame-ancestors 'none'", "form-action 'none'", "base-uri 'self'", "worker-src 'self' blob:", "font-src 'self'"];
+    const missing = need.filter((r) => !cspHeader.split(/;\s*/).includes(r));
+    check('CSP 헤더: 이 사이트 밖으로 연결 · 스크립트 · 글꼴 차단 (unsafe-inline · eval 없음)', missing.length === 0 && !/unsafe-inline|unsafe-eval/.test(cspHeader),
+      missing.length ? `빠짐: ${missing.join(', ')}` : cspHeader.replace(/; /g, ' · ').slice(0, 160));
+
+    const man = await octx.request.get(`${BASE}/manifest.webmanifest`);
+    const manJson = man.ok() ? await man.json() : {};
+    const sw = await octx.request.get(`${BASE}/sw.js`);
+    const swText = sw.ok() ? await sw.text() : '';
+    const iconOk = await Promise.all((manJson.icons || []).map(async (ic) => (await octx.request.get(BASE + ic.src)).ok()));
+    check('manifest · sw.js 200, 아이콘(192 · 512 · maskable) 받힘', man.status() === 200 && sw.status() === 200 && manJson.name === 'PDF 작업실' && manJson.display === 'standalone' &&
+      (manJson.icons || []).some((i) => i.purpose === 'maskable') && iconOk.length >= 4 && iconOk.every(Boolean) && !/__PRECACHE__|'__COMMIT__'/.test(swText),
+    `manifest ${man.status()} · sw.js ${sw.status()} · 아이콘 ${iconOk.filter(Boolean).length}/${iconOk.length}`);
+
+    // 서비스 워커가 켜질 때까지(설치 때 앱 화면 · 라이브러리 · 글꼴을 모두 받아 둔다)
+    await until(o, () => !!navigator.serviceWorker.controller, undefined, { timeout: 60000 });
+    const cached = await o.evaluate(async () => {
+      const names = await caches.keys();
+      const c = await caches.open(names.find((n) => n.startsWith('pdfws-')));
+      const keys = (await c.keys()).map((r) => new URL(r.url).pathname);
+      return {
+        names,
+        n: keys.length,
+        has: ['/', '/vendor/pdf.worker.min.js', '/vendor/pdf-lib.min.js', '/vendor/pretendard/pretendardvariable.min.css'].every((k) => keys.includes(k)) && keys.some((k) => k.startsWith('/vendor/pretendard/woff2/')),
+        // 가끔 쓰는 큰 것은 미리 받지 않는다(처음 쓸 때 받음)
+        lazy: !keys.some((k) => /^\/vendor\/(heic|cmaps|standard_fonts|fonts)\//.test(k)),
+        version: keys.includes('/version'),
+      };
+    });
+    check('서비스 워커 등록 · 앱 셸만 미리 캐시(HEIC 변환기 · 문자표 · 워터마크 글꼴은 처음 쓸 때) · /version은 캐시 안 함', cached.names.length === 1 && cached.n >= 25 && cached.n <= 60 && cached.has && cached.lazy && !cached.version,
+      `캐시 ${cached.names.join(',')} · 미리 ${cached.n}개`);
+
+    // 인터넷을 끊고 새로고침 → 편집 · 합치기 · 저장
+    await octx.setOffline(true);
+    await o.reload({ waitUntil: 'load' });
+    await until(o, () => window.__pdfWorkshop && window.__pdfWorkshop.ready);
+    await until(o, () => ![...document.querySelectorAll('.offline-badge')].every((b) => b.hidden), undefined, { timeout: 5000 }).catch(() => {});
+    const off = await o.evaluate(() => ({
+      badge: [...document.querySelectorAll('.offline-badge')].some((b) => !b.hidden && b.getBoundingClientRect().width > 0),
+      text: (document.querySelector('.offline-badge:not([hidden])') || {}).textContent,
+      ver: document.getElementById('home-version').textContent,
+    }));
+    await o.setInputFiles('#home-input', [fileA, fileB]);
+    await until(o, () => document.querySelectorAll('#edit-grid .page-card canvas').length === 7, undefined, { timeout: 20000 });
+    const [odl] = await Promise.all([o.waitForEvent('download'), o.click('#edit-save')]);
+    const odoc = await PDFDocument.load(fs.readFileSync(await odl.path()));
+    if (SCREENS) {
+      await o.evaluate(() => document.fonts.ready);
+      await o.mouse.move(5, 5);
+      await o.waitForTimeout(600);
+      await o.screenshot({ path: path.join(root, 'docs', 'screens', 'offline.png') });
+    }
+    await octx.setOffline(false);
+    check('인터넷 없이(오프라인) 새로고침 → 편집 · 합치기 · 저장 + "지금 인터넷 없이 작동 중" 배지', off.badge && odoc.getPageCount() === 7 && /^v /.test(off.ver),
+      `배지 "${off.text}" · ${odl.suggestedFilename()} ${odoc.getPageCount()}쪽 · 화면 ${off.ver}`);
+    check('CSP 위반 · 콘솔 에러 0개 (오프라인 흐름 포함)', csp.length === 0 && oerr.filter((e) => !/net::ERR_INTERNET_DISCONNECTED|Failed to fetch|\/version|heic-to/.test(e)).length === 0,
+      csp.length ? csp.join(' | ').slice(0, 200) : oerr.length ? `오프라인 중 /version 실패만 ${oerr.length}건(정상)` : '0개');
+    await octx.close();
+
+    // 진짜로 서버에 닿지 않는 오프라인(점검 도구의 setOffline은 서비스 워커의 요청까지는 막지 않아서 서버를 멈춘다)
+    {
+      const HPORT = 4000 + Math.floor(Math.random() * 2000) + 1000;
+      const up = () => new Promise((resolve, reject) => {
+        const sv = spawn(process.execPath, ['server.js'], { cwd: root, env: { ...process.env, PORT: String(HPORT) }, stdio: 'pipe' });
+        sv.stdout.on('data', (d) => String(d).includes('http://') && resolve(sv));
+        sv.on('error', reject);
+        setTimeout(() => reject(new Error('서버가 뜨지 않음')), 10000);
+      });
+      const down = (sv) => new Promise((r) => { sv.once('exit', r); sv.kill(); });
+      const fakeHeic = Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypheic', 'latin1'), Buffer.alloc(40)]);
+      const heicPath = path.join(tmp, '아이폰.heic');
+      fs.writeFileSync(heicPath, fakeHeic);
+      let hs = await up();
+      const hctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, acceptDownloads: true, colorScheme: 'light' });
+      const hp = await hctx.newPage();
+      await hp.goto(`http://localhost:${HPORT}/`, { waitUntil: 'networkidle' });
+      await until(hp, () => !!navigator.serviceWorker.controller, undefined, { timeout: 60000 });
+      const goOffline = async () => {
+        await down(hs);
+        await hctx.setOffline(true);
+        await hp.reload({ waitUntil: 'load' });
+        await until(hp, () => window.__pdfWorkshop && window.__pdfWorkshop.ready);
+        await until(hp, () => window.__pdfWorkshop.pwa().offline, undefined, { timeout: 5000 }).catch(() => {});
+      };
+      await goOffline();
+      // 서버 없이 합쳐 저장
+      await hp.setInputFiles('#home-input', [fileA, fileB]);
+      await until(hp, () => document.querySelectorAll('#edit-grid .page-card canvas').length === 7, undefined, { timeout: 20000 });
+      const [hdl] = await Promise.all([hp.waitForEvent('download'), hp.click('#edit-save')]);
+      const hdoc = await PDFDocument.load(fs.readFileSync(await hdl.path()));
+      // HEIC을 한 번도 안 쓴 채 → 안내
+      await hp.click('#logo');
+      await hp.evaluate(() => document.getElementById('toasts').replaceChildren());
+      await hp.setInputFiles('#home-input', [heicPath]);
+      await until(hp, () => /변환기|변환하지/.test(document.getElementById('toasts').textContent), undefined, { timeout: 15000 });
+      const heicOff = await hp.textContent('#toasts');
+      // 인터넷이 돌아오면 새로고침 없이 다시 넣어도 변환기를 받고, 캐시에 들어간다
+      hs = await up();
+      await hctx.setOffline(false);
+      await hp.evaluate(() => document.getElementById('toasts').replaceChildren());
+      await hp.setInputFiles('#home-input', [heicPath]);
+      await until(hp, () => /변환하지 못했어요|불러오지 못했어요|인터넷이 연결되면/.test(document.getElementById('toasts').textContent), undefined, { timeout: 30000 });
+      const heicOn = await hp.textContent('#toasts');
+      const rtCached = /변환하지 못했어요/.test(heicOn) && await hp.evaluate(async () => {
+        await new Promise((r) => setTimeout(r, 600));
+        const c = await caches.open((await caches.keys()).find((n) => n.startsWith('pdfws-')));
+        return !!(await c.match('/vendor/heic/heic-to.js'));
+      });
+      await goOffline();
+      await hp.evaluate(() => document.getElementById('toasts').replaceChildren());
+      await hp.setInputFiles('#home-input', [heicPath]);
+      await until(hp, () => /변환/.test(document.getElementById('toasts').textContent), undefined, { timeout: 20000 });
+      const heicOff2 = await hp.textContent('#toasts');
+      await hctx.close();
+      check('서버에 닿지 않는 진짜 오프라인: 새로고침 → 합쳐 저장 7쪽', hdoc.getPageCount() === 7, `${hdl.suggestedFilename()} ${hdoc.getPageCount()}쪽`);
+      check('HEIC: 한 번도 안 쓰고 오프라인이면 "인터넷이 연결되면 아이폰 사진 변환기를 받아요" → 한 번 받으면 캐시에 들어가 오프라인에서도 변환기를 씀',
+        /인터넷이 연결되면 아이폰 사진 변환기를 받아요/.test(heicOff) && rtCached && !/인터넷이 연결되면/.test(heicOff2) && /변환하지 못했어요/.test(heicOff2),
+        `처음: "${heicOff.slice(0, 30)}…" · 받은 뒤 캐시 ${rtCached} · 다시 오프라인: "${heicOff2.slice(0, 26)}…"(가짜 HEIC이라 변환 실패가 정상)`);
+    }
+
+    // 새 버전 배포 흉내: 같은 주소에서 커밋만 다른 서버로 바꿔 띄운다
+    const UPORT = 4000 + Math.floor(Math.random() * 2000) + 2000;
+    const startAs = (commit) => new Promise((resolve, reject) => {
+      const s = spawn(process.execPath, ['server.js'], { cwd: root, env: { ...process.env, PORT: String(UPORT), RAILWAY_GIT_COMMIT_SHA: commit }, stdio: 'pipe' });
+      s.stdout.on('data', (d) => String(d).includes('http://') && resolve(s));
+      s.on('error', reject);
+      setTimeout(() => reject(new Error('서버가 뜨지 않음')), 10000);
+    });
+    const stopped = (s) => new Promise((r) => { s.once('exit', r); s.kill(); });
+    let s1 = await startAs('aaaaaaa');
+    const uctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: 'light' });
+    const u = await uctx.newPage();
+    await u.goto(`http://localhost:${UPORT}/`, { waitUntil: 'networkidle' });
+    await until(u, () => !!navigator.serviceWorker.controller, undefined, { timeout: 60000 });
+    await stopped(s1);
+    s1 = await startAs('bbbbbbb');
+    await u.setInputFiles('#home-input', [fileA]);
+    await until(u, () => document.querySelectorAll('#edit-grid .page-card').length === 3);
+    await u.evaluate(async () => { const r = await navigator.serviceWorker.getRegistration(); await r.update(); });
+    await until(u, () => !document.getElementById('update-bar').hidden, undefined, { timeout: 60000 });
+    const bar1 = await u.textContent('#update-text');
+    await u.click('#update-go');
+    await u.waitForTimeout(500);
+    const bar2 = await u.evaluate(() => ({ text: document.getElementById('update-text').textContent, cards: document.querySelectorAll('#edit-grid .page-card').length, ver: document.querySelector('meta[name="app-version"]').content }));
+    await Promise.all([u.waitForEvent('load'), u.click('#update-go')]);
+    await until(u, () => window.__pdfWorkshop && window.__pdfWorkshop.ready);
+    const after = await u.evaluate(() => ({ ver: document.querySelector('meta[name="app-version"]').content, shown: document.getElementById('home-version').textContent }));
+    check('새 버전 배포 → "새 버전이 있어요 [새로고침]" 띠, 작업 중이면 한 번 더 확인 후에만 새로고침',
+      /새 버전이 있어요/.test(bar1) && /작업이 사라져요/.test(bar2.text) && bar2.cards === 3 && bar2.ver === 'aaaaaaa' && after.ver === 'bbbbbbb' && after.shown === 'v bbbbbbb',
+      `"${bar1}" → 누르면 "${bar2.text.slice(0, 24)}…"(카드 ${bar2.cards}장 유지) → 한 번 더 → v ${after.ver}`);
+    await uctx.close();
+    await stopped(s1);
+  }
+
+  // ── 11-d. 안내 페이지 · 처음 화면 아래쪽 ──
+  {
+    const pctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: 'light' });
+    const pg = await pctx.newPage();
+    const perr = [];
+    watch(pg, perr);
+    const pages = [];
+    for (const u of ['/check', '/privacy', '/licenses']) {
+      const r = await pg.goto(BASE + u, { waitUntil: 'networkidle' });
+      await pg.waitForTimeout(u === '/check' ? 1200 : 100);
+      const info = await pg.evaluate(() => ({
+        h1: document.querySelector('h1').textContent,
+        ver: (document.querySelector('.site-foot .app-version') || {}).textContent,
+        csp: document.querySelectorAll('.csp-list li').length,
+        libs: [...document.querySelectorAll('.lib')].map((l) => l.dataset.lib),
+        limit: /원본 파일을 바꾸지 않습니다/.test(document.body.textContent),
+        updated: /마지막 갱신: \d{4}년/.test(document.body.textContent),
+        playing: window.__pdfPages ? window.__pdfPages.playing() : [],
+        sw: document.documentElement.scrollWidth,
+      }));
+      pages.push({ u, status: r.status(), ...info });
+      if (SCREENS) {
+        await pg.evaluate(() => document.fonts.ready);
+        await pg.waitForTimeout(u === '/check' ? 2400 : 100);
+        await pg.screenshot({ path: path.join(root, 'docs', 'screens', `${u.slice(1)}.png`), fullPage: true });
+      }
+    }
+    const pk = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+    const deps = [...Object.keys(pk.dependencies), ...Object.keys(pk.devDependencies || {})];
+    const [pc, pp, pl] = pages;
+    check('/check: 세 단계 + 움직이는 예시 2개 재생 + CSP 규칙 목록(서버 헤더와 같음)', pc.status === 200 && pc.playing.length === 2 && pc.playing.some(Boolean) && pc.csp === 11 && pc.limit,
+      `${pc.h1} · 예시 재생 ${pc.playing.join('/')} · CSP ${pc.csp}줄`);
+    check('/privacy: 수집 없음 · 마지막 갱신일 · 책임 한계 한 줄', pp.status === 200 && pp.updated && pp.limit, pp.h1);
+    check('/licenses: package.json 의존성 모두(이름@버전)', pl.status === 200 && deps.every((d) => pl.libs.some((l) => l.startsWith(`${d}@`))) && pl.libs.length === deps.length,
+      `${pl.libs.length}개: ${pl.libs.join(', ').slice(0, 160)}`);
+    check('안내 페이지 3곳 콘솔 에러 0 · 가로 넘침 없음 · 푸터 버전', perr.length === 0 && pages.every((x) => x.sw <= 1280 && /^v /.test(x.ver || '')),
+      perr.length ? perr.join(' | ').slice(0, 200) : pages.map((x) => `${x.u} ${x.ver}`).join(' · '));
+
+    // 처음 화면 아래쪽: 요약 카드 · 자주 하는 작업 · 새 소식 · 푸터
+    await pg.goto(BASE, { waitUntil: 'networkidle' });
+    await until(pg, () => !document.getElementById('home-news').hidden);
+    const home = await pg.evaluate(() => {
+      const r = (sel) => { const e = document.querySelector(sel); if (!e) return null; const b = e.getBoundingClientRect(); return { w: Math.round(b.width), h: Math.round(b.height), l: Math.round(b.left) }; };
+      return {
+        trust: document.querySelectorAll('.trust-steps li').length,
+        quick: document.querySelectorAll('.quick-card').length,
+        news: document.querySelectorAll('#news-list > li').length,
+        sec: r('.home-sec'),
+        foot: [...document.querySelectorAll('.site-foot a')].map((a) => a.getAttribute('href')),
+        limit: /원본 파일을 바꾸지 않습니다/.test(document.querySelector('.site-foot').textContent),
+      };
+    });
+    check('처음 화면 아래: 믿을 이유 3단계 · 자주 하는 작업 3개 · 새 소식 3개 · 푸터(개인정보 · 라이브러리 · 책임 한계)',
+      home.trust === 3 && home.quick === 3 && home.news === 3 && home.sec.w <= 1100 && home.foot.includes('/privacy') && home.foot.includes('/licenses') && home.foot.includes('/check') && home.limit,
+      `카드 ${home.trust}/${home.quick}/${home.news} · 폭 ${home.sec.w}px · 푸터 ${home.foot.join(' ')}`);
+    if (SCREENS) {
+      await pg.evaluate(() => document.fonts.ready);
+      await pg.screenshot({ path: path.join(root, 'docs', 'screens', 'home-full.png'), fullPage: true });
+    }
+
+    // "공문 첨부용 10MB 만들기" → 용량 줄이기 + 목표 10MB
+    const heavy2 = await PDFDocument.create();
+    for (let i = 0; i < 8; i++) {
+      const img = await heavy2.embedJpg(photoJpeg(1200, 1000, i + 11));
+      heavy2.addPage([595, 842]).drawImage(img, { x: 40, y: 250, width: 515, height: 430 });
+    }
+    const heavy2File = await writePdf('공문첨부.pdf', heavy2);
+    await pg.click('.quick-card[data-quick="compress10"]');
+    const qTab = await pg.evaluate(() => ({ tab: document.querySelector('.tab[aria-selected="true"]').dataset.tab, toast: document.getElementById('toasts').textContent }));
+    await pg.setInputFiles('#cmp-input', [heavy2File]);
+    await pg.waitForSelector('#cmp-target:not([hidden])', { timeout: 60000 });
+    const qTarget = await pg.$eval('#cmp-mb', (e) => e.value);
+    const hMB = fs.statSync(heavy2File).size / 1024 / 1024;
+    // 로고 → 스캔본 · 사진 바로가기
+    await pg.click('#logo');
+    await pg.click('.quick-card[data-quick="scan"]');
+    const qScan = await pg.evaluate(() => ({ tab: document.querySelector('.tab[aria-selected="true"]').dataset.tab, toast: document.getElementById('toasts').textContent }));
+    await pg.click('#logo');
+    await pg.click('.quick-card[data-quick="photos"]');
+    const qPhoto = await pg.evaluate(() => document.querySelector('.tab[aria-selected="true"]').dataset.tab);
+    check('자주 하는 작업: 10MB(용량 줄이기 · 목표 10) · 스캔본(편집 + 안내) · 사진(사진→PDF)',
+      qTab.tab === 'compress' && /10MB/.test(qTab.toast) && Number(qTarget) === 10 && qScan.tab === 'edit' && /빈 쪽/.test(qScan.toast) && qPhoto === 'img2pdf' && perr.length === 0,
+      `${hMB.toFixed(1)}MB 파일 → 목표 ${qTarget}MB · 스캔본 → ${qScan.tab} · 사진 → ${qPhoto}`);
+    await pctx.close();
+
+    // 400px에서도 가로 넘침 없음
+    const mctx2 = await browser.newContext({ viewport: { width: 400, height: 860 }, isMobile: true, hasTouch: true, colorScheme: 'light', deviceScaleFactor: 2 });
+    const mp3 = await mctx2.newPage();
+    const msw = [];
+    for (const u of ['/', '/check', '/privacy', '/licenses']) {
+      await mp3.goto(BASE + u, { waitUntil: 'networkidle' });
+      msw.push(`${u} ${await mp3.evaluate(() => document.documentElement.scrollWidth)}`);
+    }
+    check('400px: 처음 화면 전체 · 안내 페이지 3곳 가로 스크롤 없음', msw.every((x) => Number(x.split(' ')[1]) <= 400), msw.join(' · '));
+    await mctx2.close();
+  }
+
+  // ── 11-e. 새 소식 · 의견 보내기 · 오래된 브라우저 · 탭 제목 · 공유 미리보기 ──
+  {
+    const nctx3 = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: 'light', acceptDownloads: true, permissions: ['clipboard-read', 'clipboard-write'] });
+    const q = await nctx3.newPage();
+    const qerr = [];
+    watch(q, qerr);
+    await q.goto(BASE, { waitUntil: 'networkidle' });
+    await until(q, () => /^v /.test(document.getElementById('home-version').textContent));
+    const first = await q.evaluate(() => window.__pdfWorkshop.news());
+    // 예전에 써 본 사람 + 옛 새 소식만 본 상태 → 새로고침하면 점
+    await q.evaluate(() => { localStorage.setItem('pdfws.tab', 'edit'); localStorage.setItem('pdfws.newsSeen', '2026-09-25-1'); });
+    await q.reload({ waitUntil: 'networkidle' });
+    await until(q, () => window.__pdfWorkshop.news().dot, undefined, { timeout: 5000 }).catch(() => {});
+    const dotOn = await q.evaluate(() => ({ st: window.__pdfWorkshop.news(), label: document.getElementById('home-version').getAttribute('aria-label') }));
+    await q.click('#home-version');
+    await until(q, () => document.getElementById('news-dialog').open);
+    const dlgInfo = await q.evaluate(() => ({ n: document.querySelectorAll('#news-full > li').length, ver: document.getElementById('news-ver').textContent, dot: window.__pdfWorkshop.news().dot }));
+    await q.keyboard.press('Escape');
+    await q.reload({ waitUntil: 'networkidle' });
+    await q.waitForTimeout(500);
+    const dotAfter = await q.evaluate(() => window.__pdfWorkshop.news().dot);
+    check('버전 표시를 누르면 새 소식 창 · 새 버전이면 점(처음 온 사람은 없음) → 한 번 보면 꺼짐',
+      !first.dot && dotOn.st.dot && /새 소식 있음/.test(dotOn.label) && dlgInfo.n >= 7 && /지금 버전: v /.test(dlgInfo.ver) && !dlgInfo.dot && !dotAfter,
+      `처음 점 ${first.dot} · 옛 소식만 본 사람 점 ${dotOn.st.dot} → 창(${dlgInfo.n}개) 연 뒤 ${dotAfter}`);
+
+    // 의견 보내기: 설문 주소가 비었으면 안내 + 오류 내용 복사
+    await q.click('.site-foot [data-feedback]');
+    await until(q, () => document.getElementById('feedback-dialog').open);
+    const fbInfo = await q.evaluate(() => ({ none: !document.getElementById('fb-none').hidden, dis: document.getElementById('fb-open').getAttribute('aria-disabled'), href: document.getElementById('fb-open').getAttribute('href'), text: document.getElementById('feedback-dialog').textContent }));
+    await q.click('#fb-open');
+    const stillOpen = await q.evaluate(() => document.getElementById('feedback-dialog').open);
+    await q.click('#fb-copy');
+    await q.waitForTimeout(200);
+    const clip = await q.evaluate(() => navigator.clipboard.readText());
+    const copyMsg = await q.textContent('#fb-err');
+    await q.keyboard.press('Escape');
+    // 안내 페이지의 /#feedback
+    await q.goto(`${BASE}/#feedback`, { waitUntil: 'networkidle' });
+    const hashOpen = await q.evaluate(() => ({ open: document.getElementById('feedback-dialog').open, hash: location.hash }));
+    await q.keyboard.press('Escape');
+    const sideFb = await q.evaluate(() => !!document.querySelector('.sidebar [data-feedback]'));
+    check('의견 보내기: "파일 · 화면 내용은 전송되지 않아요" · 설문 주소 없으면 안내 · [오류 내용 복사] · /#feedback · 사이드바에도',
+      fbInfo.none && fbInfo.dis === 'true' && !fbInfo.href && /전송되지 않아요/.test(fbInfo.text) && stillOpen && /\[PDF 작업실 오류 보고\]/.test(clip) && /브라우저/.test(copyMsg) && hashOpen.open && hashOpen.hash === '' && sideFb,
+      `설문 없음 안내 ${fbInfo.none} · 복사 ${clip.split('\n')[0]} · "${copyMsg.slice(0, 30)}…"`);
+
+    // 탭 제목: 처음 → 편집 파일 2개 → 줄이는 중 %
+    const tHome = await q.title();
+    await q.setInputFiles('#home-input', [fileA, fileB]);
+    await until(q, () => document.querySelectorAll('#edit-grid .page-card').length === 7);
+    const tEdit = await q.title();
+    // (진행 표시는 "사진 줄이는 중 3/8" 같은 글에서 %를 계산한다)
+    const hv = await PDFDocument.create();
+    for (let i = 0; i < 6; i++) hv.addPage([595, 842]).drawImage(await hv.embedJpg(photoJpeg(1400, 1100, i + 21)), { x: 20, y: 200, width: 555, height: 440 });
+    const hvFile = await writePdf('제목확인.pdf', hv);
+    await q.click('#tab-compress');
+    await q.evaluate(() => {
+      window.__titles = new Set();
+      new MutationObserver(() => window.__titles.add(document.title)).observe(document.querySelector('title'), { childList: true, characterData: true, subtree: true });
+    });
+    await q.setInputFiles('#cmp-input', [hvFile]);
+    await q.waitForSelector('#cmp-target:not([hidden])', { timeout: 60000 });
+    await q.fill('#cmp-mb', String(Math.max(1, Math.floor(fs.statSync(hvFile).size / 1024 / 1024 / 2))));
+    await q.click('#cmp-go');
+    await q.waitForSelector('#cmp-result:not([hidden])', { timeout: 120000 });
+    const titles = await q.evaluate(() => [...window.__titles]);
+    const tCmp = await q.title();
+    check('탭 제목: "PDF 작업실" → "편집 중 · 파일 2개" → 진행 중 "…%"', tHome === 'PDF 작업실' && tEdit === '편집 중 · 파일 2개' && titles.some((t) => /\d+%$/.test(t)) && tCmp === '용량 줄이기 · 파일 1개',
+      `${tHome} → ${tEdit} → ${titles.filter((t) => /%$/.test(t)).slice(0, 2).join(' / ')} → ${tCmp}`);
+
+    // 작업 중 탭 닫기 · 새로고침 → 확인
+    let asked = '';
+    q.on('dialog', (d) => { if (d.type() === 'beforeunload') asked = d.type(); });
+    await q.mouse.click(5, 5);
+    await q.reload({ waitUntil: 'load' });
+    await until(q, () => window.__pdfWorkshop && window.__pdfWorkshop.ready);
+    let asked2 = 'none';
+    q.removeAllListeners('dialog');
+    q.on('dialog', (d) => { asked2 = d.type(); d.accept().catch(() => {}); });
+    await q.reload({ waitUntil: 'load' }); // 파일이 없으면 묻지 않는다
+    check('작업 중 새로고침 · 탭 닫기 → "작업 중인 내용이 사라져요" 확인 (파일 없으면 안 물음)', asked === 'beforeunload' && asked2 === 'none', `파일 있을 때 ${asked || '안 물음'} · 없을 때 ${asked2}`);
+    check('새 소식 · 의견 · 제목 흐름 콘솔 에러 0개', qerr.length === 0, qerr.length ? qerr.join(' | ').slice(0, 200) : '0개');
+
+    // 공유 미리보기 · 파비콘
+    const html = await (await nctx3.request.get(BASE)).text();
+    const og = (p) => ((html.match(new RegExp(`<meta property="${p}" content="([^"]+)"`)) || [])[1] || '');
+    const ogImg = await nctx3.request.get(`${BASE}/icons/og-image.png`);
+    const buf = await ogImg.body();
+    const pngW = buf.readUInt32BE(16);
+    const pngH = buf.readUInt32BE(20);
+    const icons = await Promise.all(['/icons/logo.svg', '/icons/favicon-32.png', '/icons/apple-touch-icon.png'].map(async (u) => (await nctx3.request.get(BASE + u)).status()));
+    check('공유 미리보기(Open Graph) 제목 · 설명 · 1200×630 그림(절대 주소) · 파비콘 SVG · PNG · apple-touch-icon',
+      og('og:title') === 'PDF 작업실' && /파일은 컴퓨터 밖으로 안 나가요/.test(og('og:description')) && /^https:\/\/.+\/icons\/og-image\.png$/.test(og('og:image')) && pngW === 1200 && pngH === 630 && icons.every((c) => c === 200) && /summary_large_image/.test(html),
+      `${og('og:image')} ${pngW}×${pngH} · 파비콘 ${icons.join('/')}`);
+    await nctx3.close();
+
+    // 오래된 브라우저(ES2020 없음) · 자바스크립트 꺼짐
+    const octx2 = await browser.newContext({ viewport: { width: 1000, height: 700 } });
+    await octx2.addInitScript(() => { delete Promise.allSettled; });
+    const ob = await octx2.newPage();
+    await ob.goto(BASE, { waitUntil: 'load' });
+    const old = await ob.evaluate(() => ({ note: document.getElementById('old-browser').getBoundingClientRect().height, text: document.getElementById('old-browser').textContent, home: document.getElementById('view-home').getBoundingClientRect().height }));
+    await octx2.close();
+    const jctx = await browser.newContext({ viewport: { width: 1000, height: 700 }, javaScriptEnabled: false });
+    const jp = await jctx.newPage();
+    await jp.goto(BASE, { waitUntil: 'load' });
+    const nojs = await jp.evaluate(() => document.body.innerText);
+    await jctx.close();
+    check('오래된 브라우저 · 자바스크립트 꺼짐: "이 브라우저에서는 열 수 없어요. 엣지, 크롬, 웨일로…" 안내만 보임',
+      old.note > 50 && old.home === 0 && /엣지, 크롬, 웨일/.test(old.text) && /이 브라우저에서는 열 수 없어요/.test(nojs),
+      `ES2020 없음 → 안내 ${Math.round(old.note)}px · 앱 ${old.home}px · JS 꺼짐 → 안내 글 ${/열 수 없어요/.test(nojs) ? '보임' : '없음'}`);
+  }
+
+  // ── 11-f. 쪽 크게 보기 · 글자로 찾기 · 붙여넣기 · 크기 맞추기 링크 경고 ──
+  {
+    const vctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: 'light', acceptDownloads: true });
+    const v = await vctx.newPage();
+    const verr = [];
+    watch(v, verr);
+    await v.goto(BASE, { waitUntil: 'networkidle' });
+    await v.setInputFiles('#home-input', [fileA, fileB]);
+    await until(v, () => document.querySelectorAll('#edit-grid .page-card canvas').length === 7, undefined, { timeout: 20000 });
+    const vcard = v.locator('#edit-grid .page-card').nth(1);
+    await vcard.dblclick({ position: { x: 60, y: 60 } });
+    await until(v, () => { const s = window.__pdfWorkshop.viewer(); return s.open && s.canvas; }, undefined, { timeout: 15000 });
+    const v1 = await v.evaluate(() => ({ st: window.__pdfWorkshop.viewer(), title: document.getElementById('viewer-title').textContent }));
+    if (SCREENS) await v.screenshot({ path: path.join(root, 'docs', 'screens', 'viewer.png') });
+    await v.keyboard.press('ArrowRight');
+    await until(v, () => window.__pdfWorkshop.viewer().i === 2 && /:2:/.test(window.__pdfWorkshop.viewer().rendered || '') || window.__pdfWorkshop.viewer().rendered.includes(':2:0:'), undefined, { timeout: 10000 }).catch(() => {});
+    await v.waitForTimeout(300);
+    const v2 = await v.evaluate(() => ({ st: window.__pdfWorkshop.viewer(), title: document.getElementById('viewer-title').textContent }));
+    await v.keyboard.press('+');
+    await until(v, () => window.__pdfWorkshop.viewer().rendered.includes(':1.25:'), undefined, { timeout: 10000 });
+    const v3 = await v.evaluate(() => window.__pdfWorkshop.viewer());
+    await v.click('#vw-rot');
+    await v.click('#vw-del');
+    await until(v, () => window.__pdfWorkshop.viewer().rendered.includes(':90:'), undefined, { timeout: 10000 });
+    const v4 = await v.evaluate(() => ({ state: document.getElementById('viewer-state').textContent, card: document.querySelectorAll('#edit-grid .page-card')[2].getAttribute('aria-label'), del: document.querySelectorAll('#edit-grid .page-card')[2].classList.contains('deleted') }));
+    await v.click('#vw-rep');
+    const repOpen = await v.evaluate(() => document.getElementById('replace-dialog').open && document.getElementById('viewer').open);
+    await v.keyboard.press('Escape');
+    await v.waitForTimeout(150);
+    const afterRep = await v.evaluate(() => ({ rep: document.getElementById('replace-dialog').open, viewer: document.getElementById('viewer').open }));
+    await v.keyboard.press('Escape');
+    await v.waitForTimeout(200); // 닫힘(close) 이벤트는 한 박자 뒤에 온다
+    const closed = await v.evaluate(() => ({ open: document.getElementById('viewer').open, focus: document.activeElement && document.activeElement.classList.contains('page-card') && [...document.querySelectorAll('#edit-grid .page-card')].indexOf(document.activeElement) }));
+    // 키보드: 카드에서 Enter
+    await v.keyboard.press('Enter');
+    await until(v, () => window.__pdfWorkshop.viewer().open);
+    const enterIdx = await v.evaluate(() => window.__pdfWorkshop.viewer().i);
+    await v.keyboard.press('Escape');
+    await v.keyboard.press('Control+z');
+    await v.keyboard.press('Control+z');
+    check('쪽 크게 보기: 더블클릭 · Enter로 열기, ←→ 이동, +/- 확대, 회전 · 삭제 예정 · 교체, Esc로 닫고 카드로 돌아옴',
+      v1.st.i === 1 && v1.st.canvas.cssH > 600 && /2 \/ 7/.test(v1.title) && v2.st.i === 2 && v3.zoom === 1.25 && v3.canvas.cssH > v1.st.canvas.cssH * 1.2 &&
+      /삭제 예정/.test(v4.state) && /90° 회전/.test(v4.state) && v4.del && repOpen && !afterRep.rep && afterRep.viewer && !closed.open && closed.focus === 2 && enterIdx === 2,
+      `크기 ${Math.round(v1.st.canvas.cssW)}×${Math.round(v1.st.canvas.cssH)}px(캔버스 ${v1.st.canvas.w}×${v1.st.canvas.h}) → 125% ${Math.round(v3.canvas.cssH)}px · "${v4.state}" · 교체 창 위에 뜸 · Esc 후 ${closed.focus}번 카드에 포커스`);
+
+    // 글자로 찾기 (한글 글꼴을 넣은 PDF + 글자 없는 스캔본)
+    const fontkit = require('@cantoo/fontkit');
+    const kd = await PDFDocument.create();
+    kd.registerFontkit(fontkit);
+    const kf = await kd.embedFont(fs.readFileSync(path.join(root, 'node_modules', 'pretendard', 'dist', 'public', 'static', 'Pretendard-Bold.otf')), { subset: true });
+    [['3단원 요약', '3단원 문제'], ['4단원 요약'], ['3 단원 복습']].forEach((lines) => {
+      const pg = kd.addPage([595, 842]);
+      lines.forEach((t, i) => pg.drawText(t, { x: 60, y: 760 - i * 60, size: 32, font: kf }));
+    });
+    const kFile = await writePdf('학습지.pdf', kd);
+    const sd = await PDFDocument.create();
+    sd.addPage([595, 842]).drawImage(await sd.embedJpg(photoJpeg(600, 800, 5)), { x: 0, y: 0, width: 595, height: 842 });
+    const sFile = await writePdf('스캔본.pdf', sd);
+    await v.click('#logo');
+    await v.setInputFiles('#home-input', [kFile, sFile]);
+    await until(v, () => document.querySelectorAll('#edit-grid .page-card').length === 4);
+    await v.fill('#edit-find', '3단원');
+    await until(v, () => /곳|없어요/.test(document.getElementById('edit-find-status').textContent), undefined, { timeout: 15000 });
+    const f1 = await v.evaluate(() => ({
+      status: document.getElementById('edit-find-status').textContent,
+      badges: [...document.querySelectorAll('#edit-grid .page-card')].map((c) => c.dataset.found || ''),
+      note: document.getElementById('edit-find-note').hidden ? '' : document.getElementById('edit-find-note').textContent,
+    }));
+    await v.focus('#edit-find');
+    await v.keyboard.press('Enter');
+    await v.keyboard.press('Enter');
+    if (SCREENS) { await v.waitForTimeout(500); await v.screenshot({ path: path.join(root, 'docs', 'screens', 'find.png') }); }
+    const f2 = await v.evaluate(() => ({ st: window.__pdfWorkshop.find(), now: [...document.querySelectorAll('#edit-grid .page-card')].findIndex((c) => c.classList.contains('found-now')) }));
+    check('글자로 쪽 찾기: "3단원" → 찾은 쪽에 노란 테두리 + "N곳", Enter로 다음, 스캔본은 "글자가 없어 검색할 수 없어요"',
+      f1.badges.join(',') === '2,,1,' && /2쪽에서 3곳/.test(f1.status) && /스캔본\.pdf.*글자가 없어 검색할 수 없어요\(스캔본\)/.test(f1.note) && f2.now === 2 && f2.st.at === 1,
+      `${f1.status} · 배지 [${f1.badges.join(',')}] · Enter 두 번 → ${f2.now + 1}번 카드 · "${f1.note.slice(0, 40)}…"`);
+
+    // Ctrl+V 붙여넣기
+    const pngB64 = fs.readFileSync(png).toString('base64');
+    const pdfB64 = fs.readFileSync(fileA).toString('base64');
+    const pasteFile = (b64, name, type) => v.evaluate(([b, n, t]) => {
+      const bin = Uint8Array.from(atob(b), (c) => c.charCodeAt(0));
+      const dt = new DataTransfer();
+      dt.items.add(new File([bin], n, { type: t }));
+      document.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    }, [b64, name, type]);
+    await v.click('#logo');
+    await v.evaluate(() => document.getElementById('toasts').replaceChildren());
+    await pasteFile(pngB64, 'image.png', 'image/png');
+    await until(v, () => document.querySelectorAll('#img-grid .img-card').length === 1, undefined, { timeout: 10000 });
+    const p1 = await v.evaluate(() => ({ tab: document.querySelector('.tab[aria-selected="true"]').dataset.tab, name: document.querySelector('#img-grid .page-src').textContent, toast: document.getElementById('toasts').textContent }));
+    await pasteFile(pdfB64, '보고서A.pdf', 'application/pdf');
+    await until(v, () => document.querySelectorAll('#edit-grid .page-card').length >= 3, undefined, { timeout: 10000 });
+    const p2 = await v.evaluate(() => ({ tab: document.querySelector('.tab[aria-selected="true"]').dataset.tab, toast: document.getElementById('toasts').textContent }));
+    await v.click('#tab-compress');
+    await pasteFile(pngB64, 'image.png', 'image/png');
+    await until(v, () => document.querySelectorAll('#cmp-files > li').length === 1, undefined, { timeout: 15000 });
+    const p3 = await v.evaluate(() => document.querySelector('.tab[aria-selected="true"]').dataset.tab);
+    check('Ctrl+V: 클립보드 사진 → 사진 → PDF(알림 "사진 1장을 넣었어요") · PDF → 편집 · 용량 줄이기 화면이면 거기에',
+      p1.tab === 'img2pdf' && /^붙여넣은 사진_\d{8}_\d{6}\.png$/.test(p1.name) && /클립보드의 사진 1장을 넣었어요/.test(p1.toast) && p2.tab === 'edit' && /PDF 1개를 넣었어요/.test(p2.toast) && p3 === 'compress',
+      `사진 → ${p1.tab} "${p1.name}" · PDF → ${p2.tab} · 용량 줄이기에서 사진 → ${p3}`);
+
+    // 크기 맞추기: 링크 · 주석이 있으면 노란 경고
+    const { PDFName, PDFString } = PDFLib;
+    const ad = await PDFDocument.create();
+    const ap1 = ad.addPage([595, 842]);
+    ad.addPage([842, 595]);
+    const link = ad.context.register(ad.context.obj({ Type: 'Annot', Subtype: 'Link', Rect: [50, 50, 200, 80], Border: [0, 0, 0], A: { Type: 'Action', S: 'URI', URI: PDFString.of('https://example.com') } }));
+    const memo = ad.context.register(ad.context.obj({ Type: 'Annot', Subtype: 'Text', Rect: [300, 700, 320, 720], Contents: PDFString.of('memo') }));
+    ap1.node.set(PDFName.of('Annots'), ad.context.obj([link, memo]));
+    const aFile = await writePdf('링크있음.pdf', ad);
+    await v.click('#logo');
+    await v.setInputFiles('#home-input', [aFile]);
+    await until(v, () => !document.getElementById('edit-sizes').hidden);
+    const a0 = await v.evaluate(() => document.getElementById('edit-sizes-annot').hidden);
+    await v.click('label:has(> input[name="sizefix"][value="fit"])');
+    const a1 = await v.evaluate(() => ({ hidden: document.getElementById('edit-sizes-annot').hidden, text: document.getElementById('edit-sizes-annot').textContent }));
+    check('"모두 A4 세로로"를 고르면 "이 파일의 링크 N개와 주석 M개는 크기를 맞추면 사라져요"', a0 && !a1.hidden && a1.text === '이 파일의 링크 1개와 주석 1개는 크기를 맞추면 사라져요.', a1.text);
+    check('크게 보기 · 찾기 · 붙여넣기 흐름 콘솔 에러 0개', verr.length === 0, verr.length ? verr.join(' | ').slice(0, 200) : '0개');
+    await vctx.close();
+  }
+
+  // ── 11-g. 모든 실행 버튼은 결과(다운로드) · 알림 · 창 중 하나를 반드시 낸다 ──
+  {
+    const bctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: 'light', acceptDownloads: true, permissions: ['clipboard-read', 'clipboard-write'] });
+    const bp = await bctx.newPage();
+    const berr = [];
+    watch(bp, berr);
+    let downloads = 0;
+    bp.on('download', (d) => { downloads++; d.cancel().catch(() => {}); });
+    await bp.goto(BASE, { waitUntil: 'networkidle' });
+    await bp.evaluate(() => {
+      window.__toastCount = 0;
+      new MutationObserver((ms) => ms.forEach((m) => { window.__toastCount += m.addedNodes.length; })).observe(document.getElementById('toasts'), { childList: true });
+    });
+    const snapUi = () => bp.evaluate(() => ({
+      toasts: window.__toastCount,
+      dialogs: [...document.querySelectorAll('dialog[open]')].map((d) => d.id).join(','),
+      busy: !document.getElementById('busy').hidden,
+      expanded: [...document.querySelectorAll('[aria-expanded="true"]')].map((e) => e.id).filter(Boolean).join(','),
+      errors: [...document.querySelectorAll('.form-error:not([hidden]), [role="alert"]:not([hidden]):not(.toast)')].map((e) => e.textContent.trim()).filter(Boolean).join('|'),
+    }));
+    async function settle() {
+      await until(bp, () => document.getElementById('busy').hidden, undefined, { timeout: 120000 });
+      await bp.evaluate(() => {
+        document.querySelectorAll('dialog[open]').forEach((d) => d.close());
+        document.getElementById('toasts').replaceChildren();
+        // 같은 안내가 다시 떠도 알아볼 수 있게 칸 안내를 비운다
+        document.querySelectorAll('.form-error').forEach((e) => { e.textContent = ''; e.hidden = true; });
+      });
+    }
+    /** 누르고 3초 안에 반응이 있는지. 숨었거나 비활성이면 누를 수 없으니 통과로 적는다. */
+    async function probe(sel, label, press) {
+      const vis = await bp.evaluate((s) => {
+        const e = document.querySelector(s);
+        if (!e) return 'none';
+        const r = e.getBoundingClientRect();
+        if (!r.width || !r.height || e.closest('[hidden]')) return 'hidden';
+        return e.disabled ? 'disabled' : 'ok';
+      }, sel);
+      if (!press && vis !== 'ok') return { label, result: vis === 'disabled' ? '비활성' : '숨김', ok: true };
+      const before = await snapUi();
+      const d0 = downloads;
+      if (press) await bp.keyboard.press(press); else await bp.click(sel);
+      const end = Date.now() + 3000;
+      let how = '';
+      while (Date.now() < end && !how) {
+        const now = await snapUi();
+        if (downloads > d0) how = '다운로드';
+        else if (now.toasts > before.toasts) how = '알림';
+        else if (now.dialogs && now.dialogs !== before.dialogs) how = `창(${now.dialogs})`;
+        else if (now.busy) how = '진행 표시';
+        else if (now.expanded !== before.expanded && now.expanded.length > before.expanded.length) how = '패널 열림';
+        else if (now.errors !== before.errors && now.errors) how = `안내(${now.errors.slice(0, 20)})`;
+        else await bp.waitForTimeout(80);
+      }
+      await settle();
+      return { label, result: how || '반응 없음', ok: !!how };
+    }
+    const rowsB = [];
+    const tool = async (t) => { await bp.click('#logo').catch(() => {}); await bp.evaluate((x) => { location.hash = x; }, t); await until(bp, (x) => !document.getElementById(`panel-${x}`).hidden, t); };
+
+    // ① 파일이 없을 때 (버튼 + 단축키)
+    const EMPTY = {
+      edit: ['#edit-save', '#edit-save-opts', '#edit-save-range', '#edit-split', '#edit-duplex'],
+      img2pdf: ['#img-save'],
+      pdf2img: ['#p2i-save', '#p2i-save-opts', '#p2i-copy'],
+      decorate: ['#decor-save', '#decor-save-opts'],
+      compress: ['#cmp-go', '#cmp-save', '#cmp-save-opts'],
+      security: ['#unlock-save', '#unlock-send', '#lock-save'],
+    };
+    for (const [t, sels] of Object.entries(EMPTY)) {
+      await tool(t);
+      for (const s of sels) rowsB.push({ when: '파일 없음', ...(await probe(s, `${t} ${s}`)) });
+      rowsB.push({ when: '파일 없음', ...(await probe(null, `${t} Ctrl+S`, 'Control+s')) });
+      rowsB.push({ when: '파일 없음', ...(await probe(null, `${t} Ctrl+Shift+S`, 'Control+Shift+S')) });
+    }
+
+    // ② 파일이 있을 때
+    await tool('edit');
+    await bp.setInputFiles('#edit-input', [fileA, fileB]);
+    await until(bp, () => document.querySelectorAll('#edit-grid .page-card canvas').length === 7, undefined, { timeout: 20000 });
+    for (const s of ['#edit-save', '#edit-save-opts', '#edit-save-range']) rowsB.push({ when: '파일 있음', ...(await probe(s, `edit ${s}`)) });
+    rowsB.push({ when: '파일 있음', ...(await probe('#edit-split', 'edit #edit-split(나눠 저장)')) });
+    rowsB.push({ when: '파일 있음', ...(await probe('#split-save', 'edit #split-save(파일 저장)')) });
+    await bp.evaluate(() => { const b = document.getElementById('split-close'); if (b && b.offsetParent) b.click(); });
+    rowsB.push({ when: '파일 있음', ...(await probe('#edit-duplex', 'edit #edit-duplex(양면 스캔)')) });
+    rowsB.push({ when: '파일 있음', ...(await probe('#dx-save', 'edit #dx-save(양면 저장)')) });
+    await bp.evaluate(() => { const b = document.getElementById('duplex-close'); if (b && b.offsetParent) b.click(); });
+
+    await tool('img2pdf');
+    await bp.setInputFiles('#img-input', [png]);
+    await until(bp, () => document.querySelectorAll('#img-grid .img-card').length === 1);
+    rowsB.push({ when: '파일 있음', ...(await probe('#img-save', 'img2pdf #img-save')) });
+
+    await tool('pdf2img');
+    await bp.setInputFiles('#p2i-input', [fileA]);
+    await until(bp, () => !document.getElementById('p2i-file').hidden && document.querySelectorAll('#p2i-grid .page-card, #p2i-grid [data-page]').length > 0, undefined, { timeout: 15000 }).catch(() => {});
+    for (const s of ['#p2i-save', '#p2i-save-opts', '#p2i-copy']) rowsB.push({ when: '파일 있음(모두 고름)', ...(await probe(s, `pdf2img ${s}`)) });
+    await bp.click('#p2i-none').catch(() => {});
+    for (const s of ['#p2i-save', '#p2i-copy']) rowsB.push({ when: '파일 있음(하나도 안 고름)', ...(await probe(s, `pdf2img ${s}`)) });
+
+    await tool('decorate');
+    await bp.setInputFiles('#decor-input', [fileA]);
+    await until(bp, () => !document.getElementById('decor-file').hidden, undefined, { timeout: 15000 });
+    for (const s of ['#decor-save', '#decor-save-opts']) rowsB.push({ when: '파일 있음(아무것도 안 켬)', ...(await probe(s, `decorate ${s}`)) });
+
+    await tool('compress');
+    await bp.setInputFiles('#cmp-input', [fileA]);
+    await until(bp, () => document.querySelectorAll('#cmp-files > li').length === 1, undefined, { timeout: 15000 });
+    await bp.waitForTimeout(800);
+    for (const s of ['#cmp-go', '#cmp-save', '#cmp-save-opts']) rowsB.push({ when: '파일 있음', ...(await probe(s, `compress ${s}`)) });
+
+    await tool('security');
+    await bp.setInputFiles('#unlock-input', [fileA]);
+    await bp.setInputFiles('#lock-input', [fileA]);
+    await bp.waitForTimeout(500);
+    for (const s of ['#unlock-save', '#unlock-send', '#lock-save']) rowsB.push({ when: '파일 있음(비밀번호 없음)', ...(await probe(s, `security ${s}`)) });
+
+    const silent = rowsB.filter((r) => !r.ok);
+    check(`모든 실행 버튼 · 저장 단축키가 3초 안에 반응(다운로드 · 알림 · 창 · 진행 · 안내) — ${rowsB.length}곳`, silent.length === 0,
+      silent.length ? `반응 없음: ${silent.map((r) => `${r.label}(${r.when})`).join(', ')}` : rowsB.filter((r) => !/숨김|비활성/.test(r.result)).map((r) => `${r.label.split(' ').slice(1).join(' ')}→${r.result}`).join(' · ').slice(0, 400));
+    fs.writeFileSync(path.join(tmp, 'buttons.json'), JSON.stringify(rowsB, null, 1));
+    check('버튼 점검 흐름 콘솔 에러 0개', berr.length === 0, berr.length ? berr.join(' | ').slice(0, 200) : '0개');
+    await bctx.close();
+  }
+
+  // ── 11-h. 다크 모드 · 모든 화면 접근성(axe) · 밝은 조각 · 확대 150/200% · 포커스 순서 · 인쇄 ──
+  {
+    const axePath2 = require.resolve('axe-core/axe.min.js');
+    const shots = path.join(root, 'docs', 'screens');
+    const results = [];
+    const brightAll = [];
+    for (const scheme of ['light', 'dark']) {
+      const actx = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: scheme, bypassCSP: true, acceptDownloads: true });
+      const a = await actx.newPage();
+      const aerr = [];
+      watch(a, aerr);
+      const run = async (where) => {
+        await a.addScriptTag({ path: axePath2 }).catch(() => {});
+        await a.waitForTimeout(150);
+        const v = await a.evaluate(async () => {
+          if (!window.axe) return [{ id: 'axe-missing', impact: 'critical', n: 1, where: '' }];
+          const res = await window.axe.run({ exclude: [['.demo-stage']] }, { resultTypes: ['violations'] });
+          return res.violations.map((x) => ({ id: x.id, impact: x.impact, n: x.nodes.length, where: x.nodes[0] && x.nodes[0].target.join(' ') }));
+        });
+        results.push({ scheme, where, v });
+        if (scheme === 'dark') {
+          // 어두운 화면에 남은 밝은 조각 (쪽 미리보기 · 종이 모양은 원래 흰색이라 뺀다)
+          const bright = await a.evaluate(() => {
+            const lum = (c) => {
+              const m = c.match(/rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?/);
+              if (!m || (m[4] !== undefined && Number(m[4]) < 0.5)) return 0;
+              const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
+              return 0.2126 * f(+m[1]) + 0.7152 * f(+m[2]) + 0.0722 * f(+m[3]);
+            };
+            const skip = '.paper, .thumb, canvas, img, .viewer-canvas, .demo-stage, .sign-pad, .preview, .cv-pane, .stamp-preview, .cmp-thumb, .pv-stage, .print-note, .old-browser-note, .img-card .thumb, .decor-preview, .lib pre';
+            const out = [];
+            for (const el of document.querySelectorAll('body *')) {
+              if (el.closest(skip)) continue;
+              const r = el.getBoundingClientRect();
+              if (r.width * r.height < 1500 || r.bottom < 0 || r.top > innerHeight || r.width === 0) continue;
+              const cs = getComputedStyle(el);
+              if (cs.visibility === 'hidden' || cs.display === 'none' || Number(cs.opacity) < 0.3) continue;
+              if (lum(cs.backgroundColor) > 0.75) out.push(`${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ''}.${[...el.classList].slice(0, 2).join('.')}`);
+            }
+            return [...new Set(out)].slice(0, 8);
+          });
+          if (bright.length) brightAll.push(`${where}: ${bright.join(' ')}`);
+          if (SCREENS) await a.screenshot({ path: path.join(shots, `dark-${where}.png`) });
+        }
+      };
+      await a.goto(BASE, { waitUntil: 'networkidle' });
+      await a.evaluate(() => document.fonts.ready);
+      await run('home');
+      for (const t of ['img2pdf', 'pdf2img', 'decorate', 'compress', 'security']) {
+        await a.evaluate((x) => { location.hash = x; }, t);
+        await until(a, (x) => !document.getElementById(`panel-${x}`).hidden, t);
+        await a.mouse.move(2, 2);
+        await run(t);
+      }
+      // 편집(파일 있음) · 설정하고 저장 창 · 크게 보기 · 새 소식 · 의견
+      await a.evaluate(() => { location.hash = 'edit'; });
+      await a.setInputFiles('#edit-input', [fileA, fileB]);
+      await until(a, () => document.querySelectorAll('#edit-grid .page-card canvas').length === 7, undefined, { timeout: 20000 });
+      await a.evaluate(() => document.getElementById('toasts').replaceChildren());
+      await run('edit');
+      await a.click('#edit-save-opts');
+      await until(a, () => document.getElementById('save-dialog').open);
+      await a.waitForTimeout(500);
+      await run('save-dialog');
+      await a.keyboard.press('Escape');
+      await a.locator('#edit-grid .page-card').first().dblclick({ position: { x: 50, y: 50 } });
+      await until(a, () => window.__pdfWorkshop.viewer().canvas, undefined, { timeout: 15000 });
+      await run('viewer');
+      await a.keyboard.press('Escape');
+      await a.waitForTimeout(200);
+      await a.click('#side-version');
+      await until(a, () => document.getElementById('news-dialog').open);
+      await run('news');
+      await a.keyboard.press('Escape');
+      await a.click('.side-feedback');
+      await until(a, () => document.getElementById('feedback-dialog').open);
+      await run('feedback');
+      await a.keyboard.press('Escape');
+      for (const u of ['check', 'privacy', 'licenses']) {
+        await a.goto(`${BASE}/${u}`, { waitUntil: 'networkidle' });
+        await a.waitForTimeout(u === 'check' ? 1500 : 100);
+        await run(u);
+      }
+      if (aerr.length) results.push({ scheme, where: 'console', v: aerr.map((e) => ({ id: e.slice(0, 80), impact: 'console' })) });
+      await actx.close();
+    }
+    const bad = results.flatMap((r) => r.v.filter((x) => x.impact === 'critical' || x.impact === 'serious' || x.impact === 'console').map((x) => `${r.scheme}/${r.where}:${x.id}(${x.where || ''})`));
+    const screensN = results.length / 2;
+    check(`자동 접근성 검사(axe-core): 라이트 · 다크 × ${screensN}개 화면(도구 6 · 처음 · 창 4 · 안내 3) critical · serious 0개`, bad.length === 0,
+      bad.length ? bad.join(' | ').slice(0, 400) : `${results.length}번 검사 · 모두 0개 (다크 대비 포함)`);
+    check('다크 모드: 어두운 화면에 밝은 조각이 남지 않음(쪽 미리보기 · 종이 제외)', brightAll.length === 0, brightAll.length ? brightAll.join(' | ').slice(0, 400) : `${screensN}개 화면 확인`);
+
+    // 브라우저 확대 150% · 200% 흉내(CSS 픽셀 폭을 1280/1.5, 1280/2로 줄임)
+    const zoomRes = [];
+    for (const [z, w, hgt] of [[150, 853, 600], [200, 640, 450]]) {
+      const zc = await browser.newContext({ viewport: { width: w, height: hgt }, colorScheme: 'light', deviceScaleFactor: z / 100 });
+      const zp = await zc.newPage();
+      await zp.goto(BASE, { waitUntil: 'networkidle' });
+      const homeSw = await zp.evaluate(() => document.documentElement.scrollWidth);
+      await zp.setInputFiles('#home-input', [fileA, fileB]);
+      await until(zp, () => document.querySelectorAll('#edit-grid .page-card').length === 7);
+      const lay = await zp.evaluate(() => {
+        const bar = document.getElementById('edit-bar').getBoundingClientRect();
+        const side = document.querySelector('.sidebar').getBoundingClientRect();
+        const main = document.querySelector('.work').getBoundingClientRect();
+        const btns = [...document.querySelectorAll('#edit-bar button')].filter((b) => b.offsetParent).map((b) => b.getBoundingClientRect());
+        return {
+          sw: document.documentElement.scrollWidth,
+          barIn: bar.left >= -1 && bar.right <= innerWidth + 1 && bar.bottom <= innerHeight + 1,
+          btnIn: btns.every((r) => r.left >= -1 && r.right <= innerWidth + 1 && r.width >= 24),
+          overlap: side.width > 0 && side.height > 200 && side.right > main.left + 2,
+        };
+      });
+      await zp.click('#edit-save-opts');
+      await until(zp, () => document.getElementById('save-dialog').open);
+      const dlg = await zp.evaluate(() => {
+        const d = document.getElementById('save-dialog').getBoundingClientRect();
+        const sv = document.getElementById('sd-save').getBoundingClientRect();
+        return { inside: d.left >= -1 && d.right <= innerWidth + 1 && d.top >= -1 && d.bottom <= innerHeight + 1, save: sv.bottom <= innerHeight + 1 && sv.right <= innerWidth + 1 && sv.width > 0 };
+      });
+      await zp.keyboard.press('Escape');
+      zoomRes.push({ z, homeSw, w, ...lay, ...dlg });
+      await zc.close();
+    }
+    check('브라우저 확대 150% · 200%: 가로 스크롤 없음 · 저장 막대 버튼 화면 안 · 사이드바 안 겹침 · 설정 창과 [저장] 단추가 화면 안',
+      zoomRes.every((r) => r.homeSw <= r.w && r.sw <= r.w && r.barIn && r.btnIn && !r.overlap && r.inside && r.save),
+      zoomRes.map((r) => `${r.z}%: 폭 ${r.sw}/${r.w} · 막대 ${r.barIn && r.btnIn ? 'OK' : '넘침'} · 사이드바 ${r.overlap ? '겹침' : 'OK'} · 창 ${r.inside && r.save ? 'OK' : '넘침'}`).join(' / '));
+
+    // 포커스 순서: 처음 화면에서 Tab을 누르면 보이는 것만, 위에서 아래로
+    const fctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: 'light' });
+    const fp = await fctx.newPage();
+    await fp.goto(BASE, { waitUntil: 'networkidle' });
+    const stops = [];
+    for (let i = 0; i < 24; i++) {
+      await fp.keyboard.press('Tab');
+      stops.push(await fp.evaluate(() => {
+        const e = document.activeElement;
+        const r = e.getBoundingClientRect();
+        return { name: (e.getAttribute('aria-label') || e.textContent || e.id || e.tagName).trim().replace(/\s+/g, ' ').slice(0, 16), y: Math.round(r.top + scrollY), vis: r.width > 0 && r.height > 0 };
+      }));
+    }
+    const hiddenStops = stops.filter((s) => !s.vis);
+    let backJumps = 0;
+    for (let i = 1; i < stops.length; i++) if (stops[i].y < stops[i - 1].y - 80) backJumps++;
+    await fctx.close();
+    check('포커스 순서(처음 화면 Tab 24번): [파일 고르기]에 닿고, 안 보이는 곳에 멈추지 않고 위에서 아래로', hiddenStops.length === 0 && backJumps <= 1 && stops.some((s) => /파일 고르기/.test(s.name)),
+      `${stops.slice(0, 10).map((s) => s.name).join(' → ')} … · 숨은 곳 ${hiddenStops.length} · 위로 되돌아감 ${backJumps}`);
+
+    // 인쇄: 앱 화면 대신 "PDF를 저장한 뒤 그 파일을 인쇄하세요"
+    const pc = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const pp2 = await pc.newPage();
+    await pp2.goto(BASE, { waitUntil: 'networkidle' });
+    await pp2.emulateMedia({ media: 'print' });
+    const pr = await pp2.evaluate(() => ({ note: document.querySelector('.print-note').getBoundingClientRect().height, text: document.querySelector('.print-note').innerText, home: document.getElementById('view-home').getBoundingClientRect().height }));
+    if (SCREENS) await pp2.screenshot({ path: path.join(shots, 'print.png') });
+    await pc.close();
+    check('인쇄(Ctrl+P): 앱 화면 대신 "PDF를 저장한 뒤 그 파일을 인쇄하세요" 한 장', pr.note > 50 && pr.home === 0 && /PDF를 저장한 뒤 그 파일을 인쇄하세요/.test(pr.text), `안내 ${Math.round(pr.note)}px · 앱 ${pr.home}px`);
+
+    // 저사양 흉내: CPU 4배 느리게 + 153쪽 → 썸네일이 끝까지 그려지고 3초 넘게 멈추지 않음
+    const big = await PDFDocument.create();
+    const bf = await big.embedFont(StandardFonts.Helvetica);
+    for (let i = 0; i < 153; i++) {
+      const pg = big.addPage([595, 842]);
+      pg.drawText(`Page ${i + 1}`, { x: 60, y: 760, size: 36, font: bf });
+      for (let k = 0; k < 12; k++) pg.drawRectangle({ x: 60, y: 700 - k * 40, width: 400 + ((k * 37 + i) % 80), height: 8, color: rgb(0.8, 0.83, 0.9) });
+    }
+    const bigFile = await writePdf('153쪽.pdf', big);
+    const lctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: 'light' });
+    const lp = await lctx.newPage();
+    const lerr = [];
+    watch(lp, lerr);
+    await lp.goto(BASE, { waitUntil: 'networkidle' });
+    const cdpL = await lctx.newCDPSession(lp);
+    await cdpL.send('Emulation.setCPUThrottlingRate', { rate: 4 });
+    await lp.evaluate(() => {
+      window.__long = [];
+      try { new PerformanceObserver((l) => l.getEntries().forEach((e) => window.__long.push(Math.round(e.duration)))).observe({ type: 'longtask', buffered: false }); } catch { /* 없음 */ }
+    });
+    const tl0 = Date.now();
+    await lp.setInputFiles('#home-input', [bigFile]);
+    await until(lp, () => document.querySelectorAll('#edit-grid .page-card').length === 153, undefined, { timeout: 120000 });
+    const cardsAt = Date.now() - tl0;
+    // 아래로 내려가며 모든 썸네일이 그려지는지
+    let painted = 0;
+    const scrollEnd = Date.now() + 240000;
+    while (Date.now() < scrollEnd) {
+      painted = await lp.evaluate(() => {
+        const cs = [...document.querySelectorAll('#edit-grid .page-card')];
+        const first = cs.find((c) => !c.querySelector('.thumb canvas'));
+        if (first) first.scrollIntoView({ block: 'center' });
+        return cs.filter((c) => c.querySelector('.thumb canvas')).length;
+      });
+      if (painted === 153) break;
+      await lp.waitForTimeout(400);
+    }
+    const allAt = Date.now() - tl0;
+    const longs = await lp.evaluate(() => window.__long);
+    await cdpL.send('Emulation.setCPUThrottlingRate', { rate: 1 });
+    await lctx.close();
+    const maxLong = longs.length ? Math.max(...longs) : 0;
+    check('저사양 흉내(CPU 4배 느리게) 153쪽: 썸네일 끝까지 · 화면이 3초 이상 멈추지 않음', painted === 153 && maxLong < 3000 && lerr.length === 0,
+      `카드 ${(cardsAt / 1000).toFixed(1)}초 · 썸네일 ${painted}/153 ${(allAt / 1000).toFixed(1)}초 · 가장 긴 멈춤 ${maxLong}ms(50ms 넘는 것 ${longs.length}번)`);
+    uiMeasures.push(`CPU 4배 느리게 153쪽: 카드 ${(cardsAt / 1000).toFixed(1)}초, 썸네일 전부 ${(allAt / 1000).toFixed(1)}초, 가장 긴 멈춤 ${maxLong}ms`);
+  }
+
+  // ── 11-i. 최근 작업 이어하기(기본 꺼짐) · 이 브라우저에 저장된 것 모두 지우기 ──
+  {
+    const rctx2 = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: 'light' });
+    const r = await rctx2.newPage();
+    r.setDefaultTimeout(10000);
+    let rStep = '시작';
+    try {
+    const rerr2 = [];
+    watch(r, rerr2);
+    await r.goto(BASE, { waitUntil: 'networkidle' });
+    await until(r, () => !!navigator.serviceWorker.controller, undefined, { timeout: 60000 });
+    // 기본 꺼짐: 파일을 넣어도 저장하지 않는다
+    await r.setInputFiles('#home-input', [fileA, fileB]);
+    await until(r, () => document.querySelectorAll('#edit-grid .page-card').length === 7);
+    await r.waitForTimeout(1200);
+    const off = await r.evaluate(async () => ({ st: window.__pdfWorkshop.resume(), stored: await window.__pdfWorkshop.resumeStored() }));
+    // 설정에서 켜기
+    rStep = '설정 열기';
+    await r.click('.sidebar [data-settings]');
+    await until(r, () => document.getElementById('settings-dialog').open);
+    const setText = await r.evaluate(() => document.getElementById('settings-dialog').textContent);
+    const swDefault = await r.evaluate(() => document.getElementById('set-resume').checked);
+    await r.click('label.set-row');
+    await r.keyboard.press('Escape');
+    // 1쪽 오른쪽 90°, 2쪽 삭제 예정, 3쪽을 맨 앞으로(Alt+←)
+    rStep = '카드 조작';
+    await r.locator('#edit-grid .page-card').nth(0).hover();
+    await r.locator('#edit-grid .page-card').nth(0).locator('[data-act="rot"]').click();
+    await r.locator('#edit-grid .page-card').nth(1).hover();
+    await r.locator('#edit-grid .page-card').nth(1).locator('.card-tools [data-act="del"]').click();
+    await r.locator('#edit-grid .page-card').nth(2).focus();
+    await r.keyboard.press('Alt+ArrowLeft');
+    await r.keyboard.press('Alt+ArrowLeft');
+    await r.evaluate(() => window.__pdfWorkshop.resumeFlush());
+    const before = await r.evaluate(() => [...document.querySelectorAll('#edit-grid .page-card')].map((c) => c.dataset.label + (c.classList.contains('deleted') ? '(삭제)' : '') + (/90도/.test(c.getAttribute('aria-label')) ? '(90)' : '')));
+    const on = await r.evaluate(async () => ({ st: window.__pdfWorkshop.resume(), stored: await window.__pdfWorkshop.resumeStored() }));
+    // 브라우저를 닫았다 연 것처럼 새로고침 → 제안 → 이어하기
+    rStep = '다시 열기(제안)';
+    await r.reload({ waitUntil: 'networkidle' });
+    await until(r, () => !document.getElementById('resume-note').hidden, undefined, { timeout: 5000 });
+    const offerText = await r.textContent('#resume-text');
+    if (SCREENS) await r.screenshot({ path: path.join(root, 'docs', 'screens', 'resume.png') });
+    rStep = '이어하기';
+    await r.click('#resume-go');
+    await until(r, () => document.querySelectorAll('#edit-grid .page-card').length === 7, undefined, { timeout: 20000 });
+    const after = await r.evaluate(() => [...document.querySelectorAll('#edit-grid .page-card')].map((c) => c.dataset.label + (c.classList.contains('deleted') ? '(삭제)' : '') + (/90도/.test(c.getAttribute('aria-label')) ? '(90)' : '')));
+    check('작업 이어하기: 기본 꺼짐(저장 안 함) → 설정에서 켜면 파일 · 순서 · 회전 · 삭제 예정 저장 → 다시 열면 "지난 작업을 이어 할까요? (파일 2개 · 방금)" → 그대로 복원',
+      !swDefault && !off.st.on && !off.stored && /IndexedDB.*공용 컴퓨터에서는 끄는 게 좋아요/.test(setText) && on.stored && on.stored.files === 2 && on.stored.pages === 7 &&
+      /지난 작업을 이어 할까요\? \(파일 2개 · 방금\)/.test(offerText) && after.join('|') === before.join('|'),
+      `꺼짐: 저장 ${off.stored ? '있음' : '없음'} → 켜짐: 파일 ${on.stored && on.stored.files}개 · ${on.stored && on.stored.pages}쪽 → "${offerText}" → ${after.slice(0, 3).join(', ')}…`);
+
+    // 지우기 → 다시 열어도 제안 없음
+    await r.evaluate(() => window.__pdfWorkshop.resumeFlush());
+    await r.reload({ waitUntil: 'networkidle' });
+    await until(r, () => !document.getElementById('resume-note').hidden, undefined, { timeout: 5000 });
+    rStep = '지우기';
+    await r.click('#resume-drop');
+    await r.reload({ waitUntil: 'networkidle' });
+    await r.waitForTimeout(600);
+    const noteAfterDrop = await r.evaluate(async () => ({ hidden: document.getElementById('resume-note').hidden, stored: await window.__pdfWorkshop.resumeStored() }));
+    // 500MB 제한(점검에서는 제한을 1KB로 낮춰 흉내)
+    await r.evaluate(() => window.__pdfWorkshop.resumeLimit(1024));
+    await r.evaluate(() => document.getElementById('toasts').replaceChildren());
+    await r.setInputFiles('#home-input', [fileA]);
+    await until(r, () => document.querySelectorAll('#edit-grid .page-card').length === 3);
+    await r.evaluate(() => window.__pdfWorkshop.resumeFlush());
+    const limit = await r.evaluate(async () => ({ toast: document.getElementById('toasts').textContent, stored: await window.__pdfWorkshop.resumeStored() }));
+    check('작업 이어하기: [지우기] 후에는 제안 없음 · 500MB를 넘으면 저장하지 않고 안내', noteAfterDrop.hidden && !noteAfterDrop.stored && /500MB를 넘어 이어하기용으로 저장하지 않았어요/.test(limit.toast) && !limit.stored,
+      `지우기 후 제안 ${noteAfterDrop.hidden ? '없음' : '있음'} · 제한 넘음 → "${limit.toast.slice(0, 32)}…"`);
+
+    // 모두 지우기: localStorage · 서명 · 최근 작업 · 캐시 · 서비스 워커
+    await r.evaluate(async () => {
+      localStorage.setItem('pdfws.saveOpts', '{"x":1}');
+      const d = await new Promise((res) => { const q = indexedDB.open('pdf-workshop', 2); q.onsuccess = () => res(q.result); });
+      await new Promise((res) => { const t = d.transaction('stamps', 'readwrite'); t.objectStore('stamps').put({ id: 'test-stamp', created: 1, bytes: new ArrayBuffer(4) }); t.oncomplete = res; });
+      d.close();
+    });
+    rStep = '푸터 설정';
+    await r.click('.site-foot [data-settings]').catch(async () => { await r.click('#logo'); await r.click('.site-foot [data-settings]'); });
+    await until(r, () => document.getElementById('settings-dialog').open);
+    rStep = '모두 지우기';
+    await r.click('#set-wipe');
+    await until(r, () => document.getElementById('confirm-dialog').open);
+    await r.click('#cf-yes');
+    await r.waitForTimeout(800);
+    const wiped = await r.evaluate(async () => {
+      const keys = Object.keys(localStorage).filter((k) => k.startsWith('pdfws.'));
+      const d = await new Promise((res) => { const q = indexedDB.open('pdf-workshop', 2); q.onsuccess = () => res(q.result); });
+      const n = await new Promise((res) => { const t = d.transaction(['stamps', 'session'], 'readonly'); const a = t.objectStore('stamps').count(); const b = t.objectStore('session').count(); t.oncomplete = () => res(a.result + b.result); });
+      d.close();
+      const cacheNames = (await caches.keys()).filter((c) => c.startsWith('pdfws-'));
+      const regs = await navigator.serviceWorker.getRegistrations();
+      return { keys, n, caches: cacheNames.length, regs: regs.length, sw: document.getElementById('set-resume').checked, toast: document.getElementById('toasts').textContent };
+    });
+    check('설정 → "이 브라우저에 저장된 것 모두 지우기": 확인 후 설정 · 서명 · 최근 작업 · 캐시 · 서비스 워커 모두 지움',
+      wiped.keys.length === 0 && wiped.n === 0 && wiped.caches === 0 && wiped.regs === 0 && !wiped.sw && /모두 지웠어요/.test(wiped.toast) && rerr2.length === 0,
+      `localStorage ${wiped.keys.length} · IndexedDB ${wiped.n} · 캐시 ${wiped.caches} · 서비스 워커 ${wiped.regs}${rerr2.length ? ` · 에러 ${rerr2.join(' | ').slice(0, 120)}` : ''}`);
+    } catch (e) {
+      check(`작업 이어하기 흐름 (${rStep})`, false, String(e.message || e).split('\n').slice(0, 4).join(' ').slice(0, 300));
+    }
+    await rctx2.close();
   }
 
   // ── 12. 스크린샷 ──

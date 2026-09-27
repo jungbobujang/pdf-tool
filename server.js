@@ -41,15 +41,82 @@ const COMMIT = VERSION.commit;
 
 // index.html의 app.js · style.css · pdf-core.js 주소에 ?v=커밋 을 붙인다.
 // 커밋이 바뀌면 주소가 바뀌므로 브라우저나 중간 캐시에 옛 파일이 남지 않는다.
-const ASSETS = ['style.css', 'pdf-core.js', 'compress.js', 'guide-anim.js', 'app.js'];
-function renderIndex() {
-  let html = fs.readFileSync(path.join(PUBLIC, 'index.html'), 'utf8');
-  for (const a of ASSETS) {
+// 공유 미리보기(Open Graph)에 쓰는 사이트 주소. 다른 주소로 배포하면 PUBLIC_URL 환경 변수로 바꾼다.
+const PUBLIC_URL = (process.env.PUBLIC_URL || 'https://pdf-tool-production-a037.up.railway.app').replace(/\/$/, '');
+const ASSETS = ['style.css', 'compat.js', 'config.js', 'pdf-core.js', 'compress.js', 'guide-anim.js', 'app.js'];
+// 안내 페이지(/check · /privacy · /licenses)가 쓰는 파일
+const PAGE_ASSETS = ['pages.js'];
+function renderHtml(file) {
+  let html = fs.readFileSync(file, 'utf8');
+  html = html.replace('<meta name="app-version" content="">', `<meta name="app-version" content="${COMMIT}">`);
+  html = html.replace('<!-- CSP_LIST -->', () => CSP_LIST_HTML);
+  // 공유 미리보기 그림은 절대 주소여야 메신저가 가져간다
+  html = html.replace(/__ORIGIN__/g, PUBLIC_URL);
+  for (const a of [...ASSETS, ...PAGE_ASSETS]) {
     html = html.replace(new RegExp(`(href|src)="${a.replace('.', '\.')}"`, 'g'), `$1="${a}?v=${COMMIT}"`);
   }
   return html;
 }
+const renderIndex = () => renderHtml(path.join(PUBLIC, 'index.html'));
 const INDEX_HTML = renderIndex();
+
+// 브라우저에 거는 규칙(CSP). /check 페이지에서도 이 내용을 그대로 보여 준다.
+const CSP_RULES = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self'",
+  "img-src 'self' blob: data:",
+  "font-src 'self'",
+  "worker-src 'self' blob:",
+  "connect-src 'self'",
+  "object-src 'none'",
+  "frame-ancestors 'none'",
+  "form-action 'none'",
+  "base-uri 'self'",
+];
+const CSP = CSP_RULES.join('; ');
+// /check 페이지에 보여 줄 규칙 설명
+const CSP_WHY = {
+  'default-src': '따로 정하지 않은 것은 모두 이 사이트에서만 받아요.',
+  'script-src': '실행되는 코드는 이 사이트 것뿐이에요. 다른 곳 스크립트 · 페이지 안에 끼워 넣은 코드 · eval은 막혀요.',
+  'style-src': '화면 모양(CSS)도 이 사이트 것만 써요.',
+  'img-src': '그림은 이 사이트와 브라우저 안에서 만든 것(blob · data)만 보여요.',
+  'font-src': '글꼴도 이 사이트에서만 받아요.',
+  'worker-src': '뒤에서 도는 작업(PDF 그리기 · 용량 줄이기)도 이 사이트 코드로만 돌아요.',
+  'connect-src': '가장 중요한 규칙: 이 사이트 말고는 어디로도 데이터를 보낼 수 없어요. 코드가 파일을 보내려 해도 브라우저가 막아요.',
+  'object-src': '플러그인(옛 플래시 같은 것)은 쓰지 않아요.',
+  'frame-ancestors': '다른 사이트가 이 화면을 몰래 틀 안에 넣어 보여 줄 수 없어요.',
+  'form-action': '양식을 다른 곳으로 제출할 수 없어요.',
+  'base-uri': '페이지의 기준 주소를 바꿔 다른 곳을 가리키게 할 수 없어요.',
+};
+const escHtml = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const CSP_LIST_HTML = CSP_RULES.map((r) => `<li><code>${escHtml(r)}</code><span>${escHtml(CSP_WHY[r.split(' ')[0]] || '')}</span></li>`).join('\n        ');
+
+// 오프라인용 서비스 워커가 설치 때 미리 받아 둘 파일 (커밋이 바뀌면 캐시 이름도 바뀐다)
+const listDir = (dir, prefix) => {
+  try { return fs.readdirSync(dir).filter((f) => !f.startsWith('.')).map((f) => `${prefix}/${encodeURIComponent(f)}`); } catch { return []; }
+};
+const PAGES = ['/check', '/privacy', '/licenses'].filter((p) => fs.existsSync(path.join(PUBLIC, 'pages', `${p.slice(1)}.html`)));
+function precacheList() {
+  return [
+    '/',
+    ...ASSETS.map((a) => `/${a}?v=${COMMIT}`),
+    `/compress-worker.js?v=${COMMIT}`,
+    '/manifest.webmanifest',
+    ...listDir(path.join(PUBLIC, 'icons'), '/icons'),
+    ...PAGES,
+    '/changelog.json',
+    ...PAGE_ASSETS.map((a) => `/${a}?v=${COMMIT}`),
+    '/vendor/pdf-lib.min.js', '/vendor/pdf.min.js', '/vendor/pdf.worker.min.js', '/vendor/jszip.min.js', '/vendor/pako.min.js', '/vendor/fontkit.min.js',
+    '/vendor/jpeg-decoder.js',
+    '/vendor/pretendard/pretendardvariable.min.css',
+    // 화면 글꼴: 모든 굵기가 든 가변 글꼴 한 개(화면이 바로 씀)
+    ...listDir(nm('pretendard', 'dist', 'web', 'variable', 'woff2'), '/vendor/pretendard/woff2'),
+  ];
+}
+// 미리 받지 않고 처음 쓸 때 받아 두는 것(런타임 캐시, 같은 캐시 이름):
+// 아이폰 사진 변환기(약 3MB), pdf.js 문자표 · 표준 글꼴(필요한 PDF에서만), 워터마크용 글꼴
+const RUNTIME_PREFIXES = ['/vendor/heic/', '/vendor/cmaps/', '/vendor/standard_fonts/', '/vendor/fonts/'];
 
 // 라이브러리는 CDN 없이 node_modules에서 직접 제공한다.
 const VENDOR = {
@@ -67,21 +134,8 @@ app.use((req, res, next) => {
   res.set('X-Content-Type-Options', 'nosniff');
   res.set('Referrer-Policy', 'no-referrer');
   // 외부로 나가는 연결을 막아 파일이 브라우저 밖으로 새지 않게 한다.
-  res.set(
-    'Content-Security-Policy',
-    [
-      "default-src 'self'",
-      "script-src 'self'",
-      "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' blob: data:",
-      "worker-src 'self' blob:",
-      "connect-src 'self' blob: data:",
-      "font-src 'self' data:",
-      "object-src 'none'",
-      "base-uri 'self'",
-      "form-action 'none'",
-    ].join('; ')
-  );
+  // (connect-src 'self': 이 사이트 말고는 어디로도 데이터를 보낼 수 없다. 스크립트 · 글꼴 · 스타일도 이 사이트 것만)
+  res.set('Content-Security-Policy', CSP);
   next();
 });
 
@@ -136,6 +190,31 @@ app.get('/version', (req, res) => {
   res.set('Cache-Control', 'no-store');
   res.json(VERSION);
 });
+
+// 서비스 워커: 커밋과 미리 받을 목록을 넣어서 준다. 늘 새로 확인해야 새 버전을 알아챈다.
+const SW_JS = () => fs.readFileSync(path.join(PUBLIC, 'sw.js'), 'utf8')
+  .replace("'__COMMIT__'", JSON.stringify(COMMIT))
+  .replace('[/* __PRECACHE__ */]', JSON.stringify(precacheList(), null, 1))
+  .replace('[/* __RUNTIME__ */]', JSON.stringify(RUNTIME_PREFIXES));
+const SW_CACHED = SW_JS();
+app.get('/sw.js', (req, res) => {
+  res.set('Cache-Control', 'no-cache');
+  res.type('application/javascript');
+  res.send(process.env.NODE_ENV === 'development' ? SW_JS() : SW_CACHED);
+});
+app.get('/manifest.webmanifest', (req, res) => {
+  res.set('Cache-Control', 'no-cache');
+  res.type('application/manifest+json');
+  res.sendFile(path.join(PUBLIC, 'manifest.webmanifest'));
+});
+
+// 안내 페이지: 직접 확인하는 법 · 개인정보 안내 · 사용한 라이브러리
+const PAGE_HTML = Object.fromEntries(PAGES.map((p) => [p, renderHtml(path.join(PUBLIC, 'pages', `${p.slice(1)}.html`))]));
+app.get(PAGES, (req, res) => {
+  res.set('Cache-Control', 'no-cache');
+  res.type('html').send(process.env.NODE_ENV === 'development' ? renderHtml(path.join(PUBLIC, 'pages', `${req.path.slice(1)}.html`)) : PAGE_HTML[req.path]);
+});
+app.get('/changelog.json', (req, res, next) => { res.set('Cache-Control', 'no-cache'); next(); });
 
 // HTML은 항상 서버에 새로 확인한다.
 app.get(['/', '/index.html'], (req, res) => {

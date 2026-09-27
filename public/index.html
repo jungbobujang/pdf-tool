@@ -2,14 +2,51 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8">
+  <script src="compat.js"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light dark">
   <title>PDF 작업실</title>
-  <meta name="description" content="PDF 합치기, 자르기, 회전, 사진 변환, 암호, 쪽번호를 파일을 올리지 않고 브라우저 안에서 처리합니다.">
+  <meta name="description" content="PDF 합치기 · 나누기 · 암호 · 용량 줄이기. 파일은 컴퓨터 밖으로 안 나가요.">
+  <!-- 공유 미리보기(카카오톡 · 메신저 · SNS) -->
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="PDF 작업실">
+  <meta property="og:title" content="PDF 작업실">
+  <meta property="og:description" content="PDF 합치기·나누기·암호·용량 줄이기, 파일은 컴퓨터 밖으로 안 나가요">
+  <meta property="og:url" content="__ORIGIN__/">
+  <meta property="og:image" content="__ORIGIN__/icons/og-image.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="PDF 작업실 — PDF 합치기 · 나누기 · 암호 · 용량 줄이기">
+  <meta property="og:locale" content="ko_KR">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="app-version" content="">
+  <meta name="theme-color" content="#141B2E">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icons/logo.svg" type="image/svg+xml">
+  <link rel="icon" href="/icons/favicon-32.png" sizes="32x32" type="image/png">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
   <link rel="stylesheet" href="/vendor/pretendard/pretendardvariable.min.css">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <!-- 자바스크립트가 꺼져 있거나 오래된 브라우저면 앱 대신 이 안내만 보인다 -->
+  <noscript>
+    <div class="old-browser-note">
+      <h1>이 브라우저에서는 열 수 없어요</h1>
+      <p>자바스크립트가 꺼져 있어요. 엣지, 크롬, 웨일로 열어 주세요.</p>
+    </div>
+  </noscript>
+  <!-- 인쇄(Ctrl+P)하면 앱 화면 대신 이 한 장만 나온다 -->
+  <div class="print-note">
+    <h1>PDF 작업실</h1>
+    <p><b>PDF를 저장한 뒤 그 파일을 인쇄하세요.</b></p>
+    <p>이 화면은 인쇄용이 아니에요. [바로 저장]으로 PDF를 저장하고, 다운로드 폴더에서 그 파일을 열어 인쇄하면 쪽 크기와 여백이 그대로 나와요.</p>
+  </div>
+  <div class="old-browser-note" id="old-browser" hidden>
+    <h1>이 브라우저에서는 열 수 없어요</h1>
+    <p>엣지, 크롬, 웨일로 열어 주세요.</p>
+    <p>인터넷 익스플로러나 오래된 브라우저에서는 PDF를 브라우저 안에서 처리하는 기능을 쓸 수 없어요.</p>
+  </div>
   <!-- 선 아이콘 모음 -->
   <svg class="sprite" aria-hidden="true" focusable="false">
     <defs>
@@ -22,6 +59,11 @@
       <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4"/><path d="m6.5 9.5 5.5-5.5 5.5 5.5"/><path d="M4 16v2.5A2.5 2.5 0 0 0 6.5 21h11a2.5 2.5 0 0 0 2.5-2.5V16"/></symbol>
       <symbol id="i-rotate" viewBox="0 0 24 24"><path d="M20 11.5A8 8 0 1 1 17.7 6"/><path d="M20 4v5h-5"/></symbol>
       <symbol id="i-swap" viewBox="0 0 24 24"><path d="M4 8h15"/><path d="m15 4 4 4-4 4"/><path d="M20 16H5"/><path d="m9 12-4 4 4 4"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></symbol>
+      <symbol id="i-zoom-in" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2M8 11h6M11 8v6"/></symbol>
+      <symbol id="i-zoom-out" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2M8 11h6"/></symbol>
+      <symbol id="i-left" viewBox="0 0 24 24"><path d="m15 5-7 7 7 7"/></symbol>
+      <symbol id="i-right" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
       <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
       <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
       <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
@@ -41,12 +83,32 @@
 
   <div id="toasts" class="toasts" aria-live="assertive" popover="manual"></div>
 
+  <!-- 지난 작업 이어하기 제안 (설정에서 켠 경우에만) -->
+  <div class="resume-note" id="resume-note" role="status" hidden>
+    <svg class="ic" aria-hidden="true"><use href="#i-undo"/></svg>
+    <span id="resume-text">지난 작업을 이어 할까요?</span>
+    <span class="btn-row">
+      <button type="button" class="btn primary sm" id="resume-go">이어하기</button>
+      <button type="button" class="btn sm" id="resume-drop">지우기</button>
+    </span>
+  </div>
+
+  <!-- 새 버전 알림 (서비스 워커가 새 버전을 받아 두면) -->
+  <div class="update-bar" id="update-bar" role="status" hidden>
+    <span id="update-text">새 버전이 있어요.</span>
+    <button type="button" class="btn sm" id="update-go">새로고침</button>
+    <button type="button" class="update-x" id="update-x" aria-label="새 버전 알림 닫기"><svg class="ic sm" aria-hidden="true"><use href="#i-x"/></svg></button>
+  </div>
+
   <!-- ① 처음 화면 -->
   <div class="view view-home" id="view-home">
     <header class="hero">
       <div class="hero-bar">
         <a href="./" class="logo" id="logo-home" title="처음 화면으로"><span class="logo-mark" aria-hidden="true"></span>PDF 작업실</a>
-        <p class="safe"><span class="safe-dot" aria-hidden="true"></span>파일은 이 컴퓨터 밖으로 나가지 않아요</p>
+        <div class="hero-right">
+          <p class="safe"><span class="safe-dot" aria-hidden="true"></span>파일은 이 컴퓨터 밖으로 나가지 않아요<span class="offline-badge" hidden>지금 인터넷 없이 작동 중</span></p>
+          <button type="button" class="btn install-btn" id="install-btn" hidden><svg class="ic sm" aria-hidden="true"><use href="#i-filedown"/></svg>바탕화면에 설치</button>
+        </div>
       </div>
       <div class="hero-text">
         <h1 class="hero-title" id="home-title">PDF, <em>올리지 않고</em> 바로 고치세요</h1>
@@ -67,45 +129,96 @@
 
       <h2 class="sr-only">도구</h2>
       <div class="tool-cards" id="tool-cards">
-        <button type="button" class="tool-card" data-open="edit" style="--tc: var(--c1)">
+        <button type="button" class="tool-card" data-open="edit">
           <span class="tool-icon"><svg class="ic"><use href="#i-layers"/></svg></span>
           <strong>편집 · 합치기</strong>
           <span class="tool-desc">여러 PDF를 펼쳐 순서 바꾸기, 쪽 빼기, 교체</span>
           <span class="tool-open">열기 →</span>
         </button>
-        <button type="button" class="tool-card" data-open="img2pdf" style="--tc: var(--c2)">
+        <button type="button" class="tool-card" data-open="img2pdf">
           <span class="tool-icon"><svg class="ic"><use href="#i-image"/></svg></span>
           <strong>사진 → PDF</strong>
           <span class="tool-desc">휴대폰 사진, 스캔한 활동지를 한 파일로</span>
           <span class="tool-open">열기 →</span>
         </button>
-        <button type="button" class="tool-card" data-open="pdf2img" style="--tc: var(--c3)">
+        <button type="button" class="tool-card" data-open="pdf2img">
           <span class="tool-icon"><svg class="ic"><use href="#i-filecheck"/></svg></span>
           <strong>PDF → 사진</strong>
           <span class="tool-desc">원하는 쪽만 PNG · JPG로 꺼내 PPT에 붙이기</span>
           <span class="tool-open">열기 →</span>
         </button>
-        <button type="button" class="tool-card" data-open="decorate" style="--tc: var(--c5)">
+        <button type="button" class="tool-card" data-open="decorate">
           <span class="tool-icon"><svg class="ic"><use href="#i-brush"/></svg></span>
           <strong>꾸미기</strong>
           <span class="tool-desc">쪽번호 · 워터마크 · 서명과 도장 넣기</span>
           <span class="tool-open">열기 →</span>
         </button>
-        <button type="button" class="tool-card" data-open="compress" style="--tc: var(--c6)">
+        <button type="button" class="tool-card" data-open="compress">
           <span class="tool-icon"><svg class="ic"><use href="#i-filedown"/></svg></span>
           <strong>용량 줄이기</strong>
           <span class="tool-desc">공문 10MB, 메일 20MB에 맞게 줄이기</span>
           <span class="tool-open">열기 →</span>
         </button>
-        <button type="button" class="tool-card" data-open="security" style="--tc: var(--c4)">
+        <button type="button" class="tool-card" data-open="security">
           <span class="tool-icon"><svg class="ic"><use href="#i-lock"/></svg></span>
           <strong>보안</strong>
           <span class="tool-desc">암호 걸기 · 풀기, 걸린 제한 보기</span>
           <span class="tool-open">열기 →</span>
         </button>
       </div>
-      <p class="app-version" id="home-version" aria-label="배포 버전"></p>
+
+      <section class="home-sec trust" aria-labelledby="trust-h">
+        <div class="home-sec-head">
+          <h2 id="trust-h">정말 밖으로 안 나가나요?</h2>
+          <a class="btn" href="/check">직접 확인하는 법 →</a>
+        </div>
+        <ol class="trust-steps">
+          <li><b aria-hidden="true">1</b><strong>브라우저 안에서만 고쳐요</strong><span>파일은 이 컴퓨터의 브라우저가 직접 처리해요. 서버에는 파일을 받는 기능이 아예 없어요.</span></li>
+          <li><b aria-hidden="true">2</b><strong>인터넷을 꺼도 돼요</strong><span>한 번 열어 두면 와이파이를 꺼도 그대로 작동해요. 파일을 보낼 곳이 없다는 뜻이에요.</span></li>
+          <li><b aria-hidden="true">3</b><strong>브라우저가 연결을 막아요</strong><span>이 사이트 말고는 어디로도 데이터를 못 보내도록 브라우저에 규칙(CSP)을 걸어 뒀어요.</span></li>
+        </ol>
+      </section>
+
+      <section class="home-sec" aria-labelledby="quick-h">
+        <h2 id="quick-h">자주 하는 작업</h2>
+        <div class="quick-cards">
+          <button type="button" class="quick-card" data-quick="compress10" data-open-tool="compress">
+            <span class="quick-icon" aria-hidden="true"><svg class="ic"><use href="#i-filedown"/></svg></span>
+            <span class="quick-text"><strong>공문 첨부용 10MB 만들기</strong><span>용량 줄이기 · 목표를 10MB로 맞춰 둬요</span></span>
+          </button>
+          <button type="button" class="quick-card" data-quick="scan" data-open-tool="edit">
+            <span class="quick-icon" aria-hidden="true"><svg class="ic"><use href="#i-layers"/></svg></span>
+            <span class="quick-text"><strong>스캔본 정리해서 합치기</strong><span>편집 · 합치기 · 빈 쪽과 크기가 다른 쪽을 알려 줘요</span></span>
+          </button>
+          <button type="button" class="quick-card" data-quick="photos" data-open-tool="img2pdf">
+            <span class="quick-icon" aria-hidden="true"><svg class="ic"><use href="#i-image"/></svg></span>
+            <span class="quick-text"><strong>학습지 사진을 PDF로</strong><span>사진 → PDF · 휴대폰 사진 방향도 맞춰요</span></span>
+          </button>
+        </div>
+      </section>
+
+      <section class="home-sec" aria-labelledby="news-h" id="home-news" hidden>
+        <div class="home-sec-head">
+          <h2 id="news-h">새 소식</h2>
+          <button type="button" class="btn sm news-open" aria-haspopup="dialog">전체 보기</button>
+        </div>
+        <ul class="news-list" id="news-list"></ul>
+      </section>
     </main>
+
+    <footer class="site-foot">
+      <div class="site-foot-in">
+        <p class="site-foot-links">
+          <button type="button" class="app-version news-open" id="home-version" aria-haspopup="dialog" title="새 소식 보기"></button>
+          <a href="/check">직접 확인하는 법</a>
+          <a href="/privacy">개인정보 안내</a>
+          <a href="/licenses">사용한 라이브러리</a>
+          <button type="button" class="link-btn" data-feedback aria-haspopup="dialog">의견 보내기</button>
+          <button type="button" class="link-btn" data-settings aria-haspopup="dialog">설정</button>
+        </p>
+        <p class="site-foot-limit">이 도구는 원본 파일을 바꾸지 않습니다. 결과물은 저장 후 열어서 확인해 주세요.</p>
+      </div>
+    </footer>
   </div>
 
   <!-- ② 작업 화면 -->
@@ -116,44 +229,48 @@
         <p class="side-hint">← 로고를 누르면 처음 화면</p>
       </div>
       <nav class="side-nav" role="tablist" aria-label="도구" aria-orientation="vertical">
-        <button class="tab" role="tab" id="tab-edit" aria-controls="panel-edit" aria-selected="true" data-tab="edit" style="--tc: var(--c1)">
+        <button class="tab" role="tab" id="tab-edit" aria-controls="panel-edit" aria-selected="true" data-tab="edit">
           <span class="tab-icon"><svg class="ic"><use href="#i-layers"/></svg></span>
           <span class="tab-text"><span class="tab-name">편집 · 합치기</span><span class="tab-desc">순서 바꾸기 · 빼기 · 나누기</span></span>
         </button>
-        <button class="tab" role="tab" id="tab-img2pdf" aria-controls="panel-img2pdf" aria-selected="false" data-tab="img2pdf" tabindex="-1" style="--tc: var(--c2)">
+        <button class="tab" role="tab" id="tab-img2pdf" aria-controls="panel-img2pdf" aria-selected="false" data-tab="img2pdf" tabindex="-1">
           <span class="tab-icon"><svg class="ic"><use href="#i-image"/></svg></span>
           <span class="tab-text"><span class="tab-name">사진 → PDF</span><span class="tab-desc">사진 여러 장을 한 파일로</span></span>
         </button>
-        <button class="tab" role="tab" id="tab-pdf2img" aria-controls="panel-pdf2img" aria-selected="false" data-tab="pdf2img" tabindex="-1" style="--tc: var(--c3)">
+        <button class="tab" role="tab" id="tab-pdf2img" aria-controls="panel-pdf2img" aria-selected="false" data-tab="pdf2img" tabindex="-1">
           <span class="tab-icon"><svg class="ic"><use href="#i-filecheck"/></svg></span>
           <span class="tab-text"><span class="tab-name">PDF → 사진</span><span class="tab-desc">PNG · JPG · WEBP로</span></span>
         </button>
-        <button class="tab" role="tab" id="tab-decorate" aria-controls="panel-decorate" aria-selected="false" data-tab="decorate" tabindex="-1" style="--tc: var(--c5)">
+        <button class="tab" role="tab" id="tab-decorate" aria-controls="panel-decorate" aria-selected="false" data-tab="decorate" tabindex="-1">
           <span class="tab-icon"><svg class="ic"><use href="#i-brush"/></svg></span>
           <span class="tab-text"><span class="tab-name">꾸미기</span><span class="tab-desc">쪽번호 · 워터마크 · 도장</span></span>
         </button>
-        <button class="tab" role="tab" id="tab-compress" aria-controls="panel-compress" aria-selected="false" data-tab="compress" tabindex="-1" style="--tc: var(--c6)">
+        <button class="tab" role="tab" id="tab-compress" aria-controls="panel-compress" aria-selected="false" data-tab="compress" tabindex="-1">
           <span class="tab-icon"><svg class="ic"><use href="#i-filedown"/></svg></span>
           <span class="tab-text"><span class="tab-name">용량 줄이기</span><span class="tab-desc">목표 용량에 맞추기</span></span>
         </button>
-        <button class="tab" role="tab" id="tab-security" aria-controls="panel-security" aria-selected="false" data-tab="security" tabindex="-1" style="--tc: var(--c4)">
+        <button class="tab" role="tab" id="tab-security" aria-controls="panel-security" aria-selected="false" data-tab="security" tabindex="-1">
           <span class="tab-icon"><svg class="ic"><use href="#i-lock"/></svg></span>
           <span class="tab-text"><span class="tab-name">보안</span><span class="tab-desc">암호 · 걸린 제한 보기</span></span>
         </button>
       </nav>
-      <p class="side-safe"><svg class="ic" aria-hidden="true"><use href="#i-shield"/></svg>파일은 이 컴퓨터 밖으로 나가지 않아요.</p>
-      <p class="app-version side-version" id="side-version" aria-label="배포 버전"></p>
+      <p class="side-safe"><svg class="ic" aria-hidden="true"><use href="#i-shield"/></svg><span>파일은 이 컴퓨터 밖으로 나가지 않아요.<span class="offline-badge" hidden>지금 인터넷 없이 작동 중</span></span></p>
+      <p class="side-foot">
+        <button type="button" class="app-version side-version news-open" id="side-version" aria-haspopup="dialog" title="새 소식 보기"></button>
+        <button type="button" class="link-btn side-feedback" data-feedback aria-haspopup="dialog">의견 보내기</button>
+        <button type="button" class="side-gear" data-settings aria-haspopup="dialog" aria-label="설정" title="설정"><svg class="ic sm" aria-hidden="true"><use href="#i-settings"/></svg></button>
+      </p>
     </aside>
 
     <main class="work">
      <div class="work-layout">
      <div class="work-main">
-      <!-- 편집 · 합치기 · 자르기 -->
+      <!-- 편집 · 합치기 -->
       <section class="panel panel-edit" id="panel-edit" role="tabpanel" aria-labelledby="tab-edit">
        <div class="edit-main">
         <header class="tool-head with-guide">
           <div>
-            <h1>편집 · 합치기 · 자르기</h1>
+            <h1>편집 · 합치기</h1>
             <p>여러 PDF를 한 화면에 펼쳐 순서를 바꾸고, 필요 없는 쪽을 빼고, 합쳐서 저장해요.</p>
           </div>
           <button type="button" class="btn guide-open" id="guide-open" aria-controls="edit-guide" aria-expanded="false"><svg class="ic sm" aria-hidden="true"><use href="#i-help"/></svg>사용법</button>
@@ -176,6 +293,16 @@
 
         <div class="locks" id="edit-locks"></div>
         <ul class="chips" id="edit-chips" aria-label="넣은 파일"></ul>
+        <div class="find-bar" id="edit-find-bar" hidden>
+          <label class="find-box">
+            <svg class="ic sm" aria-hidden="true"><use href="#i-search"/></svg>
+            <input type="search" id="edit-find" placeholder="쪽 안의 글자로 찾기 (예: 3단원)" aria-label="쪽 안의 글자로 찾기" autocomplete="off" spellcheck="false" enterkeyhint="search">
+          </label>
+          <span class="find-status" id="edit-find-status" role="status" aria-live="polite"></span>
+          <button type="button" class="icon-btn" id="edit-find-prev" aria-label="이전 찾은 쪽 (Shift+Enter)" title="이전 찾은 쪽 (Shift+Enter)" disabled><svg class="ic sm" aria-hidden="true"><use href="#i-left"/></svg></button>
+          <button type="button" class="icon-btn" id="edit-find-next" aria-label="다음 찾은 쪽 (Enter)" title="다음 찾은 쪽 (Enter)" disabled><svg class="ic sm" aria-hidden="true"><use href="#i-right"/></svg></button>
+        </div>
+        <p class="notice find-note" id="edit-find-note" hidden></p>
         <div class="notice size-note" id="edit-sizes" hidden>
           <p id="edit-sizes-text"></p>
           <fieldset class="seg compact"><legend class="sr-only">쪽 크기</legend>
@@ -184,6 +311,7 @@
             <label><input type="radio" name="sizefix" value="rotate"><span>가로 쪽은 돌려서</span></label>
           </fieldset>
           <label class="paper-sel">기준 <select id="sizefix-paper" aria-label="기준 종이"><option value="a4" selected>A4</option><option value="letter">Letter</option></select></label>
+          <p class="size-annot" id="edit-sizes-annot" hidden></p>
         </div>
         <div class="notice blank-note" id="edit-blank" hidden>
           <p id="edit-blank-text"></p>
@@ -295,7 +423,7 @@
           </div>
         </section>
 
-        <div class="grid pages" id="edit-grid" aria-label="쪽 목록" aria-multiselectable="true"></div>
+        <div class="grid pages" id="edit-grid" role="list" aria-label="쪽 목록 (Enter: 크게 보기, Space: 선택)"></div>
 
         <div class="savebar" id="edit-bar" hidden>
           <span class="count" id="edit-count"><b>0</b>쪽 저장 예정</span>
@@ -767,6 +895,88 @@
     </form>
   </dialog>
 
+  <!-- 쪽 크게 보기 -->
+  <dialog id="viewer" class="viewer" aria-labelledby="viewer-title">
+    <div class="viewer-bar">
+      <div class="viewer-head">
+        <strong id="viewer-title"></strong>
+        <span class="viewer-state" id="viewer-state"></span>
+      </div>
+      <div class="viewer-tools">
+        <button type="button" class="icon-btn" id="vw-prev" aria-label="이전 쪽 (←)" title="이전 쪽 (←)"><svg class="ic sm" aria-hidden="true"><use href="#i-left"/></svg></button>
+        <button type="button" class="icon-btn" id="vw-next" aria-label="다음 쪽 (→)" title="다음 쪽 (→)"><svg class="ic sm" aria-hidden="true"><use href="#i-right"/></svg></button>
+        <span class="viewer-sep" aria-hidden="true"></span>
+        <button type="button" class="icon-btn" id="vw-out" aria-label="작게 보기 (-)" title="작게 보기 (-)"><svg class="ic sm" aria-hidden="true"><use href="#i-zoom-out"/></svg></button>
+        <button type="button" class="btn sm viewer-zoom" id="vw-zoom" title="화면에 맞추기 (0)">100%</button>
+        <button type="button" class="icon-btn" id="vw-in" aria-label="크게 보기 (+)" title="크게 보기 (+)"><svg class="ic sm" aria-hidden="true"><use href="#i-zoom-in"/></svg></button>
+        <span class="viewer-sep" aria-hidden="true"></span>
+        <button type="button" class="icon-btn" id="vw-rotl" aria-label="왼쪽으로 90° 회전" title="왼쪽으로 90° 회전"><svg class="ic sm" aria-hidden="true"><use href="#i-rotate-left"/></svg></button>
+        <button type="button" class="icon-btn" id="vw-rot" aria-label="오른쪽으로 90° 회전" title="오른쪽으로 90° 회전"><svg class="ic sm" aria-hidden="true"><use href="#i-rotate"/></svg></button>
+        <button type="button" class="icon-btn" id="vw-rep" aria-label="다른 쪽으로 교체" title="다른 쪽으로 교체"><svg class="ic sm" aria-hidden="true"><use href="#i-swap"/></svg></button>
+        <button type="button" class="btn sm viewer-del" id="vw-del">삭제 예정</button>
+        <span class="viewer-sep" aria-hidden="true"></span>
+        <button type="button" class="icon-btn" id="vw-close" aria-label="닫기 (Esc)" title="닫기 (Esc)"><svg class="ic sm" aria-hidden="true"><use href="#i-x"/></svg></button>
+      </div>
+    </div>
+    <div class="viewer-stage" id="viewer-stage"></div>
+  </dialog>
+
+  <!-- 새 소식 -->
+  <dialog id="news-dialog" class="dialog news-dialog" aria-labelledby="news-title">
+    <form method="dialog">
+      <header class="dlg-head">
+        <h2 id="news-title">새 소식</h2>
+        <button type="submit" class="icon-btn" aria-label="닫기" title="닫기 (Esc)"><svg class="ic sm" aria-hidden="true"><use href="#i-x"/></svg></button>
+      </header>
+      <p class="sub" id="news-ver"></p>
+      <ul class="news-full" id="news-full" tabindex="0" aria-label="새 소식 목록"></ul>
+    </form>
+  </dialog>
+
+  <!-- 설정 -->
+  <dialog id="settings-dialog" class="dialog settings-dialog" aria-labelledby="set-title">
+    <form method="dialog">
+      <header class="dlg-head">
+        <h2 id="set-title">설정</h2>
+        <button type="submit" class="icon-btn" aria-label="닫기" title="닫기 (Esc)"><svg class="ic sm" aria-hidden="true"><use href="#i-x"/></svg></button>
+      </header>
+      <label class="set-row">
+        <span class="set-text">
+          <strong>브라우저를 닫아도 작업 이어하기</strong>
+          <span>편집 · 합치기에 넣은 파일과 순서 · 회전 · 삭제 예정을 저장해 두었다가, 다음에 열 때 이어서 할 수 있어요. 기본은 꺼져 있어요.</span>
+        </span>
+        <input type="checkbox" class="switch-input" role="switch" id="set-resume">
+        <span class="switch" aria-hidden="true"></span>
+      </label>
+      <p class="notice">파일은 이 브라우저 안(IndexedDB)에만 저장돼요. 공용 컴퓨터에서는 끄는 게 좋아요.</p>
+      <p class="sub" id="set-usage" role="status"></p>
+      <div class="set-danger">
+        <div>
+          <strong>이 브라우저에 저장된 것 모두 지우기</strong>
+          <span>설정 · 서명 · 도장 · 최근 작업 · 오프라인용 파일(캐시)을 모두 지워요. 넣은 PDF 원본은 그대로예요.</span>
+        </div>
+        <button type="button" class="btn danger" id="set-wipe">모두 지우기</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- 의견 보내기 -->
+  <dialog id="feedback-dialog" class="dialog feedback-dialog" aria-labelledby="fb-title">
+    <form method="dialog">
+      <header class="dlg-head">
+        <h2 id="fb-title">의견 보내기</h2>
+        <button type="submit" class="icon-btn" aria-label="닫기" title="닫기 (Esc)"><svg class="ic sm" aria-hidden="true"><use href="#i-x"/></svg></button>
+      </header>
+      <p>의견은 외부 설문 페이지(새 창)에서 받아요. 파일이나 화면 내용은 전송되지 않아요.</p>
+      <p class="notice" id="fb-none" hidden>아직 설문 주소가 없어요. 사이트 주인이 설문을 준비하면 여기서 바로 열 수 있어요.</p>
+      <p class="sub" id="fb-err"></p>
+      <div class="btn-row end">
+        <button type="button" class="btn" id="fb-copy">오류 내용 복사</button>
+        <a class="btn primary" id="fb-open" href="#" target="_blank" rel="noopener noreferrer">설문 열기</a>
+      </div>
+    </form>
+  </dialog>
+
   <!-- 설정하고 저장 -->
   <dialog id="save-dialog" class="dialog sd" aria-labelledby="sd-title">
     <form id="sd-form" method="dialog" novalidate>
@@ -928,6 +1138,7 @@
   <script src="/vendor/pdf.min.js"></script>
   <script src="/vendor/jszip.min.js"></script>
   <script src="/vendor/pako.min.js"></script>
+  <script src="config.js"></script>
   <script src="pdf-core.js"></script>
   <script src="compress.js"></script>
   <script src="guide-anim.js"></script>

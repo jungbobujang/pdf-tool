@@ -735,6 +735,33 @@ const { colorSamplesPdf } = await import('./node-codec.mjs');
   });
 }
 
+// ── 쪽 크기를 맞추면 사라지는 링크 · 주석 세기 ──
+{
+  const ad = await PDFLib.PDFDocument.create();
+  const p1 = ad.addPage([595, 842]);
+  ad.addPage([842, 595]);
+  const reg = (o) => ad.context.register(ad.context.obj(o));
+  p1.node.set(PDFLib.PDFName.of('Annots'), ad.context.obj([
+    reg({ Type: 'Annot', Subtype: 'Link', Rect: [0, 0, 10, 10] }),
+    reg({ Type: 'Annot', Subtype: 'Link', Rect: [0, 20, 10, 30] }),
+    reg({ Type: 'Annot', Subtype: 'Text', Rect: [0, 40, 10, 50] }),
+    reg({ Type: 'Annot', Subtype: 'Popup', Rect: [0, 60, 10, 70] }),
+  ]));
+  const re = await PDFLib.PDFDocument.load(await ad.save());
+  const a = Core.countAnnots(re.getPage(0));
+  const b = Core.countAnnots(re.getPage(1));
+  check('링크 · 주석 세기(Popup 제외, 없는 쪽은 0)', a.links === 2 && a.notes === 1 && b.links === 0 && b.notes === 0, `1쪽 링크 ${a.links} · 주석 ${a.notes} / 2쪽 ${b.links} · ${b.notes}`);
+}
+
+// ── 만들어 둔 페이지가 원본과 맞는지 (사용한 라이브러리 · 새 소식) ──
+{
+  const { spawnSync } = await import('node:child_process');
+  for (const [name, script] of [['사용한 라이브러리 페이지가 package.json과 일치', 'scripts/gen-licenses.mjs'], ['새 소식 JSON이 CHANGELOG.md와 일치', 'scripts/gen-changelog.mjs']]) {
+    const r = spawnSync(process.execPath, [script, '--check'], { cwd: new URL('..', import.meta.url), encoding: 'utf8' });
+    check(name, r.status === 0, (r.stdout || r.stderr || '').trim());
+  }
+}
+
 // ── 결과 표 ─────────────────────────────────────────
 const width = (s) => [...s].reduce((n, ch) => n + (/[ᄀ-ᇿ㄰-㆏가-힣]/.test(ch) ? 2 : 1), 0);
 const padR = (s, n) => s + ' '.repeat(Math.max(0, n - width(s)));
