@@ -56,6 +56,7 @@
       <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4.5" y="10.5" width="15" height="10.5" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/><path d="M12 15v2"/></symbol>
       <symbol id="i-hash" viewBox="0 0 24 24"><path d="M5 9h15M4 15h15M10 3 8 21M16 3l-2 18"/></symbol>
       <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 4.5 6v5.5c0 4.5 3.2 8.2 7.5 9.5 4.3-1.3 7.5-5 7.5-9.5V6L12 3Z"/><path d="m9 12 2.2 2.2L15.5 10"/></symbol>
+      <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h1.8l1.4-2h4.6l1.4 2h1.8A2.5 2.5 0 0 1 20 8.5v9a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 17.5z"/><circle cx="12" cy="13" r="3.5"/></symbol>
       <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4"/><path d="m6.5 9.5 5.5-5.5 5.5 5.5"/><path d="M4 16v2.5A2.5 2.5 0 0 0 6.5 21h11a2.5 2.5 0 0 0 2.5-2.5V16"/></symbol>
       <symbol id="i-rotate" viewBox="0 0 24 24"><path d="M20 11.5A8 8 0 1 1 17.7 6"/><path d="M20 4v5h-5"/></symbol>
       <symbol id="i-swap" viewBox="0 0 24 24"><path d="M4 8h15"/><path d="m15 4 4 4-4 4"/><path d="M20 16H5"/><path d="m9 12-4 4 4 4"/></symbol>
@@ -121,7 +122,7 @@
       <div class="home-drop" id="home-drop">
         <span class="home-drop-icon" aria-hidden="true"><svg class="ic"><use href="#i-upload"/></svg></span>
         <div class="home-drop-text">
-          <strong>PDF나 사진을 여기로 끌어다 놓으세요</strong>
+          <strong><span class="d-only">PDF나 사진을 여기로 끌어다 놓으세요</span><span class="m-only">PDF나 사진을 골라 시작하세요</span></strong>
           <span>PDF를 넣으면 편집 화면이, 사진을 넣으면 사진 → PDF 화면이 열려요. 잠긴 PDF면 암호 칸이 먼저 나와요.</span>
         </div>
         <label class="btn primary lg" for="home-input">파일 고르기</label>
@@ -227,31 +228,32 @@
       <div class="side-head">
         <a href="./" class="logo" id="logo" title="처음 화면으로"><span class="logo-mark" aria-hidden="true"></span>PDF 작업실</a>
         <p class="side-hint">← 로고를 누르면 처음 화면</p>
+        <span class="side-title" id="side-title" aria-hidden="true">편집 · 합치기</span>
       </div>
       <nav class="side-nav" role="tablist" aria-label="도구" aria-orientation="vertical">
-        <button class="tab" role="tab" id="tab-edit" aria-controls="panel-edit" aria-selected="true" data-tab="edit">
+        <button class="tab" role="tab" id="tab-edit" aria-label="편집 · 합치기" aria-controls="panel-edit" aria-selected="true" data-tab="edit">
           <span class="tab-icon"><svg class="ic"><use href="#i-layers"/></svg></span>
-          <span class="tab-text"><span class="tab-name">편집 · 합치기</span><span class="tab-desc">순서 바꾸기 · 빼기 · 나누기</span></span>
+          <span class="tab-text"><span class="tab-name">편집 · 합치기</span><span class="tab-desc">순서 바꾸기 · 빼기 · 나누기</span></span><span class="tab-short" aria-hidden="true">편집</span>
         </button>
-        <button class="tab" role="tab" id="tab-img2pdf" aria-controls="panel-img2pdf" aria-selected="false" data-tab="img2pdf" tabindex="-1">
+        <button class="tab" role="tab" id="tab-img2pdf" aria-label="사진 → PDF" aria-controls="panel-img2pdf" aria-selected="false" data-tab="img2pdf" tabindex="-1">
           <span class="tab-icon"><svg class="ic"><use href="#i-image"/></svg></span>
-          <span class="tab-text"><span class="tab-name">사진 → PDF</span><span class="tab-desc">사진 여러 장을 한 파일로</span></span>
+          <span class="tab-text"><span class="tab-name">사진 → PDF</span><span class="tab-desc">사진 여러 장을 한 파일로</span></span><span class="tab-short" aria-hidden="true">사진→PDF</span>
         </button>
-        <button class="tab" role="tab" id="tab-pdf2img" aria-controls="panel-pdf2img" aria-selected="false" data-tab="pdf2img" tabindex="-1">
+        <button class="tab" role="tab" id="tab-pdf2img" aria-label="PDF → 사진" aria-controls="panel-pdf2img" aria-selected="false" data-tab="pdf2img" tabindex="-1">
           <span class="tab-icon"><svg class="ic"><use href="#i-filecheck"/></svg></span>
-          <span class="tab-text"><span class="tab-name">PDF → 사진</span><span class="tab-desc">PNG · JPG · WEBP로</span></span>
+          <span class="tab-text"><span class="tab-name">PDF → 사진</span><span class="tab-desc">PNG · JPG · WEBP로</span></span><span class="tab-short" aria-hidden="true">PDF→사진</span>
         </button>
-        <button class="tab" role="tab" id="tab-decorate" aria-controls="panel-decorate" aria-selected="false" data-tab="decorate" tabindex="-1">
+        <button class="tab" role="tab" id="tab-decorate" aria-label="꾸미기" aria-controls="panel-decorate" aria-selected="false" data-tab="decorate" tabindex="-1">
           <span class="tab-icon"><svg class="ic"><use href="#i-brush"/></svg></span>
-          <span class="tab-text"><span class="tab-name">꾸미기</span><span class="tab-desc">쪽번호 · 워터마크 · 도장</span></span>
+          <span class="tab-text"><span class="tab-name">꾸미기</span><span class="tab-desc">쪽번호 · 워터마크 · 도장</span></span><span class="tab-short" aria-hidden="true">꾸미기</span>
         </button>
-        <button class="tab" role="tab" id="tab-compress" aria-controls="panel-compress" aria-selected="false" data-tab="compress" tabindex="-1">
+        <button class="tab" role="tab" id="tab-compress" aria-label="용량 줄이기" aria-controls="panel-compress" aria-selected="false" data-tab="compress" tabindex="-1">
           <span class="tab-icon"><svg class="ic"><use href="#i-filedown"/></svg></span>
-          <span class="tab-text"><span class="tab-name">용량 줄이기</span><span class="tab-desc">목표 용량에 맞추기</span></span>
+          <span class="tab-text"><span class="tab-name">용량 줄이기</span><span class="tab-desc">목표 용량에 맞추기</span></span><span class="tab-short" aria-hidden="true">용량</span>
         </button>
-        <button class="tab" role="tab" id="tab-security" aria-controls="panel-security" aria-selected="false" data-tab="security" tabindex="-1">
+        <button class="tab" role="tab" id="tab-security" aria-label="보안" aria-controls="panel-security" aria-selected="false" data-tab="security" tabindex="-1">
           <span class="tab-icon"><svg class="ic"><use href="#i-lock"/></svg></span>
-          <span class="tab-text"><span class="tab-name">보안</span><span class="tab-desc">암호 · 걸린 제한 보기</span></span>
+          <span class="tab-text"><span class="tab-name">보안</span><span class="tab-desc">암호 · 걸린 제한 보기</span></span><span class="tab-short" aria-hidden="true">보안</span>
         </button>
       </nav>
       <p class="side-safe"><svg class="ic" aria-hidden="true"><use href="#i-shield"/></svg><span>파일은 이 컴퓨터 밖으로 나가지 않아요.<span class="offline-badge" hidden>지금 인터넷 없이 작동 중</span></span></p>
@@ -283,6 +285,7 @@
             <strong>PDF를 끌어다 놓으세요</strong>
             <span>여러 개를 한 번에 넣으면 넣은 순서대로 이어 붙어요.</span>
             <label class="btn primary" for="edit-input">파일 고르기</label>
+            <div class="pick-m"><label class="btn primary pick-big" for="edit-input"><svg class="ic" aria-hidden="true"><use href="#i-upload"/></svg>PDF 고르기</label><small>여러 개를 한 번에 고를 수 있어요</small></div>
           </div>
           <ol class="steps">
             <li><b>1</b><strong>PDF 넣기</strong><span>끌어다 놓거나 [파일 고르기]로 여러 개를 넣어요.</span></li>
@@ -320,7 +323,7 @@
             <button type="button" class="btn sm" id="blank-review">하나씩 보기</button>
           </div>
         </div>
-        <p class="hint" id="edit-hint" hidden>카드를 끌어서 순서를 바꾸세요. Ctrl(⌘)·Shift를 누른 채 클릭하거나 빈 곳에서 끌어 네모를 그리면 여러 쪽을 한꺼번에 고를 수 있어요. 휴대폰에서는 쪽을 길게 누르세요.</p>
+        <p class="hint" id="edit-hint" hidden><span class="d-only">카드를 끌어서 순서를 바꾸세요. Ctrl(⌘)·Shift를 누른 채 클릭하거나 빈 곳에서 끌어 네모를 그리면 여러 쪽을 한꺼번에 고를 수 있어요. 휴대폰에서는 쪽을 길게 누르세요.</span><span class="m-only">쪽을 길게 누르면 선택 모드가 켜져요. 누른 채로 끌면 순서가 바뀌고, 그다음부터는 탭으로 여러 쪽을 더 골라요.</span></p>
 
         <div class="selbar" id="edit-selbar" role="toolbar" aria-label="선택한 쪽" hidden>
           <div class="selbar-in">
@@ -459,6 +462,7 @@
           <button type="button" class="btn guide-open" aria-controls="edit-guide" aria-expanded="false"><svg class="ic sm" aria-hidden="true"><use href="#i-help"/></svg>사용법</button>
         </header>
         <input type="file" id="img-input" accept="image/*,.jpg,.jpeg,.png,.webp,.heic,.heif,.gif,.bmp,.avif" multiple hidden>
+        <input type="file" id="img-camera" accept="image/*" capture="environment" multiple hidden>
 
         <div class="empty" id="img-empty">
           <div class="drop-card" id="img-drop">
@@ -466,6 +470,7 @@
             <strong>사진을 끌어다 놓으세요</strong>
             <span>JPG · PNG · WEBP · 아이폰 HEIC · GIF · BMP. 휴대폰 사진은 방향도 맞춰 드려요.</span>
             <label class="btn primary" for="img-input">파일 고르기</label>
+            <div class="pick-m pick-two"><label class="btn primary pick-big" for="img-input"><svg class="ic" aria-hidden="true"><use href="#i-image"/></svg>사진첩에서 고르기</label><label class="btn primary pick-big" id="img-camera-btn" for="img-camera" hidden><svg class="ic" aria-hidden="true"><use href="#i-camera"/></svg>카메라로 찍기</label></div>
           </div>
           <ol class="steps">
             <li><b>1</b><strong>사진 넣기</strong><span>여러 장을 한 번에 넣을 수 있어요.</span></li>
@@ -515,6 +520,7 @@
             <strong>PDF 하나를 끌어다 놓으세요</strong>
             <span>쪽마다 미리보기가 나오면 필요한 쪽만 고르면 돼요.</span>
             <label class="btn primary" for="p2i-input">파일 고르기</label>
+            <div class="pick-m"><label class="btn primary pick-big" for="p2i-input"><svg class="ic" aria-hidden="true"><use href="#i-upload"/></svg>PDF 고르기</label></div>
           </div>
           <ol class="steps">
             <li><b>1</b><strong>PDF 넣기</strong><span>한 번에 한 파일씩 열어요.</span></li>
@@ -661,6 +667,7 @@
             <strong>PDF 하나를 끌어다 놓으세요</strong>
             <span>번호 · 워터마크 · 도장이 어디에 들어가는지 미리 보여 드려요.</span>
             <label class="btn primary" for="decor-input">파일 고르기</label>
+            <div class="pick-m"><label class="btn primary pick-big" for="decor-input"><svg class="ic" aria-hidden="true"><use href="#i-upload"/></svg>PDF 고르기</label></div>
           </div>
           <ol class="steps">
             <li><b>1</b><strong>PDF 넣기</strong><span>한 번에 한 파일씩 넣어요.</span></li>
@@ -701,6 +708,7 @@
             <strong>PDF나 사진을 끌어다 놓으세요</strong>
             <span>PDF 여러 개, 또는 JPG · PNG · WEBP · 아이폰 HEIC 사진 여러 장을 한 번에 줄일 수 있어요.</span>
             <label class="btn primary" for="cmp-input">파일 고르기</label>
+            <div class="pick-m"><label class="btn primary pick-big" for="cmp-input"><svg class="ic" aria-hidden="true"><use href="#i-upload"/></svg>PDF나 사진 고르기</label></div>
           </div>
           <ol class="steps">
             <li><b>1</b><strong>파일 넣기</strong><span>얼마까지 줄일 수 있는지 먼저 알려 줘요.</span></li>
@@ -782,7 +790,7 @@
               <tr><th scope="row"><kbd>Ctrl</kbd>+<kbd>Z</kbd></th><td>되돌리기 (<kbd>Ctrl</kbd>+<kbd>Y</kbd> 다시 하기)</td></tr>
             </tbody>
           </table>
-          <p class="guide-note">휴대폰에서는 쪽을 길게 누르면 선택 모드가 켜지고, 그다음부터는 탭으로 여러 개를 고를 수 있어요.</p>
+          <p class="guide-note"><b>휴대폰</b> 도구는 화면 아래 탭 막대에서 바꾸고, 파일은 [PDF 고르기]로 넣어요. 쪽을 길게 누르면 선택 모드가 켜지고, 그다음부터는 탭으로 여러 쪽을 고를 수 있어요. 선택 막대는 위쪽 제목 아래에, 저장 막대는 탭 막대 바로 위에 붙어 있어요.</p>
           <p class="guide-note"><b>스캔본 정리</b> 쪽 크기가 섞이면 노란 안내줄에서 A4로 맞출 수 있고, 거의 흰 쪽은 "빈 쪽?"으로 알려 줘요. 앞 · 뒤를 따로 스캔했다면 저장 막대의 [양면 스캔 ▾]으로 번갈아 맞춰요.</p>
           <p class="guide-note"><b>저장</b> [바로 저장](<kbd>Ctrl</kbd>+<kbd>S</kbd>)은 묻지 않고 합쳐 저장하고, [설정하고 저장…](<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>)은 쪽번호 · 워터마크 · 도장 · 암호 · 용량 목표를 고른 뒤 저장해요.</p>
           </div>
@@ -797,6 +805,7 @@
             </figure>
             <h3 class="guide-h">순서</h3>
             <ol class="guide-steps"><li><b aria-hidden="true">1</b><span>사진 넣기 — 점선 칸에 끌어다 놓거나 [파일 고르기]</span></li><li><b aria-hidden="true">2</b><span>순서 · 용지 · 여백 고르기</span></li><li><b aria-hidden="true">3</b><span>[바로 저장]</span></li></ol>
+            <p class="guide-note"><b>휴대폰</b> [사진첩에서 고르기]로 여러 장을 한 번에 고르거나, [카메라로 찍기]로 활동지를 바로 찍어요. 찍을 때마다 한 장씩 뒤에 붙어요.</p>
             <div class="faq"><h3 class="guide-h">자주 막히는 곳</h3><dl><div class="faq-item"><dt>사진이 옆으로 누워요?</dt><dd>휴대폰이 기록한 방향을 자동으로 맞춰요. 그래도 누워 있으면 카드의 ↻를 눌러 돌리세요.</dd></div><div class="faq-item"><dt>파일이 너무 커요?</dt><dd>저장 후 "용량 줄이기"에 넣으면 돼요.</dd></div></dl></div>
           </div>
           <div class="guide-sec" data-guide="pdf2img" hidden>

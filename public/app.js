@@ -646,21 +646,69 @@
       if (on && focus) t.focus();
     });
     document.querySelectorAll('.panel').forEach((p) => (p.hidden = p.id !== `panel-${name}`));
+    const cur = tabs.find((t) => t.dataset.tab === name);
+    if (cur) $('side-title').textContent = cur.getAttribute('aria-label');
     if (activeView === 'work') setHash(name);
     try { localStorage.setItem('pdfws.tab', name); } catch { /* 무시 */ }
     guideSync();
   }
+  // 휴대폰에서는 탭 막대가 처음 화면에도 보이므로 누르면 작업 화면으로 넘어간다.
   tabs.forEach((t, i) => {
-    t.addEventListener('click', () => showTab(t.dataset.tab));
+    t.addEventListener('click', () => openTool(t.dataset.tab));
     t.addEventListener('keydown', (e) => {
       let j = null;
       if (e.key === 'ArrowRight' || e.key === 'ArrowDown') j = (i + 1) % tabs.length;
       if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') j = (i - 1 + tabs.length) % tabs.length;
       if (e.key === 'Home') j = 0;
       if (e.key === 'End') j = tabs.length - 1;
-      if (j != null) { e.preventDefault(); showTab(tabs[j].dataset.tab, true); }
+      if (j != null) { e.preventDefault(); openTool(tabs[j].dataset.tab, true); }
     });
   });
+
+  // ═══════════════════════════════════════════════════════════
+  // 휴대폰(820px 이하): 아래쪽 탭 막대 · 카메라 · 화면 키보드
+  // ═══════════════════════════════════════════════════════════
+  const phoneMq = matchMedia('(max-width: 820px)');
+  const isPhoneWidth = () => phoneMq.matches;
+  {
+    const nav = document.querySelector('.side-nav');
+    const orient = () => nav.setAttribute('aria-orientation', isPhoneWidth() ? 'horizontal' : 'vertical');
+    orient();
+    phoneMq.addEventListener?.('change', orient);
+
+    // 화면 키보드가 올라오면(보이는 높이가 크게 줄면) 탭 막대를 숨긴다.
+    const vv = window.visualViewport;
+    if (vv) {
+      const kb = () => {
+        const shown = vv.height * (vv.scale || 1);
+        document.documentElement.classList.toggle('kb-open', isPhoneWidth() && window.innerHeight - shown > 120);
+      };
+      vv.addEventListener('resize', kb);
+      window.addEventListener('resize', kb);
+      kb();
+    }
+
+    // 3단계 안내: 휴대폰에서는 제목만 보이고 누르면 설명이 펼쳐진다.
+    document.querySelectorAll('.steps li').forEach((li) => {
+      const title = li.querySelector('strong')?.textContent || '';
+      const btn = h('button', { type: 'button', class: 'step-more', 'aria-expanded': 'false', 'aria-label': `${title} 설명 보기` },
+        icon('chevron'));
+      btn.addEventListener('click', () => {
+        const open = li.classList.toggle('open');
+        btn.setAttribute('aria-expanded', String(open));
+      });
+      li.append(btn);
+    });
+  }
+
+  /** 휴대폰: 파일을 넣은 뒤 새 카드가 보이게 내려 준다(위쪽 제목 줄 아래로). */
+  function phoneScrollTo(el) {
+    if (!el || !isPhoneWidth()) return;
+    requestAnimationFrame(() => {
+      const top = el.getBoundingClientRect().top + window.scrollY - (document.querySelector('.sidebar')?.offsetHeight || 0) - 12;
+      window.scrollTo({ top: Math.max(0, top), behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+    });
+  }
 
   // 놓는 곳 밖에 파일을 떨어뜨려도 브라우저가 파일을 열지 않게 하고, 지금 탭으로 넘긴다.
   window.addEventListener('dragover', (e) => e.preventDefault());
@@ -735,6 +783,7 @@
       }
       if (!pdfs.length) return [];
       const added = [];
+      const before = pages.length;
       await withBusy('파일 읽는 중…', async (progress) => {
         for (let i = 0; i < pdfs.length; i++) {
           const f = pdfs[i];
@@ -754,6 +803,7 @@
         }
       });
       render();
+      if (!quiet && pages.length > before) phoneScrollTo(grid.querySelectorAll('.page-card')[before]);
       if (added.some((s) => !s.locked)) setTimeout(scanBlanks, 0);
       return added;
     }
@@ -4132,6 +4182,7 @@
         }
       });
       render();
+      if (items.length > before) phoneScrollTo(grid.children[before]);
       return items.length - before;
     }
 
@@ -4285,6 +4336,23 @@
     $('img-save').addEventListener('click', save);
     $('img-clear').addEventListener('click', () => { items = []; render(); });
     wireDrop($('img-drop'), $('img-input'), addFiles);
+    // 카메라로 찍기: 카메라가 있는 기기에서만 보인다.
+    const cam = $('img-camera');
+    cam.addEventListener('change', () => {
+      const files = [...cam.files];
+      cam.value = '';
+      if (files.length) addFiles(files);
+    });
+    const camCheck = async () => {
+      let has = false;
+      try {
+        if (navigator.mediaDevices?.enumerateDevices) has = (await navigator.mediaDevices.enumerateDevices()).some((d) => d.kind === 'videoinput');
+        else has = matchMedia('(pointer: coarse)').matches; // 알 수 없으면 터치 기기에서만
+      } catch { has = false; }
+      $('img-camera-btn').hidden = !has;
+    };
+    camCheck();
+    navigator.mediaDevices?.addEventListener?.('devicechange', camCheck);
 
     function reset() {
       items = [];
@@ -4381,6 +4449,7 @@
       $('p2i-file').hidden = false;
       $('p2i-name').textContent = `${fileName} · ${doc.numPages}쪽`;
       update();
+      phoneScrollTo(grid.firstElementChild);
     }
 
     async function paint(el) {

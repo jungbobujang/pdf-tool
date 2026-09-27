@@ -476,6 +476,244 @@ try {
   check('휴대폰 화면 콘솔 에러 0개', merr.length === 0, merr.length ? merr.join(' | ').slice(0, 200) : '0개');
   await mctx.close();
 
+  // ── 9-b. 휴대폰: 아래쪽 탭 막대 · 고르기 버튼 · 카메라 · 키보드 (390px · 360px · 아이폰 사파리) ──
+  {
+    const fileLong = await writePdf('휴대폰자료.pdf', await samplePdf(14, 'M'));
+    const axePathM = require.resolve('axe-core/axe.min.js');
+    // 카메라가 있는 기기 흉내: enumerateDevices가 videoinput을 돌려준다.
+    const fakeCamera = () => {
+      const md = navigator.mediaDevices;
+      if (md) md.enumerateDevices = async () => [{ kind: 'videoinput', deviceId: 'cam', label: '', groupId: 'g' }];
+    };
+    const iphone = { ...pw.devices['iPhone 13'] };
+    delete iphone.defaultBrowserType;
+    const phoneCases = [
+      { label: '390px', opts: { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 }, cols: 3, safe: 0 },
+      { label: '360px', opts: { viewport: { width: 360, height: 740 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 }, cols: 2, safe: 0 },
+      { label: '아이폰 사파리 흉내(안전 영역 34px · 바탕화면 설치)', opts: iphone, cols: 3, safe: 34, standalone: true },
+    ];
+    for (const pc of phoneCases) {
+      const W = pc.opts.viewport.width;
+      const pctx = await browser.newContext({ ...pc.opts, colorScheme: 'light', bypassCSP: true, acceptDownloads: true });
+      await pctx.addInitScript(fakeCamera);
+      const q = await pctx.newPage();
+      const qerr = [];
+      watch(q, qerr);
+      let how = '';
+      if (pc.standalone || pc.safe) {
+        const cdp = await pctx.newCDPSession(q);
+        if (pc.standalone) {
+          await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'display-mode', value: 'standalone' }] }).catch(() => {});
+        }
+        if (pc.safe) {
+          // 새 크로미움은 안전 영역을 직접 흉내 낼 수 있다. 안 되면 env() 값을 받는 변수(--safe-b)를 바꿔 흉내 낸다.
+          const ok = await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets: { bottom: pc.safe } }).then(() => true).catch(() => false);
+          if (!ok) await q.addInitScript((px) => document.addEventListener('DOMContentLoaded', () => document.documentElement.style.setProperty('--safe-b', `${px}px`)), pc.safe);
+          how += ok ? `안전 영역 ${pc.safe}px(CDP)` : `안전 영역 ${pc.safe}px(--safe-b 변수로 흉내)`;
+        }
+      }
+      await q.goto(BASE, { waitUntil: 'networkidle' });
+      const standaloneOn = pc.standalone ? await q.evaluate(() => matchMedia('(display-mode: standalone)').matches) : false;
+
+      // 탭 막대: 처음 화면에서도 보이고 6개가 한 줄
+      const hb = await q.evaluate(() => {
+        const nav = document.querySelector('.side-nav');
+        const r = nav.getBoundingClientRect();
+        const tabs = [...nav.querySelectorAll('.tab')].map((t) => {
+          const b = t.getBoundingClientRect();
+          return { top: Math.round(b.top), bottom: Math.round(b.bottom), w: Math.round(b.width), label: t.getAttribute('aria-label'), short: t.querySelector('.tab-short').textContent, vis: getComputedStyle(t).visibility };
+        });
+        return { top: Math.round(r.top), bottom: Math.round(r.bottom), h: Math.round(r.height), vh: innerHeight, pos: getComputedStyle(nav).position, role: nav.getAttribute('role'), orient: nav.getAttribute('aria-orientation'), tabs, rows: new Set(tabs.map((t) => t.top)).size };
+      });
+      check(`${pc.label} 처음 화면: 아래쪽 탭 막대 6개 한 줄(아이콘 + 짧은 이름, aria-label은 전체 이름)`,
+        hb.pos === 'fixed' && hb.tabs.length === 6 && hb.rows === 1 && hb.bottom === hb.vh && hb.tabs.every((t) => t.w >= 44 && t.bottom <= hb.vh - pc.safe && t.vis === 'visible') &&
+        hb.role === 'tablist' && hb.orient === 'horizontal' && hb.tabs[1].label === '사진 → PDF',
+        `${hb.tabs.map((t) => t.short).join(' / ')} · 막대 높이 ${hb.h}px · ${hb.orient}${how ? ` · ${how}` : ''}${pc.standalone ? (standaloneOn ? ' · display-mode: standalone 적용' : ' · display-mode: standalone 흉내 미지원(이 화면 규칙은 display-mode와 무관, 같은 CSS)') : ''}`);
+      if (pc.safe) {
+        check(`${pc.label}: 탭이 아래 안전 영역(${pc.safe}px) 밖에 있음`, hb.h >= 60 + pc.safe && hb.tabs.every((t) => t.bottom <= hb.vh - pc.safe),
+          `막대 ${hb.h}px, 탭 아래 끝 ${Math.max(...hb.tabs.map((t) => t.bottom))} ≤ ${hb.vh - pc.safe}`);
+      }
+
+      // 탭을 누르면 도구가 바뀐다(처음 화면에서도)
+      const switched = [];
+      for (const t of tools) {
+        await q.locator(`#tab-${t}`).tap();
+        switched.push(await q.evaluate((t) => ({
+          t,
+          ok: !document.getElementById(`panel-${t}`).hidden && !document.getElementById('view-work').hidden && document.getElementById(`tab-${t}`).getAttribute('aria-selected') === 'true',
+          title: document.getElementById('side-title').textContent,
+          sw: document.documentElement.scrollWidth,
+        }), t));
+      }
+      const top = await q.evaluate(() => {
+        const s = document.querySelector('.sidebar');
+        return { h: Math.round(s.getBoundingClientRect().height), scroll: s.scrollWidth - s.clientWidth, over: getComputedStyle(s).overflowX, navBelow: s.querySelector('.side-nav').getBoundingClientRect().top > 100 };
+      });
+      check(`${pc.label}: 탭 6개를 누르면 도구가 바뀜 · 위쪽은 로고 + 도구 이름 48px(가로 스크롤 메뉴 없음)`, switched.every((x) => x.ok) && top.h === 48 && top.scroll <= 0 && top.over !== 'auto' && top.navBelow,
+        `${switched.map((x) => `${x.title}${x.ok ? '' : '✗'}`).join(' → ')} · 위쪽 ${top.h}px`);
+      check(`${pc.label}: 도구 6곳 가로 스크롤 없음`, switched.every((x) => x.sw <= W), switched.map((x) => `${x.t}:${x.sw}`).join(' '));
+
+      // 화살표 키로 탭 이동
+      await q.focus('#tab-edit');
+      await q.keyboard.press('ArrowRight');
+      const arrow = await q.evaluate(() => ({ f: document.activeElement.id, sel: document.querySelector('.side-nav [aria-selected="true"]').id }));
+      check(`${pc.label}: 탭 막대 화살표 키 이동`, arrow.f === 'tab-img2pdf' && arrow.sel === 'tab-img2pdf', `→ ${arrow.f}`);
+
+      // 파일 고르기 버튼: 점선 상자 문구는 숨고 큰 버튼
+      const pickInfo = await q.evaluate(() => {
+        const out = {};
+        for (const [t, id] of [['edit', 'edit-drop'], ['img2pdf', 'img-drop'], ['pdf2img', 'p2i-drop'], ['decorate', 'decor-drop'], ['compress', 'cmp-drop']]) {
+          const d = document.getElementById(id);
+          const panel = document.getElementById(`panel-${t}`);
+          const wasHidden = panel.hidden;
+          panel.hidden = false;
+          const btns = [...d.querySelectorAll('.pick-big')].filter((b) => b.getBoundingClientRect().height > 0);
+          out[t] = {
+            btn: btns.map((b) => b.textContent.trim()),
+            h: btns.map((b) => Math.round(b.getBoundingClientRect().height)),
+            full: btns.length === 1 ? Math.round(btns[0].getBoundingClientRect().width) === Math.round(d.getBoundingClientRect().width) : true,
+            dropText: getComputedStyle(d.querySelector(':scope > strong')).display,
+            papers: getComputedStyle(d.querySelector('.papers')).display,
+            border: getComputedStyle(d).borderTopStyle,
+          };
+          panel.hidden = wasHidden;
+        }
+        return out;
+      });
+      const wantBtn = { edit: ['PDF 고르기'], img2pdf: ['사진첩에서 고르기', '카메라로 찍기'], pdf2img: ['PDF 고르기'], decorate: ['PDF 고르기'], compress: ['PDF나 사진 고르기'] };
+      const pickOk = Object.entries(wantBtn).every(([t, w]) => pickInfo[t].btn.join('|') === w.join('|') && pickInfo[t].h.every((x) => x === 56) && pickInfo[t].full && pickInfo[t].dropText === 'none' && pickInfo[t].papers === 'none' && pickInfo[t].border === 'none');
+      check(`${pc.label}: 점선 상자 대신 56px 고르기 버튼(도구별 문구)`, pickOk, Object.entries(pickInfo).map(([t, x]) => `${t}「${x.btn.join('」「')}」${x.h.join('/')}px`).join(' · '));
+
+      await q.locator('#tab-img2pdf').tap();
+      const cam = await q.evaluate(() => ({ cap: document.getElementById('img-camera').getAttribute('capture'), multi: document.getElementById('img-camera').multiple, vis: Math.round(document.getElementById('img-camera-btn').getBoundingClientRect().height) }));
+      const [camChooser] = await Promise.all([q.waitForEvent('filechooser', { timeout: 3000 }), q.locator('#img-camera-btn').tap()]);
+      const [albumChooser] = await Promise.all([q.waitForEvent('filechooser', { timeout: 3000 }), q.locator('#img-drop .pick-big[for="img-input"]').tap()]);
+      check(`${pc.label}: 사진 → PDF 「카메라로 찍기」는 capture="environment" · 여러 장, 두 버튼 모두 파일 창을 연다`,
+        cam.cap === 'environment' && cam.multi && cam.vis === 56 && camChooser.isMultiple() && albumChooser.isMultiple(),
+        `capture=${cam.cap}, multiple=${cam.multi}, 카메라 창 ${!!camChooser} · 사진첩 창 ${!!albumChooser}`);
+
+      // 3단계 안내: 한 줄 목록, 누르면 설명 펼침
+      await q.locator('#tab-edit').tap();
+      const st0 = await q.evaluate(() => [...document.querySelectorAll('#edit-empty .steps li')].map((li) => ({ h: Math.round(li.getBoundingClientRect().height), desc: getComputedStyle(li.querySelector(':scope > span')).display })));
+      await q.locator('#edit-empty .steps li').nth(1).locator('.step-more').tap();
+      const st1 = await q.evaluate(() => { const li = document.querySelectorAll('#edit-empty .steps li')[1]; return { desc: getComputedStyle(li.querySelector(':scope > span')).display, exp: li.querySelector('.step-more').getAttribute('aria-expanded') }; });
+      check(`${pc.label}: 3단계 안내는 한 줄(번호 + 제목), 누르면 설명이 펼쳐짐`, st0.every((x) => x.desc === 'none' && x.h <= 52) && st1.desc === 'block' && st1.exp === 'true',
+        `줄 높이 ${st0.map((x) => x.h).join('/')}px → 2단계 펼침 ${st1.desc}`);
+
+      // 파일 넣기 → 첫 카드로 자동 스크롤, 저장 막대는 탭 막대 위, 그리드 열 수
+      const [edChooser] = await Promise.all([q.waitForEvent('filechooser'), q.locator('#edit-drop .pick-big').tap()]);
+      await edChooser.setFiles([fileLong]);
+      await until(q, () => document.querySelectorAll('#edit-grid .page-card').length === 14);
+      await q.waitForTimeout(800);
+      const lay = await q.evaluate(() => {
+        const nav = document.querySelector('.side-nav').getBoundingClientRect();
+        const sb = document.getElementById('edit-bar').getBoundingClientRect();
+        const first = document.querySelector('#edit-grid .page-card').getBoundingClientRect();
+        const head = document.querySelector('.sidebar').getBoundingClientRect();
+        return { sy: Math.round(scrollY), firstTop: Math.round(first.top), headB: Math.round(head.bottom), navTop: Math.round(nav.top), sbB: Math.round(sb.bottom), cols: getComputedStyle(document.getElementById('edit-grid')).gridTemplateColumns.split(' ').length, cw: Math.round(first.width) };
+      });
+      check(`${pc.label}: 파일을 넣으면 첫 카드로 자동 스크롤 · 카드 ${pc.cols}열(최소 100px)`, lay.sy > 0 && lay.firstTop >= lay.headB && lay.firstTop <= lay.headB + 40 && lay.cols === pc.cols && lay.cw >= 100,
+        `scrollY ${lay.sy}, 첫 카드 top ${lay.firstTop}(제목 줄 아래 ${lay.firstTop - lay.headB}px) · ${lay.cols}열 · 카드 폭 ${lay.cw}px`);
+      check(`${pc.label}: 저장 막대가 탭 막대 바로 위(8px)`, Math.abs(lay.sbB - (lay.navTop - 8)) <= 1, `저장 막대 아래 ${lay.sbB} · 탭 막대 위 ${lay.navTop}`);
+      await q.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+      await q.waitForTimeout(300);
+      const end = await q.evaluate(() => {
+        const cards = document.querySelectorAll('#edit-grid .page-card');
+        const cap = cards[cards.length - 1].querySelector('.page-src').getBoundingClientRect();
+        const sb = document.getElementById('edit-bar').getBoundingClientRect();
+        const nav = document.querySelector('.side-nav').getBoundingClientRect();
+        return { lastB: Math.round(cap.bottom), sbT: Math.round(sb.top), sbB: Math.round(sb.bottom), sbH: Math.round(sb.height), navTop: Math.round(nav.top), sw: document.documentElement.scrollWidth };
+      });
+      check(`${pc.label}: 맨 아래까지 내리면 마지막 카드가 저장 막대 · 탭 막대에 가리지 않음`, end.lastB <= end.sbT && end.sbB <= end.navTop && end.sw <= W,
+        `마지막 카드 캡션 아래 ${end.lastB} ≤ 저장 막대 위 ${end.sbT}(막대 ${end.sbH}px, 아래 ${end.sbB}) ≤ 탭 막대 ${end.navTop}`);
+
+      // 선택 모드(길게 누르기): 선택 막대가 위쪽 제목 줄 아래에 붙고 아래 막대들과 겹치지 않음
+      await q.evaluate(() => { const c = document.querySelectorAll('#edit-grid .page-card')[4]; window.scrollTo(0, c.getBoundingClientRect().top + scrollY - 200); });
+      await q.waitForTimeout(250);
+      const cb = await q.locator('#edit-grid .page-card').nth(4).boundingBox();
+      const tcdp = await pctx.newCDPSession(q);
+      const tpt = { x: cb.x + cb.width / 2, y: cb.y + cb.height / 2 };
+      await tcdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [tpt] });
+      await q.waitForTimeout(650);
+      await tcdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await q.evaluate(() => window.scrollBy(0, 400));
+      await q.waitForTimeout(250);
+      const sel = await q.evaluate(() => {
+        const s = document.getElementById('edit-selbar').getBoundingClientRect();
+        const head = document.querySelector('.sidebar').getBoundingClientRect();
+        const sb = document.getElementById('edit-bar').getBoundingClientRect();
+        const nav = document.querySelector('.side-nav').getBoundingClientRect();
+        return { mode: document.getElementById('edit-grid').classList.contains('select-mode'), hidden: document.getElementById('edit-selbar').hidden, top: Math.round(s.top), bottom: Math.round(s.bottom), headB: Math.round(head.bottom), sbT: Math.round(sb.top), navT: Math.round(nav.top) };
+      });
+      check(`${pc.label}: 선택 모드 선택 막대가 위쪽 제목 줄 아래에 붙음(저장 · 탭 막대와 안 겹침)`, sel.mode && !sel.hidden && sel.top >= sel.headB && sel.top <= sel.headB + 12 && sel.bottom < sel.sbT && sel.bottom < sel.navT,
+        `선택 막대 ${sel.top}~${sel.bottom} · 제목 줄 아래 ${sel.headB} · 저장 막대 ${sel.sbT} · 탭 막대 ${sel.navT}`);
+      await q.locator('#edit-selbar [data-sel="clear"]').tap();
+
+      // 설정하고 저장… 시트: [저장] 버튼이 가려지지 않음
+      await q.locator('#edit-save-opts').tap();
+      await until(q, () => !!document.querySelector('dialog.sd[open]'));
+      await q.waitForTimeout(300);
+      const sheet = await q.evaluate(() => {
+        const d = document.querySelector('dialog.sd[open]');
+        const btn = [...d.querySelectorAll('.sd-foot .btn.primary')].find((b) => b.getBoundingClientRect().height > 0);
+        const r = btn.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return { text: btn.textContent.trim(), bottom: Math.round(r.bottom), vh: innerHeight, hit: !!hit && (hit === btn || btn.contains(hit)) };
+      });
+      await q.keyboard.press('Escape');
+      check(`${pc.label}: 설정하고 저장 시트의 「${sheet.text}」 버튼이 탭 막대 · 안전 영역에 가리지 않음`, sheet.hit && sheet.bottom <= sheet.vh - pc.safe,
+        `버튼 아래 ${sheet.bottom} ≤ ${sheet.vh - pc.safe}, 가운데를 누르면 그 버튼(${sheet.hit})`);
+
+      // 화면 키보드 흉내: visualViewport 높이를 줄이면 탭 막대 숨김, 되돌리면 다시 보임
+      await q.locator('#tab-security').tap();
+      await q.locator('#unlock-pw').tap();
+      const kbd = await q.evaluate(async () => {
+        const vv = window.visualViewport;
+        const nav = () => ({ cls: document.documentElement.classList.contains('kb-open'), disp: getComputedStyle(document.querySelector('.side-nav')).display, sb: getComputedStyle(document.getElementById('edit-bar')).bottom });
+        Object.defineProperty(vv, 'height', { configurable: true, get: () => innerHeight - 320 });
+        vv.dispatchEvent(new Event('resize'));
+        await new Promise((r) => setTimeout(r, 50));
+        const open = nav();
+        delete vv.height; // 원래 값(프로토타입)으로
+        vv.dispatchEvent(new Event('resize'));
+        await new Promise((r) => setTimeout(r, 50));
+        return { open, closed: nav() };
+      });
+      check(`${pc.label}: 화면 키보드가 열리면(visualViewport 축소) 탭 막대 숨김 → 닫으면 다시 보임`, kbd.open.cls && kbd.open.disp === 'none' && !kbd.closed.cls && kbd.closed.disp === 'grid',
+        `열림: ${kbd.open.disp} → 닫힘: ${kbd.closed.disp}`);
+
+      // 접근성(axe): 처음 화면 + 도구 6곳
+      if (!pc.safe) {
+        await q.goto(BASE, { waitUntil: 'networkidle' });
+        await q.addScriptTag({ path: axePathM });
+        const runAxe = () => q.evaluate(async () => {
+          const res = await window.axe.run({ exclude: [['.demo-stage']] }, { resultTypes: ['violations'] });
+          return res.violations.filter((v) => v.impact === 'critical' || v.impact === 'serious').map((v) => `${v.id}(${v.nodes[0] && v.nodes[0].target.join(' ')})`);
+        });
+        const bad = [];
+        bad.push(...(await runAxe()).map((x) => `home:${x}`));
+        for (const t of tools) {
+          await q.locator(`#tab-${t}`).tap();
+          await q.waitForTimeout(150);
+          bad.push(...(await runAxe()).map((x) => `${t}:${x}`));
+        }
+        check(`${pc.label}: 접근성 검사(axe) 처음 화면 + 도구 6곳 critical · serious 0개`, bad.length === 0, bad.length ? [...new Set(bad)].join(' | ').slice(0, 300) : '0개');
+      }
+      check(`${pc.label}: 콘솔 에러 0개`, qerr.length === 0, qerr.length ? qerr.join(' | ').slice(0, 200) : '0개');
+      await pctx.close();
+    }
+
+    // 카메라가 없는 기기(컴퓨터 크롬의 모바일 모드 등): 카메라 버튼 숨김
+    const nc = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: 'light' });
+    await nc.addInitScript(() => { if (navigator.mediaDevices) navigator.mediaDevices.enumerateDevices = async () => []; });
+    const ncp = await nc.newPage();
+    await ncp.goto(`${BASE}/#img2pdf`, { waitUntil: 'networkidle' });
+    await ncp.waitForTimeout(200);
+    const noCam = await ncp.evaluate(() => ({ hidden: document.getElementById('img-camera-btn').hidden, h: document.getElementById('img-camera-btn').getBoundingClientRect().height, album: Math.round(document.querySelector('#img-drop .pick-big[for="img-input"]').getBoundingClientRect().width) }));
+    check('카메라가 없는 기기에서는 「카메라로 찍기」 숨김(사진첩 버튼이 한 줄 전체)', noCam.hidden && noCam.h === 0 && noCam.album > 300, `숨김 ${noCam.hidden}, 사진첩 버튼 폭 ${noCam.album}px`);
+    await nc.close();
+  }
+
   // ── 10. 여러 쪽 선택 · 선택 막대 · 되돌리기 · 사용법 패널 (1440px) ──
   {
     const fileMany = await writePdf('수업자료.pdf', await samplePdf(30, 'P'));
@@ -681,6 +919,7 @@ try {
     await t.goto(BASE, { waitUntil: 'networkidle' });
     await t.setInputFiles('#home-input', [fileMany]);
     await until(t, () => document.querySelectorAll('#edit-grid .page-card').length === 30);
+    await t.waitForTimeout(700); // 파일을 넣으면 첫 카드로 부드럽게 내려가므로 끝날 때까지 기다린다
     // 위 안내줄 · 아래 저장 막대에 가리지 않는 곳으로 카드를 올린다
     await t.evaluate(() => { const c = document.querySelectorAll('#edit-grid .page-card')[1]; window.scrollTo(0, c.getBoundingClientRect().top + scrollY - 150); });
     await t.waitForTimeout(200);
@@ -2513,12 +2752,40 @@ try {
     await p.screenshot({ path: path.join(out, 'edit-with-files.png') });
     await d.close();
 
-    const mo = await browser.newContext({ viewport: { width: 400, height: 860 }, colorScheme: 'light', deviceScaleFactor: 2, isMobile: true, hasTouch: true });
-    const mp = await mo.newPage();
-    await mp.goto(BASE, { waitUntil: 'networkidle' });
-    await mp.evaluate(() => document.fonts.ready);
-    await mp.screenshot({ path: path.join(out, 'mobile-home.png') });
-    await mo.close();
+    // 휴대폰(390px): 처음 화면 · 편집(저장 막대 + 탭 막대) · 사진 → PDF(버튼 두 개) · 선택 모드 · 다크
+    for (const scheme of ['light', 'dark']) {
+      const mo = await browser.newContext({ viewport: { width: 390, height: 844 }, colorScheme: scheme, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+      await mo.addInitScript(() => { if (navigator.mediaDevices) navigator.mediaDevices.enumerateDevices = async () => [{ kind: 'videoinput', deviceId: 'cam', label: '', groupId: 'g' }]; });
+      const mp = await mo.newPage();
+      await mp.goto(BASE, { waitUntil: 'networkidle' });
+      await mp.evaluate(() => document.fonts.ready);
+      if (scheme === 'light') {
+        await mp.screenshot({ path: path.join(out, 'mobile-home.png') });
+        await mp.locator('#tab-img2pdf').tap();
+        await mp.waitForTimeout(200);
+        await mp.screenshot({ path: path.join(out, 'mobile-img2pdf.png') });
+      }
+      await mp.locator('#tab-edit').tap();
+      await mp.setInputFiles('#edit-input', [sA, sB]);
+      await until(mp, () => document.querySelectorAll('#edit-grid .page-card canvas').length >= 6, undefined, { timeout: 15000 });
+      await mp.waitForTimeout(700);
+      await mp.screenshot({ path: path.join(out, scheme === 'light' ? 'mobile-edit.png' : 'dark-mobile-edit.png') });
+      if (scheme === 'light') {
+        await mp.evaluate(() => { const c = document.querySelectorAll('#edit-grid .page-card')[1]; window.scrollTo({ top: c.getBoundingClientRect().top + scrollY - 200, behavior: 'instant' }); });
+        await mp.waitForTimeout(400);
+        const mc = await mp.locator('#edit-grid .page-card').nth(1).boundingBox();
+        const mcdp = await mo.newCDPSession(mp);
+        await mcdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: mc.x + mc.width / 2, y: mc.y + mc.height / 2 }] });
+        await mp.waitForTimeout(650);
+        await mcdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+        await until(mp, () => document.getElementById('edit-grid').classList.contains('select-mode'));
+        await mp.locator('#edit-grid .page-card').nth(3).tap();
+        await mp.evaluate(() => window.scrollBy({ top: 160, behavior: 'instant' }));
+        await mp.waitForTimeout(300);
+        await mp.screenshot({ path: path.join(out, 'mobile-select.png') });
+      }
+      await mo.close();
+    }
 
     // 여러 쪽 선택 + 사용법 패널 (1440px)
     const sMany = await writePdf('수업자료.pdf', await samplePdf(12, 'Lesson'));
