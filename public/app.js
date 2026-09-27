@@ -3718,14 +3718,15 @@
   const HEIC_FIX = "아이폰 설정 → 카메라 → 포맷을 '높은 호환성'으로 바꾸면 JPG로 찍혀요.";
   const isImageLike = (f) => /^image\//.test(f.type || '') || /\.(jpe?g|png|webp|gif|bmp|heic|heif|avif|tiff?)$/i.test(f.name);
   let heicLoading = null;
+  let heicTries = 0; // 실패한 모듈 주소는 브라우저가 기억해 두므로, 다시 할 때는 주소를 살짝 바꾼다
   let heicLoadedMs = null;
   /** HEIC 변환기(heic-to, libheif)를 처음 쓸 때만 불러온다 */
   function heicConverter() {
     if (!heicLoading) {
       const t0 = performance.now();
-      heicLoading = import('/vendor/heic/heic-to.js')
+      heicLoading = import(`/vendor/heic/heic-to.js${heicTries ? `?r=${heicTries}` : ''}`)
         .then((m) => { heicLoadedMs = Math.round(performance.now() - t0); return m; })
-        .catch((e) => { heicLoading = null; throw e; });
+        .catch((e) => { heicLoading = null; heicTries++; throw e; });
     }
     return heicLoading;
   }
@@ -3754,7 +3755,12 @@
           mod = await heicConverter();
         } catch (e) {
           console.warn(e);
-          toast('아이폰 사진 변환기를 불러오지 못했어요.', `인터넷 연결을 확인하고 다시 해 주세요. 또는 ${HEIC_FIX}`);
+          // 변환기는 처음 쓸 때 받는다: 한 번도 안 받은 채 인터넷이 없으면 여기로 온다
+          if (!navigator.onLine || Net.isOffline()) {
+            toast('인터넷이 연결되면 아이폰 사진 변환기를 받아요.', '한 번 받아 두면 그다음부터는 인터넷 없이도 바꿀 수 있어요. 지금은 JPG · PNG 사진을 넣어 주세요.', 'info');
+          } else {
+            toast('아이폰 사진 변환기를 불러오지 못했어요.', `인터넷 연결을 확인하고 다시 해 주세요. 또는 ${HEIC_FIX}`);
+          }
           return;
         }
         for (let n = 0; n < heic.length; n++) {

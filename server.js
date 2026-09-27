@@ -108,14 +108,15 @@ function precacheList() {
     '/changelog.json',
     ...PAGE_ASSETS.map((a) => `/${a}?v=${COMMIT}`),
     '/vendor/pdf-lib.min.js', '/vendor/pdf.min.js', '/vendor/pdf.worker.min.js', '/vendor/jszip.min.js', '/vendor/pako.min.js', '/vendor/fontkit.min.js',
-    '/vendor/jpeg-decoder.js', '/vendor/heic/heic-to.js',
+    '/vendor/jpeg-decoder.js',
     '/vendor/pretendard/pretendardvariable.min.css',
+    // 화면 글꼴: 모든 굵기가 든 가변 글꼴 한 개(화면이 바로 씀)
     ...listDir(nm('pretendard', 'dist', 'web', 'variable', 'woff2'), '/vendor/pretendard/woff2'),
-    '/vendor/fonts/Pretendard-Bold.otf',
-    ...listDir(nm('pdfjs-dist', 'cmaps'), '/vendor/cmaps'),
-    ...listDir(nm('pdfjs-dist', 'standard_fonts'), '/vendor/standard_fonts'),
   ];
 }
+// 미리 받지 않고 처음 쓸 때 받아 두는 것(런타임 캐시, 같은 캐시 이름):
+// 아이폰 사진 변환기(약 3MB), pdf.js 문자표 · 표준 글꼴(필요한 PDF에서만), 워터마크용 글꼴
+const RUNTIME_PREFIXES = ['/vendor/heic/', '/vendor/cmaps/', '/vendor/standard_fonts/', '/vendor/fonts/'];
 
 // 라이브러리는 CDN 없이 node_modules에서 직접 제공한다.
 const VENDOR = {
@@ -193,7 +194,8 @@ app.get('/version', (req, res) => {
 // 서비스 워커: 커밋과 미리 받을 목록을 넣어서 준다. 늘 새로 확인해야 새 버전을 알아챈다.
 const SW_JS = () => fs.readFileSync(path.join(PUBLIC, 'sw.js'), 'utf8')
   .replace("'__COMMIT__'", JSON.stringify(COMMIT))
-  .replace('[/* __PRECACHE__ */]', JSON.stringify(precacheList(), null, 1));
+  .replace('[/* __PRECACHE__ */]', JSON.stringify(precacheList(), null, 1))
+  .replace('[/* __RUNTIME__ */]', JSON.stringify(RUNTIME_PREFIXES));
 const SW_CACHED = SW_JS();
 app.get('/sw.js', (req, res) => {
   res.set('Cache-Control', 'no-cache');

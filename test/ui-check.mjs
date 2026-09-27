@@ -1592,10 +1592,17 @@ try {
       const names = await caches.keys();
       const c = await caches.open(names.find((n) => n.startsWith('pdfws-')));
       const keys = (await c.keys()).map((r) => new URL(r.url).pathname);
-      return { names, n: keys.length, has: ['/', '/vendor/pdf.worker.min.js', '/vendor/heic/heic-to.js', '/vendor/pretendard/pretendardvariable.min.css'].every((k) => keys.includes(k)), version: keys.includes('/version') };
+      return {
+        names,
+        n: keys.length,
+        has: ['/', '/vendor/pdf.worker.min.js', '/vendor/pdf-lib.min.js', '/vendor/pretendard/pretendardvariable.min.css'].every((k) => keys.includes(k)) && keys.some((k) => k.startsWith('/vendor/pretendard/woff2/')),
+        // 가끔 쓰는 큰 것은 미리 받지 않는다(처음 쓸 때 받음)
+        lazy: !keys.some((k) => /^\/vendor\/(heic|cmaps|standard_fonts|fonts)\//.test(k)),
+        version: keys.includes('/version'),
+      };
     });
-    check('서비스 워커 등록 · 앱 셸 미리 캐시 (/version은 캐시 안 함)', cached.names.length === 1 && cached.n > 100 && cached.has && !cached.version,
-      `캐시 ${cached.names.join(',')} · ${cached.n}개`);
+    check('서비스 워커 등록 · 앱 셸만 미리 캐시(HEIC 변환기 · 문자표 · 워터마크 글꼴은 처음 쓸 때) · /version은 캐시 안 함', cached.names.length === 1 && cached.n >= 25 && cached.n <= 60 && cached.has && cached.lazy && !cached.version,
+      `캐시 ${cached.names.join(',')} · 미리 ${cached.n}개`);
 
     // 인터넷을 끊고 새로고침 → 편집 · 합치기 · 저장
     await octx.setOffline(true);
@@ -1620,9 +1627,70 @@ try {
     await octx.setOffline(false);
     check('인터넷 없이(오프라인) 새로고침 → 편집 · 합치기 · 저장 + "지금 인터넷 없이 작동 중" 배지', off.badge && odoc.getPageCount() === 7 && /^v /.test(off.ver),
       `배지 "${off.text}" · ${odl.suggestedFilename()} ${odoc.getPageCount()}쪽 · 화면 ${off.ver}`);
-    check('CSP 위반 · 콘솔 에러 0개 (오프라인 흐름 포함)', csp.length === 0 && oerr.filter((e) => !/net::ERR_INTERNET_DISCONNECTED|Failed to fetch|\/version/.test(e)).length === 0,
+    check('CSP 위반 · 콘솔 에러 0개 (오프라인 흐름 포함)', csp.length === 0 && oerr.filter((e) => !/net::ERR_INTERNET_DISCONNECTED|Failed to fetch|\/version|heic-to/.test(e)).length === 0,
       csp.length ? csp.join(' | ').slice(0, 200) : oerr.length ? `오프라인 중 /version 실패만 ${oerr.length}건(정상)` : '0개');
     await octx.close();
+
+    // 진짜로 서버에 닿지 않는 오프라인(점검 도구의 setOffline은 서비스 워커의 요청까지는 막지 않아서 서버를 멈춘다)
+    {
+      const HPORT = 4000 + Math.floor(Math.random() * 2000) + 1000;
+      const up = () => new Promise((resolve, reject) => {
+        const sv = spawn(process.execPath, ['server.js'], { cwd: root, env: { ...process.env, PORT: String(HPORT) }, stdio: 'pipe' });
+        sv.stdout.on('data', (d) => String(d).includes('http://') && resolve(sv));
+        sv.on('error', reject);
+        setTimeout(() => reject(new Error('서버가 뜨지 않음')), 10000);
+      });
+      const down = (sv) => new Promise((r) => { sv.once('exit', r); sv.kill(); });
+      const fakeHeic = Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypheic', 'latin1'), Buffer.alloc(40)]);
+      const heicPath = path.join(tmp, '아이폰.heic');
+      fs.writeFileSync(heicPath, fakeHeic);
+      let hs = await up();
+      const hctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, acceptDownloads: true, colorScheme: 'light' });
+      const hp = await hctx.newPage();
+      await hp.goto(`http://localhost:${HPORT}/`, { waitUntil: 'networkidle' });
+      await until(hp, () => !!navigator.serviceWorker.controller, undefined, { timeout: 60000 });
+      const goOffline = async () => {
+        await down(hs);
+        await hctx.setOffline(true);
+        await hp.reload({ waitUntil: 'load' });
+        await until(hp, () => window.__pdfWorkshop && window.__pdfWorkshop.ready);
+        await until(hp, () => window.__pdfWorkshop.pwa().offline, undefined, { timeout: 5000 }).catch(() => {});
+      };
+      await goOffline();
+      // 서버 없이 합쳐 저장
+      await hp.setInputFiles('#home-input', [fileA, fileB]);
+      await until(hp, () => document.querySelectorAll('#edit-grid .page-card canvas').length === 7, undefined, { timeout: 20000 });
+      const [hdl] = await Promise.all([hp.waitForEvent('download'), hp.click('#edit-save')]);
+      const hdoc = await PDFDocument.load(fs.readFileSync(await hdl.path()));
+      // HEIC을 한 번도 안 쓴 채 → 안내
+      await hp.click('#logo');
+      await hp.evaluate(() => document.getElementById('toasts').replaceChildren());
+      await hp.setInputFiles('#home-input', [heicPath]);
+      await until(hp, () => /변환기|변환하지/.test(document.getElementById('toasts').textContent), undefined, { timeout: 15000 });
+      const heicOff = await hp.textContent('#toasts');
+      // 인터넷이 돌아오면 새로고침 없이 다시 넣어도 변환기를 받고, 캐시에 들어간다
+      hs = await up();
+      await hctx.setOffline(false);
+      await hp.evaluate(() => document.getElementById('toasts').replaceChildren());
+      await hp.setInputFiles('#home-input', [heicPath]);
+      await until(hp, () => /변환하지 못했어요|불러오지 못했어요|인터넷이 연결되면/.test(document.getElementById('toasts').textContent), undefined, { timeout: 30000 });
+      const heicOn = await hp.textContent('#toasts');
+      const rtCached = /변환하지 못했어요/.test(heicOn) && await hp.evaluate(async () => {
+        await new Promise((r) => setTimeout(r, 600));
+        const c = await caches.open((await caches.keys()).find((n) => n.startsWith('pdfws-')));
+        return !!(await c.match('/vendor/heic/heic-to.js'));
+      });
+      await goOffline();
+      await hp.evaluate(() => document.getElementById('toasts').replaceChildren());
+      await hp.setInputFiles('#home-input', [heicPath]);
+      await until(hp, () => /변환/.test(document.getElementById('toasts').textContent), undefined, { timeout: 20000 });
+      const heicOff2 = await hp.textContent('#toasts');
+      await hctx.close();
+      check('서버에 닿지 않는 진짜 오프라인: 새로고침 → 합쳐 저장 7쪽', hdoc.getPageCount() === 7, `${hdl.suggestedFilename()} ${hdoc.getPageCount()}쪽`);
+      check('HEIC: 한 번도 안 쓰고 오프라인이면 "인터넷이 연결되면 아이폰 사진 변환기를 받아요" → 한 번 받으면 캐시에 들어가 오프라인에서도 변환기를 씀',
+        /인터넷이 연결되면 아이폰 사진 변환기를 받아요/.test(heicOff) && rtCached && !/인터넷이 연결되면/.test(heicOff2) && /변환하지 못했어요/.test(heicOff2),
+        `처음: "${heicOff.slice(0, 30)}…" · 받은 뒤 캐시 ${rtCached} · 다시 오프라인: "${heicOff2.slice(0, 26)}…"(가짜 HEIC이라 변환 실패가 정상)`);
+    }
 
     // 새 버전 배포 흉내: 같은 주소에서 커밋만 다른 서버로 바꿔 띄운다
     const UPORT = 4000 + Math.floor(Math.random() * 2000) + 2000;

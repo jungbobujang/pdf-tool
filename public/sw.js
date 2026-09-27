@@ -1,10 +1,12 @@
 /* 오프라인용 서비스 워커. 서버가 커밋과 미리 받을 파일 목록을 채워서 /sw.js 로 준다.
-   - 설치 때 앱 화면 · 라이브러리 · 글꼴을 모두 받아 둔다(파일 자체는 절대 캐시하지 않는다. PDF는 브라우저 밖으로 안 나간다).
+   - 설치 때 앱 화면 · 라이브러리 · 화면 글꼴을 받아 둔다(파일 자체는 절대 캐시하지 않는다. PDF는 브라우저 밖으로 안 나간다).
+   - 아이폰 사진 변환기 · pdf.js 문자표 · 워터마크 글꼴처럼 가끔 쓰는 큰 것은 처음 쓸 때 받아 같은 캐시에 넣는다.
    - 새 버전이 오면 "대기"로 두고, 화면의 [새로고침]을 누를 때만 바꾼다(작업 중 강제 새로고침 없음).
    - /version 은 캐시하지 않는다(오프라인 판별에 쓴다). */
 const VERSION = '__COMMIT__';
 const CACHE = `pdfws-${VERSION}`;
 const PRECACHE = [/* __PRECACHE__ */];
+const RUNTIME = [/* __RUNTIME__ */];
 
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
@@ -52,10 +54,16 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // 처음 쓸 때 받는 것은 주소 뒤의 ?r=… 를 빼고 경로로만 저장 · 찾는다(다시 시도한 주소도 같은 것)
+  const runtime = RUNTIME.some((p) => url.pathname.startsWith(p));
   event.respondWith((async () => {
     const cache = await caches.open(CACHE);
-    const hit = await cache.match(req);
+    const hit = await cache.match(runtime ? url.origin + url.pathname : req);
     if (hit) return hit;
-    return fetch(req);
+    const res = await fetch(req);
+    if (runtime && res.ok && res.status === 200) {
+      cache.put(url.origin + url.pathname, res.clone()).catch(() => {});
+    }
+    return res;
   })());
 });
