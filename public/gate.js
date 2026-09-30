@@ -56,8 +56,8 @@
     return res.json().catch(function () { return {}; }).then(function (body) { return { ok: res.ok, body: body }; });
   }).then(function (r) {
     if (r.ok) { location.replace(location.pathname + location.search); return; }
-    showError((r.body && r.body.message) || '열지 못했어요. 스쿨 → 도구함에서 다시 [열기]를 눌러 주세요.');
+    showError((r.body && r.body.message) || '열지 못했어요. 아래 [스쿨에서 열기]를 다시 눌러 주세요.');
   }).catch(function () {
-    showError('PDF 작업실 서버에 연결하지 못했어요. 인터넷 연결을 확인하고 스쿨 → 도구함에서 다시 [열기]를 눌러 주세요.');
+    showError('PDF 작업실 서버에 연결하지 못했어요. 인터넷 연결을 확인하고 아래 [스쿨에서 열기]를 다시 눌러 주세요.');
   });
 })();

@@ -173,7 +173,7 @@ app.get('/version', (req, res) => {
 // ─────────────────────────────────────────────────────────────
 // 스쿨 입장권 · 통행증
 // ─────────────────────────────────────────────────────────────
-// 스쿨 주소(공개 키를 받는 곳 · 안내 화면의 [스쿨로 가기])
+// 스쿨 주소(공개 키를 받는 곳 · 안내 화면의 [스쿨에서 열기] = 스쿨 주소 + /go/pdf)
 const SCHOOL_URL = (process.env.SCHOOL_URL || 'https://school-production-082b.up.railway.app').replace(/\/+$/, '');
 // 통행증 서명 비밀: 서버가 시작할 때마다 새로 만든다(그래서 재배포하면 다시 [열기]가 필요하다).
 // PASS_SECRET(64자리 16진수)은 여러 서버를 띄우는 점검에서만 쓴다.
@@ -192,15 +192,15 @@ function sendGate(res) {
 }
 
 const ENTER_TEXT = {
-  school_unreachable: '스쿨에 잠깐 연결이 안 돼요. 잠시 뒤 스쿨에서 다시 [열기]를 눌러 주세요.',
-  too_many: '너무 자주 시도했어요. 1분 뒤에 스쿨에서 다시 [열기]를 눌러 주세요.',
+  school_unreachable: '스쿨에 잠깐 연결이 안 돼요. 잠시 뒤 아래 [스쿨에서 열기]를 다시 눌러 주세요.',
+  too_many: '너무 자주 시도했어요. 1분 뒤에 아래 [스쿨에서 열기]를 다시 눌러 주세요.',
 };
 app.post('/api/enter', express.json({ limit: '4kb' }), async (req, res) => {
   res.set('Cache-Control', 'no-store');
   const fail = (status, reason, message) => {
     // 로그에는 결과와 까닭의 종류만. 입장권 · 가명 번호 · 쿠키 값은 남기지 않는다
     console.log(`enter fail reason=${reason}`);
-    res.status(status).json({ error: reason, message: `${message} 스쿨 → 도구함에서 다시 [열기]를 눌러 주세요.` });
+    res.status(status).json({ error: reason, message: `${message} 아래 [스쿨에서 열기]를 다시 눌러 주세요.` });
   };
   if (!enterLimit(gate.clientIp(req))) {
     console.log('enter fail reason=too_many');

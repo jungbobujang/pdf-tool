@@ -103,7 +103,6 @@ const html = `<!doctype html>
   <meta name="description" content="PDF 작업실이 사용하는 오픈소스 라이브러리와 라이선스.">
   <meta name="app-version" content="">
   <meta name="theme-color" content="#141B2E">
-  <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icons/logo.svg" type="image/svg+xml">
   <link rel="icon" href="/icons/favicon-32.png" sizes="32x32" type="image/png">
   <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">

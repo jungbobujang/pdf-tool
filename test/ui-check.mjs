@@ -1934,7 +1934,7 @@ try {
     for (const [label, t, status, reason] of cases) {
       const r = await enter(t);
       const b = await r.json();
-      got.push({ label, ok: r.status === status && b.error === reason && !r.headers.get('set-cookie') && /다시 \[열기\]/.test(b.message || ''), st: r.status });
+      got.push({ label, ok: r.status === status && b.error === reason && !r.headers.get('set-cookie') && /\[스쿨에서 열기\]를 다시 눌러 주세요/.test(b.message || ''), st: r.status });
     }
     const first = await enter(reused);
     const second = await enter(reused);
@@ -1991,7 +1991,7 @@ try {
       await until(f, () => !document.getElementById('gate-error').hidden, undefined, { timeout: 10000 });
       const failText = await f.textContent('#gate-error');
       const failUrl = f.url();
-      check('안내 화면: #t=입장권 → 통행증 받고 #을 지운 주소로 다시 열려 PDF 화면 · 실패하면 까닭 문장 + [스쿨로 가기]',
+      check('안내 화면: #t=입장권 → 통행증 받고 #을 지운 주소로 다시 열려 PDF 화면 · 실패하면 까닭 문장 + [스쿨에서 열기]',
         !/#t=/.test(inUrl) && /만료/.test(failText) && !/#t=/.test(failUrl) && await f.isVisible('#gate-school') && gerr.length === 0,
         `열림 ${inUrl.replace(BASE, '')} · 실패 "${failText.slice(0, 30)}…"`);
       await gctx.close();
@@ -2025,6 +2025,69 @@ try {
         await c.close();
       }
       check('안내 화면: 390×844 · 820×1180 · 1180×820(터치) · 1280×720 · 다크에서 가로 스크롤 없음 · 단추 44px · 글자 12px', probs.length === 0, probs.join(' | ') || '5개 모두 통과');
+    }
+
+    // ── 스쿨에서 열기: 안내 · 실패 3가지 · 아이콘 안내의 단추가 모두 스쿨 /go/pdf ──
+    {
+      const GO = `${process.env.SCHOOL_URL}/go/pdf`;
+      const SENTENCE = '스쿨 선생님 전용 도구예요. [스쿨에서 열기]를 누르면 로그인 뒤 바로 이 화면으로 돌아와요.';
+      const button = async (pg) => ({ href: await pg.getAttribute('#gate-school', 'href'), text: (await pg.textContent('#gate-school')).trim(), shown: await pg.isVisible('#gate-school') });
+      const okButton = (b) => b.href === GO && b.text === '스쿨에서 열기' && b.shown;
+      const found = [];
+      // 1) 주소만 알고 온 경우: 세 기기 + 다크
+      for (const sz of [{ w: 390, h: 844, touch: true }, { w: 820, h: 1180, touch: true }, { w: 1280, h: 720 }, { w: 1280, h: 720, dark: true }]) {
+        const c = await rawContext({ viewport: { width: sz.w, height: sz.h }, hasTouch: !!sz.touch, isMobile: sz.w < 500, colorScheme: sz.dark ? 'dark' : 'light' });
+        const pg = await c.newPage();
+        await pg.goto(BASE, { waitUntil: 'networkidle' });
+        const b = await button(pg);
+        const text = (await pg.textContent('#gate-text')).trim();
+        found.push({ label: `안내 ${sz.w}${sz.dark ? ' 다크' : ''}`, ok: okButton(b) && text === SENTENCE, detail: b.href });
+        await c.close();
+      }
+      // 2) 실패 3가지: 만료 · 이미 씀 · 스쿨 연결 안 됨 -- 까닭 문장 + 같은 단추, #t는 주소에 남지 않음
+      const failCase = async (label, base, ticket, pattern) => {
+        const c = await rawContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+        const pg = await c.newPage();
+        await pg.goto(`${base}/#t=${ticket}`);
+        await until(pg, () => !document.getElementById('gate-error').hidden, undefined, { timeout: 10000 });
+        const text = await pg.textContent('#gate-error');
+        const b = await button(pg);
+        found.push({ label, ok: pattern.test(text) && /\[스쿨에서 열기\]를 다시 눌러 주세요/.test(text) && okButton(b) && !/#t=/.test(pg.url()), detail: text.slice(0, 40) });
+        await c.close();
+      };
+      await failCase('만료', BASE, makeTicket({ iat: now - 400, exp: now - 200 }), /만료/);
+      const usedTicket = makeTicket();
+      await enter(usedTicket);
+      await failCase('이미 씀', BASE, usedTicket, /이미 쓴/);
+      {
+        const DPORT = 4000 + Math.floor(Math.random() * 2000) + 5000;
+        const ds = spawn(process.execPath, ['server.js'], { cwd: root, env: { ...process.env, PORT: String(DPORT), SCHOOL_URL: 'http://127.0.0.1:9' }, stdio: 'pipe' });
+        await new Promise((resolve, reject) => { ds.stdout.on('data', (d) => String(d).includes('http://') && resolve()); ds.on('error', reject); setTimeout(() => reject(new Error('서버가 뜨지 않음')), 10000); });
+        const c = await rawContext({ viewport: { width: 820, height: 1180 } });
+        const pg = await c.newPage();
+        await pg.goto(`http://localhost:${DPORT}/#t=${makeTicket()}`);
+        await until(pg, () => !document.getElementById('gate-error').hidden, undefined, { timeout: 15000 });
+        const text = await pg.textContent('#gate-error');
+        const href = await pg.getAttribute('#gate-school', 'href');
+        found.push({ label: '스쿨 연결 안 됨', ok: /스쿨에 잠깐 연결이 안 돼요/.test(text) && /\[스쿨에서 열기\]를 다시 눌러 주세요/.test(text) && href === 'http://127.0.0.1:9/go/pdf' && !/#t=/.test(pg.url()), detail: text.slice(0, 40) });
+        await c.close();
+        await new Promise((res) => { ds.once('exit', res); ds.kill(); });
+      }
+      // 3) 바탕화면 아이콘으로 연 창: 아이콘 안내 + 같은 단추
+      {
+        const c = await rawContext({ viewport: { width: 1280, height: 720 } });
+        await c.addInitScript(() => {
+          const real = window.matchMedia.bind(window);
+          window.matchMedia = (q) => (/display-mode: standalone/.test(q) ? { matches: true, media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} } : real(q));
+        });
+        const pg = await c.newPage();
+        await pg.goto(BASE, { waitUntil: 'networkidle' });
+        const note = await pg.isVisible('#gate-icon') ? await pg.textContent('#gate-icon') : '';
+        found.push({ label: '아이콘 안내', ok: /\[스쿨에서 열기\]를 누르면 로그인 뒤 바로 이 화면으로 돌아와요/.test(note) && okButton(await button(pg)), detail: note.slice(0, 30) });
+        await c.close();
+      }
+      check('스쿨에서 열기: 안내(390 · 820 · 1280 · 다크) · 실패 3가지(만료 · 이미 씀 · 스쿨 연결 안 됨) · 아이콘 안내의 단추가 모두 SCHOOL_URL/go/pdf, #t는 주소에 남지 않음',
+        found.every((x) => x.ok), found.filter((x) => !x.ok).map((x) => `${x.label}: ${x.detail}`).join(' | ') || `${found.length}곳 통과`);
     }
 
     // ── 옛 워커 청소: 622bfcd를 같은 주소에서 띄워 워커 · 캐시를 심고, 새 버전으로 바꿔 다시 연다 ──
@@ -2082,8 +2145,8 @@ try {
       check('옛 워커 청소: 622bfcd로 워커 · 캐시를 심은 뒤 새 버전 → 워커 등록 0 · pdfws- 캐시 0 · 안내 화면',
         result.planted && result.state && result.state.gate && result.state.regs === 0 && result.state.caches === 0,
         result.state ? `심음 ${result.planted} → 등록 ${result.state.regs} · 캐시 ${result.state.caches} · 안내 ${result.state.gate}` : `옛 버전을 풀지 못함`);
-      check('바탕화면 아이콘(standalone)으로 연 창: "바탕화면 아이콘으로는 이제 열 수 없어요 … 지워도 돼요"',
-        /바탕화면 아이콘으로는 이제 열 수 없어요/.test(result.iconText || '') && /지워도 돼요/.test(result.iconText || ''), (result.iconText || '').slice(0, 40));
+      check('바탕화면 아이콘(standalone)으로 연 창: "바탕화면 아이콘으로는 바로 열 수 없어요 … [스쿨에서 열기] … 지워도 돼요"',
+        /바탕화면 아이콘으로는 바로 열 수 없어요/.test(result.iconText || '') && /\[스쿨에서 열기\]/.test(result.iconText || '') && /지워도 돼요/.test(result.iconText || ''), (result.iconText || '').slice(0, 40));
     }
   }
 
