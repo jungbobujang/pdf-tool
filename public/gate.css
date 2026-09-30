@@ -1,0 +1,88 @@
+/* 안내 화면(스쿨 입장권이 없을 때). 앱의 style.css와 같은 색을 쓰되, 이 한 장만으로 선다. */
+:root {
+  --bg: #F4F6FA;
+  --card: #FFFFFF;
+  --ink: #172033;
+  --muted: #56627A;
+  --line: #DDE3EC;
+  --accent: #3355FF;
+  --accent-ink: #FFFFFF;
+  --danger: #C23A2E;
+  --danger-bg: #FBEDEC;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0E1322;
+    --card: #161D30;
+    --ink: #E7EAF1;
+    --muted: #A2ACC2;
+    --line: #2A3246;
+    --accent: #6E8FFF;
+    --accent-ink: #0B1027;
+    --danger: #FF8D80;
+    --danger-bg: #2A1614;
+  }
+}
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; }
+body.gate {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: 'Pretendard Variable', Pretendard, system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding: 24px 16px;
+}
+.gate-card {
+  width: 100%;
+  max-width: 460px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 32px 24px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  box-shadow: 0 12px 40px rgba(20, 27, 46, 0.08);
+}
+.gate-logo { width: 56px; height: 56px; }
+.gate-name { margin: 0; font-weight: 700; color: var(--muted); font-size: 15px; }
+.gate-title { margin: 4px 0 0; font-size: 22px; line-height: 1.35; overflow-wrap: anywhere; }
+.gate-text { margin: 0; font-size: 16px; overflow-wrap: anywhere; }
+.gate-icon-note { margin-top: 6px; }
+.gate-error {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-weight: 600;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+.gate-btn {
+  margin-top: 16px;
+  min-height: 48px;
+  min-width: 180px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 22px;
+  border-radius: 12px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 700;
+  font-size: 17px;
+  text-decoration: none;
+}
+.gate-btn:hover { filter: brightness(1.05); }
+.gate-btn:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+.gate-foot { margin: 14px 0 0; font-size: 14px; color: var(--muted); }
+[hidden] { display: none !important; }

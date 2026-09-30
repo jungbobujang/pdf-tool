@@ -3807,7 +3807,7 @@
           console.warn(e);
           // 변환기는 처음 쓸 때 받는다: 한 번도 안 받은 채 인터넷이 없으면 여기로 온다
           if (!navigator.onLine || Net.isOffline()) {
-            toast('인터넷이 연결되면 아이폰 사진 변환기를 받아요.', '한 번 받아 두면 그다음부터는 인터넷 없이도 바꿀 수 있어요. 지금은 JPG · PNG 사진을 넣어 주세요.', 'info');
+            toast('인터넷이 연결되면 아이폰 사진 변환기를 받아요.', '지금은 JPG · PNG 사진을 넣어 주세요.', 'info');
           } else {
             toast('아이폰 사진 변환기를 불러오지 못했어요.', `인터넷 연결을 확인하고 다시 해 주세요. 또는 ${HEIC_FIX}`);
           }
@@ -6007,7 +6007,7 @@
       usage();
     });
     $('set-wipe').addEventListener('click', async () => {
-      const yes = await confirmBox({ title: '이 브라우저에 저장된 것을 모두 지울까요?', body: '설정, 서명 · 도장, 최근 작업, 오프라인용 파일(캐시)을 지워요. 넣은 PDF 원본 파일은 그대로예요.', yes: '모두 지우기' });
+      const yes = await confirmBox({ title: '이 브라우저에 저장된 것을 모두 지울까요?', body: '설정, 서명 · 도장, 최근 작업, 예전 오프라인용 파일(캐시)이 남아 있으면 그것까지 지워요. 넣은 PDF 원본 파일은 그대로예요.', yes: '모두 지우기' });
       if (!yes) return;
       clearTimeout(timer);
       pending = null;
@@ -6028,7 +6028,7 @@
       sw.checked = false;
       usage();
       if (!dlg.open) dlg.showModal();
-      toast('이 브라우저에 저장된 것을 모두 지웠어요.', '다음에 열 때 오프라인용 파일을 다시 받아요.', 'ok');
+      toast('이 브라우저에 저장된 것을 모두 지웠어요.', '설정 · 서명과 도장 · 최근 작업이 모두 지워졌어요.', 'ok');
     });
     document.querySelectorAll('[data-settings]').forEach((b) => b.addEventListener('click', () => { if (!isBusy()) openSettings(); }));
     offer();
@@ -6086,8 +6086,7 @@
   })();
 
   window.addEventListener('beforeunload', (e) => {
-    // 새 버전 띠에서 [그래도 새로고침]을 눌렀을 때는 묻지 않는다
-    if (!hasWork() || window.__pdfwsReloading) return undefined;
+    if (!hasWork()) return undefined;
     e.preventDefault();
     e.returnValue = '작업 중인 내용이 사라져요.';
     return '작업 중인 내용이 사라져요.';
@@ -6323,7 +6322,7 @@
 
   // 검증용으로 상태를 살짝 드러낸다(개인 정보 없음).
   // 배포된 커밋을 화면 구석에 작게 보여 준다(옛 버전이 떠 있는지 바로 알 수 있게).
-  //   인터넷이 없으면(서비스 워커가 준 화면) HTML에 박힌 커밋으로 보여 주고 "인터넷 없이 작동 중"을 켠다.
+  //   인터넷이 끊기면 "인터넷 연결이 없어요" 배지를 켠다(이미 연 화면은 계속 쓸 수 있다).
   const Net = (() => {
     const meta = document.querySelector('meta[name="app-version"]');
     const pageCommit = (meta && meta.content) || '';
@@ -6346,7 +6345,6 @@
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
         .then((v) => {
           setOffline(false);
-          // 화면이 옛 버전 캐시에서 나왔으면 화면의 커밋을 그대로 둔다(새 버전은 위쪽 띠로 알린다)
           if (v && v.commit && (!pageCommit || pageCommit === v.commit)) showVersion(v.commit, `배포 시각 ${new Date(v.builtAt).toLocaleString('ko-KR')}`);
         })
         .catch(() => setOffline(true));
@@ -6355,6 +6353,19 @@
     window.addEventListener('online', probe);
     window.addEventListener('offline', () => setOffline(true));
     return { probe, isOffline: () => offline };
+  })();
+
+  // 연 화면은 인터넷이 끊겨도 계속 쓰게: 처음 쓸 때 받는 작업 파일(PDF 그리기 · 용량 줄이기 · 서명 글꼴)을
+  // 한가할 때 미리 한 번 받아 브라우저 캐시에 둔다. 오프라인 캐시(서비스 워커)가 아니라 보통 HTTP 캐시다.
+  (() => {
+    const warm = () => {
+      // 용량 줄이기 워커와 같은 주소여야 캐시가 맞는다
+      const v = encodeURIComponent(VER);
+      ['/vendor/pdf.worker.min.js', `/compress-worker.js?v=${v}`, '/vendor/jpeg-decoder.js', '/vendor/fontkit.min.js']
+        .forEach((u) => { fetch(u, { cache: 'default' }).catch(() => {}); });
+    };
+    if ('requestIdleCallback' in window) requestIdleCallback(warm, { timeout: 4000 });
+    else setTimeout(warm, 1500);
   })();
 
   /** 작업 중인 파일이 있는가 (새로고침 · 탭 닫기 전에 확인) */
@@ -6366,85 +6377,12 @@
   }
 
   // ═══════════════════════════════════════════════════════════
-  // 오프라인(서비스 워커) · 새 버전 띠 · 바탕화면에 설치
+  // 오프라인 · 바탕화면 설치는 끝났다(2026-09-30): 이제 스쿨 도구함의 [열기]로만 연다.
+  // 서비스 워커를 등록하지 않는다. 예전에 깔린 것은 /sw.js(끄기 워커)가 스스로 치운다.
   // ═══════════════════════════════════════════════════════════
-  const Pwa = (() => {
-    const bar = $('update-bar');
-    const go = $('update-go');
-    const text = $('update-text');
-    let waiting = null;
-    let wantReload = false;
-    let armed = false;
-    function showUpdate(w) {
-      waiting = w;
-      armed = false;
-      bar.classList.remove('warn');
-      text.textContent = '새 버전이 있어요.';
-      go.textContent = '새로고침';
-      bar.hidden = false;
-    }
-    go.addEventListener('click', () => {
-      if (!waiting) return;
-      // 작업 중이면 한 번 더 확인한다(강제로 새로고침하지 않는다)
-      if (hasWork() && !armed) {
-        armed = true;
-        bar.classList.add('warn');
-        text.textContent = '새로고침하면 지금 작업이 사라져요. 먼저 저장하세요.';
-        go.textContent = '그래도 새로고침';
-        return;
-      }
-      wantReload = true;
-      window.__pdfwsReloading = true;
-      waiting.postMessage('SKIP_WAITING');
-    });
-    $('update-x').addEventListener('click', () => { bar.hidden = true; });
-
-    let reg = null;
-    if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-      navigator.serviceWorker.addEventListener('controllerchange', () => {
-        if (wantReload) { wantReload = false; location.reload(); }
-      });
-      navigator.serviceWorker.register('/sw.js').then((r) => {
-        reg = r;
-        const offer = (w) => { if (w && navigator.serviceWorker.controller) showUpdate(w); };
-        if (r.waiting) offer(r.waiting);
-        r.addEventListener('updatefound', () => {
-          const w = r.installing;
-          if (!w) return;
-          w.addEventListener('statechange', () => { if (w.state === 'installed') offer(w); });
-        });
-      }).catch((e) => console.warn('서비스 워커 등록 실패(오프라인 사용만 안 됨):', e && e.message));
-      // 탭으로 돌아오면 새 버전이 있는지 가끔 확인
-      let lastCheck = Date.now();
-      document.addEventListener('visibilitychange', () => {
-        if (document.hidden || !reg || Date.now() - lastCheck < 30 * 60 * 1000) return;
-        lastCheck = Date.now();
-        reg.update().catch(() => {});
-      });
-    }
-
-    // 바탕화면에 설치 (브라우저가 설치를 제안할 수 있을 때만 버튼이 보인다)
-    const installBtn = $('install-btn');
-    let deferred = null;
-    window.addEventListener('beforeinstallprompt', (e) => {
-      e.preventDefault();
-      deferred = e;
-      installBtn.hidden = false;
-    });
-    installBtn.addEventListener('click', async () => {
-      if (!deferred) return;
-      const d = deferred;
-      deferred = null;
-      installBtn.hidden = true;
-      d.prompt();
-      try { await d.userChoice; } catch { /* 취소해도 괜찮다 */ }
-    });
-    window.addEventListener('appinstalled', () => {
-      installBtn.hidden = true;
-      toast('바탕화면에 설치했어요.', '이제 인터넷이 없어도 바탕화면 아이콘으로 열 수 있어요.', 'ok');
-    });
-    return { state: () => ({ controlled: !!navigator.serviceWorker && !!navigator.serviceWorker.controller, updateShown: !bar.hidden, offline: Net.isOffline() }) };
-  })();
+  const Pwa = (() => ({
+    state: () => ({ controlled: !!(navigator.serviceWorker && navigator.serviceWorker.controller), updateShown: false, offline: Net.isOffline() }),
+  }))();
 
   // 저장 단축키: Ctrl+S = 바로 저장, Ctrl+Shift+S = 설정하고 저장… (브라우저의 "페이지 저장"은 막는다)
   document.addEventListener('keydown', (e) => {

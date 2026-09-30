@@ -2210,30 +2210,17 @@ legend.sr-only { width: 1px !important; }
 [data-open="compress"], [data-tab="compress"] { --tc: var(--c6); }
 [data-open="security"], [data-tab="security"] { --tc: var(--c4); }
 
-/* ── 오프라인 · 설치 · 새 버전 ── */
+/* ── 인터넷 연결 없음 배지 (오프라인 · 설치 · 새 버전 띠는 2026-09-30에 끝남) ── */
 .hero-right { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px 16px; }
 .offline-badge {
   display: inline-flex; align-items: center; gap: 5px;
   margin-left: 8px; padding: 2px 9px; border-radius: 999px;
   font-size: 12px; font-weight: 700; line-height: 1.5;
-  background: rgba(61, 220, 151, .16); color: #7FE8B9; white-space: nowrap;
+  background: rgba(61, 220, 151, .16); color: #7FE8B9; white-space: normal; max-width: 100%;
 }
 .offline-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #3DDC97; }
 .side-safe .offline-badge { margin: 6px 0 0; display: inline-flex; }
 .side-safe .offline-badge[hidden] { display: none; }
-.install-btn { min-height: 34px; padding: 6px 13px; font-size: 13px; background: rgba(255, 255, 255, .08); border-color: rgba(255, 255, 255, .22); color: #fff; }
-.install-btn:hover { background: rgba(255, 255, 255, .16); }
-.update-bar {
-  position: fixed; z-index: 90; top: 10px; left: 50%; transform: translateX(-50%);
-  display: flex; align-items: center; gap: 10px;
-  max-width: calc(100vw - 24px); padding: 8px 8px 8px 16px; border-radius: 12px;
-  background: var(--navy); color: #fff; box-shadow: var(--shadow-lg); font-size: 14px; font-weight: 600;
-}
-.update-bar .btn.sm { background: var(--accent); border-color: var(--accent); color: #fff; }
-.update-bar.warn { background: #5A3A08; }
-.update-x { display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 8px; background: transparent; color: #fff; cursor: pointer; }
-.update-x:hover { background: rgba(255, 255, 255, .12); }
-@media (max-width: 520px) { .update-bar { left: 12px; right: 12px; transform: none; font-size: 13px; } }
 
 /* 직접 확인하는 법(/check) 예시 부품 */
 .demo-file.demo-doc { font-size: 12px; font-weight: 900; color: var(--ink); background: var(--panel); border-color: var(--line); transition: transform .5s cubic-bezier(.3, .7, .3, 1), opacity .3s, background-color .25s, border-color .25s; }
@@ -2464,7 +2451,6 @@ label.btn[role="button"]:focus-visible, label.drop-mini[role="button"]:focus-vis
 .resume-note[hidden] { display: none; }
 .resume-note > .ic { color: var(--accent); }
 .resume-note > span:first-of-type { flex: 1 1 240px; }
-.resume-note:not([hidden]) ~ .update-bar { top: 80px; }
 .doc-text p + p { margin-top: 8px; }
 
 /* ═══ 휴대폰(820px 이하): 아래쪽 탭 막대 · 고르기 버튼 ═══════════════

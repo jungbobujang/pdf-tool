@@ -21,7 +21,6 @@
   <meta name="twitter:card" content="summary_large_image">
   <meta name="app-version" content="">
   <meta name="theme-color" content="#141B2E">
-  <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icons/logo.svg" type="image/svg+xml">
   <link rel="icon" href="/icons/favicon-32.png" sizes="32x32" type="image/png">
   <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
@@ -95,11 +94,6 @@
   </div>
 
   <!-- 새 버전 알림 (서비스 워커가 새 버전을 받아 두면) -->
-  <div class="update-bar" id="update-bar" role="status" hidden>
-    <span id="update-text">새 버전이 있어요.</span>
-    <button type="button" class="btn sm" id="update-go">새로고침</button>
-    <button type="button" class="update-x" id="update-x" aria-label="새 버전 알림 닫기"><svg class="ic sm" aria-hidden="true"><use href="#i-x"/></svg></button>
-  </div>
 
   <!-- ① 처음 화면 -->
   <div class="view view-home" id="view-home">
@@ -107,8 +101,7 @@
       <div class="hero-bar">
         <a href="./" class="logo" id="logo-home" title="처음 화면으로"><span class="logo-mark" aria-hidden="true"></span>PDF 작업실</a>
         <div class="hero-right">
-          <p class="safe"><span class="safe-dot" aria-hidden="true"></span>파일은 이 컴퓨터 밖으로 나가지 않아요<span class="offline-badge" hidden>지금 인터넷 없이 작동 중</span></p>
-          <button type="button" class="btn install-btn" id="install-btn" hidden><svg class="ic sm" aria-hidden="true"><use href="#i-filedown"/></svg>바탕화면에 설치</button>
+          <p class="safe"><span class="safe-dot" aria-hidden="true"></span>파일은 이 컴퓨터 밖으로 나가지 않아요<span class="offline-badge" hidden>인터넷 연결이 없어요. 이 화면은 계속 쓸 수 있지만 새로고침하면 다시 스쿨에서 열어야 해요</span></p>
         </div>
       </div>
       <div class="hero-text">
@@ -256,7 +249,7 @@
           <span class="tab-text"><span class="tab-name">보안</span><span class="tab-desc">암호 · 걸린 제한 보기</span></span><span class="tab-short" aria-hidden="true">보안</span>
         </button>
       </nav>
-      <p class="side-safe"><svg class="ic" aria-hidden="true"><use href="#i-shield"/></svg><span>파일은 이 컴퓨터 밖으로 나가지 않아요.<span class="offline-badge" hidden>지금 인터넷 없이 작동 중</span></span></p>
+      <p class="side-safe"><svg class="ic" aria-hidden="true"><use href="#i-shield"/></svg><span>파일은 이 컴퓨터 밖으로 나가지 않아요.<span class="offline-badge" hidden>인터넷 연결이 없어요. 이 화면은 계속 쓸 수 있지만 새로고침하면 다시 스쿨에서 열어야 해요</span></span></p>
       <p class="side-foot">
         <button type="button" class="app-version side-version news-open" id="side-version" aria-haspopup="dialog" title="새 소식 보기"></button>
         <button type="button" class="link-btn side-feedback" data-feedback aria-haspopup="dialog">의견 보내기</button>

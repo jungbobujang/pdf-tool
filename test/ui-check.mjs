@@ -86,14 +86,58 @@ function watch(pg, list) {
   pg.on('dialog', (d) => (d.type() === 'beforeunload' ? d.accept() : d.dismiss()).catch(() => {}));
 }
 
+// ── 스쿨 입장권: 점검용 Ed25519 키 쌍과 가짜 스쿨(공개 키만 주는 작은 서버) ──
+const nodeCrypto = require('node:crypto');
+const http = require('node:http');
+const TK = nodeCrypto.generateKeyPairSync('ed25519');
+const TK_PUB = TK.publicKey.export({ format: 'jwk' }).x;
+const TK_KID = nodeCrypto.createHash('sha256').update(Buffer.from(TK_PUB, 'base64url')).digest('base64url').slice(0, 8);
+const OTHER = nodeCrypto.generateKeyPairSync('ed25519');
+/** 스쿨이 주는 것과 같은 모양의 입장권. 바꿔 보고 싶은 칸만 넘긴다 */
+function makeTicket({ aud = 'pdf', iat, exp, jti, kid = TK_KID, key = TK.privateKey, sub = 'sub-test-0001', sch = 'sch-test-0001' } = {}) {
+  const now = Math.floor(Date.now() / 1000);
+  const i = iat === undefined ? now : iat;
+  const head = Buffer.from(JSON.stringify({ alg: 'EdDSA', kid })).toString('base64url');
+  const body = Buffer.from(JSON.stringify({ aud, sub, sch, iat: i, exp: exp === undefined ? i + 120 : exp, jti: jti || nodeCrypto.randomBytes(16).toString('base64url') })).toString('base64url');
+  const sig = nodeCrypto.sign(null, Buffer.from(`${head}.${body}`), key).toString('base64url');
+  return `${head}.${body}.${sig}`;
+}
+const school = http.createServer((req, res) => {
+  if (req.url === '/api/tools/pubkey') { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ kid: TK_KID, alg: 'EdDSA', key: TK_PUB })); return; }
+  res.statusCode = 404; res.end('no');
+});
+await new Promise((r) => school.listen(0, '127.0.0.1', r));
+// 여러 서버를 띄워도 같은 통행증이 통하게 점검에서만 비밀을 정해 둔다(운영 서버는 시작할 때마다 새로 만든다)
+const PASS_SECRET = nodeCrypto.randomBytes(32).toString('hex');
+process.env.SCHOOL_URL = `http://127.0.0.1:${school.address().port}`;
+process.env.PASS_SECRET = PASS_SECRET;
+const passFor = (exp, sub = 'sub-test-0001') => {
+  const payload = Buffer.from(JSON.stringify({ sub, sch: 'sch-test-0001', exp })).toString('base64url');
+  return `${payload}.${nodeCrypto.createHmac('sha256', Buffer.from(PASS_SECRET, 'hex')).update(payload).digest('base64url')}`;
+};
+
+let serverLog = '';
 const server = spawn(process.execPath, ['server.js'], { cwd: root, env: { ...process.env, PORT: String(PORT) }, stdio: 'pipe' });
 await new Promise((resolve, reject) => {
-  server.stdout.on('data', (d) => String(d).includes('http://') && resolve());
+  server.stdout.on('data', (d) => { serverLog += String(d); if (String(d).includes('http://')) resolve(); });
   server.on('error', reject);
   setTimeout(() => reject(new Error('서버가 뜨지 않음')), 10000);
 });
+const enter = (t, headers = {}) => fetch(`${BASE}/api/enter`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify({ t }) });
+// 모든 점검 창이 쓰는 통행증: 진짜 입장권으로 한 번 들어와 받는다
+const firstEnter = await enter(makeTicket());
+const setCookie = firstEnter.headers.get('set-cookie') || '';
+const PASS = (setCookie.match(/pdf_pass=([^;]+)/) || [])[1] || '';
+if (!PASS) throw new Error(`통행증을 받지 못함 (${firstEnter.status})`);
 
 const browser = await pw.chromium.launch();
+// 기존 점검은 모두 통행증을 가진 상태로 돈다. 안내 화면 점검만 rawContext(통행증 없음)를 쓴다
+const rawContext = browser.newContext.bind(browser);
+browser.newContext = async (opts) => {
+  const c = await rawContext(opts);
+  await c.addCookies([{ name: 'pdf_pass', value: PASS, domain: 'localhost', path: '/', httpOnly: true, secure: false, sameSite: 'Lax' }]);
+  return c;
+};
 try {
   const fileA = await writePdf('보고서A.pdf', await samplePdf(3, 'A'));
   const fileB = await writePdf('자료B.pdf', await samplePdf(4, 'B'));
@@ -160,7 +204,7 @@ try {
     return { text: el.textContent, visible: r.width > 0 && r.height > 0 && r.bottom <= innerHeight };
   });
   await page.click('#logo');
-  const html = await (await fetch(`${BASE}/`)).text();
+  const html = await (await fetch(`${BASE}/`, { headers: { Cookie: `pdf_pass=${PASS}` } })).text();
   const busted = ['style.css', 'pdf-core.js', 'app.js'].every((a) => html.includes(`${a}?v=${ver.commit}`));
   check('화면에 v 표시가 보인다 (+ 파일 주소에 ?v=커밋)', homeVer.text === `v ${ver.commit}` && homeVer.w > 0 && homeVer.h > 0 && sideVer.text === `v ${ver.commit}` && sideVer.visible && busted,
     `처음 화면 "${homeVer.text}", 사이드바 "${sideVer.text}", ?v=${ver.commit} ${busted ? '적용' : '없음'}`);
@@ -324,6 +368,8 @@ try {
   await note.locator('button', { hasText: '비밀번호 넣기' }).click();
   await note.locator('input').fill('wrong');
   await note.locator('button', { hasText: '풀기' }).click();
+  // 비밀번호 확인은 비동기라 문장이 나올 때까지 기다린다(바로 읽으면 빈 글자)
+  await until(page, () => /\S/.test((document.querySelector('#edit-locks .lock-note .msg') || {}).textContent || ''), undefined, { timeout: 10000 }).catch(() => {});
   const noteMsg = await note.locator('.msg').textContent();
   await note.locator('input').fill('secret1');
   await note.locator('button', { hasText: '풀기' }).click();
@@ -1800,7 +1846,7 @@ try {
     await actx.close();
   }
 
-  // ── 11-c. 전송 차단(CSP) · 오프라인(서비스 워커) · 설치 정보 ──
+  // ── 11-c. 전송 차단(CSP) · 스쿨 입장권 · 바탕화면 설치와 오프라인 끝 ──
   {
     const octx = await browser.newContext({ viewport: { width: 1280, height: 900 }, acceptDownloads: true, colorScheme: 'light' });
     const o = await octx.newPage();
@@ -1809,6 +1855,7 @@ try {
     watch(o, oerr);
     o.on('console', (m) => /Content Security Policy|Refused to/i.test(m.text()) && csp.push(m.text()));
     await o.goto(BASE, { waitUntil: 'networkidle' });
+    await until(o, () => window.__pdfWorkshop && window.__pdfWorkshop.ready);
 
     const head = await octx.request.get(`${BASE}/`);
     const cspHeader = head.headers()['content-security-policy'] || '';
@@ -1817,42 +1864,28 @@ try {
     check('CSP 헤더: 이 사이트 밖으로 연결 · 스크립트 · 글꼴 차단 (unsafe-inline · eval 없음)', missing.length === 0 && !/unsafe-inline|unsafe-eval/.test(cspHeader),
       missing.length ? `빠짐: ${missing.join(', ')}` : cspHeader.replace(/; /g, ' · ').slice(0, 160));
 
-    const man = await octx.request.get(`${BASE}/manifest.webmanifest`);
-    const manJson = man.ok() ? await man.json() : {};
-    const sw = await octx.request.get(`${BASE}/sw.js`);
-    const swText = sw.ok() ? await sw.text() : '';
-    const iconOk = await Promise.all((manJson.icons || []).map(async (ic) => (await octx.request.get(BASE + ic.src)).ok()));
-    check('manifest · sw.js 200, 아이콘(192 · 512 · maskable) 받힘', man.status() === 200 && sw.status() === 200 && manJson.name === 'PDF 작업실' && manJson.display === 'standalone' &&
-      (manJson.icons || []).some((i) => i.purpose === 'maskable') && iconOk.length >= 4 && iconOk.every(Boolean) && !/__PRECACHE__|'__COMMIT__'/.test(swText),
-    `manifest ${man.status()} · sw.js ${sw.status()} · 아이콘 ${iconOk.filter(Boolean).length}/${iconOk.length}`);
+    // 설치 · 오프라인 끝: manifest 링크 · 설치 단추 없음, /manifest.webmanifest 404, /sw.js는 끄기 워커
+    const html = await (await octx.request.get(`${BASE}/`)).text();
+    const man = await fetch(`${BASE}/manifest.webmanifest`);
+    const swRes = await fetch(`${BASE}/sw.js`);
+    const swText = await swRes.text();
+    const noWorker = await o.evaluate(async () => ({ regs: (await navigator.serviceWorker.getRegistrations()).length, install: !!document.getElementById('install-btn'), bar: !!document.getElementById('update-bar') }));
+    check('설치 · 오프라인 끝: HTML에 manifest 링크 · 설치 단추 · 새 버전 띠 없음, 워커 등록 0, /manifest.webmanifest 404',
+      !/rel="manifest"/.test(html) && !noWorker.install && !noWorker.bar && noWorker.regs === 0 && man.status === 404,
+      `manifest ${man.status} · 등록 ${noWorker.regs}`);
+    check('/sw.js: 통행증 없이 200 · no-cache · fetch 처리 없음 · 캐시 지우고 등록 해제 · 창 다시 열기',
+      swRes.status === 200 && /no-cache/.test(swRes.headers.get('cache-control') || '') && !/addEventListener\(\s*['"]fetch/.test(swText) &&
+      /caches\.delete/.test(swText) && /registration\.unregister\(\)/.test(swText) && /skipWaiting\(\)/.test(swText) && /navigate\(/.test(swText) && !/__PRECACHE__|__COMMIT__/.test(swText),
+      `sw.js ${swRes.status} · ${swRes.headers.get('cache-control')}`);
 
-    // 서비스 워커가 켜질 때까지(설치 때 앱 화면 · 라이브러리 · 글꼴을 모두 받아 둔다)
-    await until(o, () => !!navigator.serviceWorker.controller, undefined, { timeout: 60000 });
-    const cached = await o.evaluate(async () => {
-      const names = await caches.keys();
-      const c = await caches.open(names.find((n) => n.startsWith('pdfws-')));
-      const keys = (await c.keys()).map((r) => new URL(r.url).pathname);
-      return {
-        names,
-        n: keys.length,
-        has: ['/', '/vendor/pdf.worker.min.js', '/vendor/pdf-lib.min.js', '/vendor/pretendard/pretendardvariable.min.css'].every((k) => keys.includes(k)) && keys.some((k) => k.startsWith('/vendor/pretendard/woff2/')),
-        // 가끔 쓰는 큰 것은 미리 받지 않는다(처음 쓸 때 받음)
-        lazy: !keys.some((k) => /^\/vendor\/(heic|cmaps|standard_fonts|fonts)\//.test(k)),
-        version: keys.includes('/version'),
-      };
-    });
-    check('서비스 워커 등록 · 앱 셸만 미리 캐시(HEIC 변환기 · 문자표 · 워터마크 글꼴은 처음 쓸 때) · /version은 캐시 안 함', cached.names.length === 1 && cached.n >= 25 && cached.n <= 60 && cached.has && cached.lazy && !cached.version,
-      `캐시 ${cached.names.join(',')} · 미리 ${cached.n}개`);
-
-    // 인터넷을 끊고 새로고침 → 편집 · 합치기 · 저장
+    // 연 화면은 인터넷이 끊겨도 계속 쓴다: 배지 + 합쳐 저장
     await octx.setOffline(true);
-    await o.reload({ waitUntil: 'load' });
-    await until(o, () => window.__pdfWorkshop && window.__pdfWorkshop.ready);
+    await o.evaluate(() => window.dispatchEvent(new Event('offline')));
     await until(o, () => ![...document.querySelectorAll('.offline-badge')].every((b) => b.hidden), undefined, { timeout: 5000 }).catch(() => {});
     const off = await o.evaluate(() => ({
       badge: [...document.querySelectorAll('.offline-badge')].some((b) => !b.hidden && b.getBoundingClientRect().width > 0),
       text: (document.querySelector('.offline-badge:not([hidden])') || {}).textContent,
-      ver: document.getElementById('home-version').textContent,
+      sw: document.documentElement.scrollWidth <= window.innerWidth,
     }));
     await o.setInputFiles('#home-input', [fileA, fileB]);
     await until(o, () => document.querySelectorAll('#edit-grid .page-card canvas').length === 7, undefined, { timeout: 20000 });
@@ -1865,105 +1898,193 @@ try {
       await o.screenshot({ path: path.join(root, 'docs', 'screens', 'offline.png') });
     }
     await octx.setOffline(false);
-    check('인터넷 없이(오프라인) 새로고침 → 편집 · 합치기 · 저장 + "지금 인터넷 없이 작동 중" 배지', off.badge && odoc.getPageCount() === 7 && /^v /.test(off.ver),
-      `배지 "${off.text}" · ${odl.suggestedFilename()} ${odoc.getPageCount()}쪽 · 화면 ${off.ver}`);
-    check('CSP 위반 · 콘솔 에러 0개 (오프라인 흐름 포함)', csp.length === 0 && oerr.filter((e) => !/net::ERR_INTERNET_DISCONNECTED|Failed to fetch|\/version|heic-to/.test(e)).length === 0,
-      csp.length ? csp.join(' | ').slice(0, 200) : oerr.length ? `오프라인 중 /version 실패만 ${oerr.length}건(정상)` : '0개');
+    check('연 화면은 인터넷이 끊겨도: 합치기 · 저장 7쪽 + "인터넷 연결이 없어요 … 새로고침하면 다시 스쿨에서" 배지',
+      off.badge && off.sw && /인터넷 연결이 없어요/.test(off.text || '') && /스쿨에서/.test(off.text || '') && odoc.getPageCount() === 7,
+      `배지 "${(off.text || '').slice(0, 30)}…" · ${odl.suggestedFilename()} ${odoc.getPageCount()}쪽`);
+    check('CSP 위반 · 콘솔 에러 0개 (인터넷 끊김 흐름 포함)', csp.length === 0 && oerr.filter((e) => !/net::ERR_INTERNET_DISCONNECTED|Failed to fetch|\/version|heic-to/.test(e)).length === 0,
+      csp.length ? csp.join(' | ').slice(0, 200) : `0개${oerr.length ? `(끊긴 동안 /version 실패 ${oerr.length}건은 정상)` : ''}`);
     await octx.close();
 
-    // 진짜로 서버에 닿지 않는 오프라인(점검 도구의 setOffline은 서비스 워커의 요청까지는 막지 않아서 서버를 멈춘다)
+    // ── 서버 문: 통행증 없이 · 입장권 확인 · 통행증 확인 ──
+    const noPass = await fetch(`${BASE}/`);
+    const noPassHtml = await noPass.text();
+    const ver = await fetch(`${BASE}/version`);
+    const pagesNoPass = await Promise.all(['/check', '/privacy', '/licenses', '/index.html'].map(async (u) => /스쿨 선생님 전용 도구예요/.test(await (await fetch(BASE + u)).text())));
+    check('통행증 없이 / · /check · /privacy · /licenses → 안내 화면, /version은 공개',
+      noPass.status === 200 && /스쿨 선생님 전용 도구예요/.test(noPassHtml) && !/id="home-title"/.test(noPassHtml) && pagesNoPass.every(Boolean) && ver.status === 200 && (await ver.json()).commit,
+      `/ ${noPass.status} · 안내 페이지 ${pagesNoPass.filter(Boolean).length}/4 · /version ${ver.status}`);
+    const withPass = await fetch(`${BASE}/`, { headers: { Cookie: `pdf_pass=${PASS}` } });
+    const wpHtml = await withPass.text();
+    check('정상 입장권 → 통행증(HttpOnly · Secure · SameSite=Lax · Path=/ · 8시간) → / 가 기존 PDF 화면',
+      firstEnter.status === 200 && /HttpOnly/i.test(setCookie) && /Secure/i.test(setCookie) && /SameSite=Lax/i.test(setCookie) && /Path=\//.test(setCookie) && /Max-Age=28800/.test(setCookie) &&
+      withPass.status === 200 && /id="home-title"/.test(wpHtml),
+      `enter ${firstEnter.status} · / ${withPass.status}`);
+
+    const now = Math.floor(Date.now() / 1000);
+    const reused = makeTicket();
+    const cases = [
+      ['가짜 서명', makeTicket({ key: OTHER.privateKey }), 403, 'signature'],
+      ['다른 kid', makeTicket({ kid: 'zzzzzzzz' }), 403, 'kid'],
+      ['만료', makeTicket({ iat: now - 400, exp: now - 200 }), 403, 'expired'],
+      ['aud가 pdf가 아님', makeTicket({ aud: 'quiz' }), 403, 'aud'],
+      ['형식 틀림', 'not-a-ticket', 400, 'format'],
+      ['앞날 iat', makeTicket({ iat: now + 600, exp: now + 720 }), 403, 'future'],
+    ];
+    const got = [];
+    for (const [label, t, status, reason] of cases) {
+      const r = await enter(t);
+      const b = await r.json();
+      got.push({ label, ok: r.status === status && b.error === reason && !r.headers.get('set-cookie') && /다시 \[열기\]/.test(b.message || ''), st: r.status });
+    }
+    const first = await enter(reused);
+    const second = await enter(reused);
+    const sb = await second.json();
+    got.push({ label: '같은 입장권 두 번째', ok: first.status === 200 && second.status === 403 && sb.error === 'used' && /이미 쓴/.test(sb.message), st: second.status });
+    check('입장권 거절: 가짜 서명 · 다른 kid · 만료 · aud · 형식 · 앞날 · 두 번째 사용 (쿠키 안 줌, 문장 있음)', got.every((g) => g.ok),
+      got.map((g) => `${g.label} ${g.st}${g.ok ? '' : '✗'}`).join(' · '));
+
+    const forged = `${PASS.split('.')[0]}.${Buffer.alloc(32, 7).toString('base64url')}`;
+    const tampered = `${Buffer.from(JSON.stringify({ sub: 'x', sch: 'y', exp: now + 99999 })).toString('base64url')}.${PASS.split('.')[1]}`;
+    const oldPass = passFor(now - 10);
+    const cookieCases = await Promise.all([forged, tampered, oldPass].map(async (c) => /스쿨 선생님 전용 도구예요/.test(await (await fetch(`${BASE}/`, { headers: { Cookie: `pdf_pass=${c}` } })).text())));
+    check('통행증 위조(서명 · 내용 바꿈) · 만료 → 안내 화면', cookieCases.every(Boolean), cookieCases.map((x) => (x ? '안내' : '열림✗')).join(' · '));
+
+    // 1분 20회: 같은 X-Real-IP로 21번
+    const rl = [];
+    for (let i = 0; i < 21; i += 1) rl.push((await enter('x', { 'X-Real-IP': '198.51.100.23' })).status);
+    const other = await enter('x', { 'X-Real-IP': '198.51.100.24' });
+    check('들어오기는 IP(X-Real-IP)당 1분 20회, 21번째는 429 (다른 IP는 그대로)', rl.slice(0, 20).every((c) => c === 400) && rl[20] === 429 && other.status === 400, `${rl.slice(18).join(',')} · 다른 IP ${other.status}`);
+
+    // 스쿨 공개 키를 한 번도 못 받으면 503과 문장
     {
-      const HPORT = 4000 + Math.floor(Math.random() * 2000) + 1000;
-      const up = () => new Promise((resolve, reject) => {
-        const sv = spawn(process.execPath, ['server.js'], { cwd: root, env: { ...process.env, PORT: String(HPORT) }, stdio: 'pipe' });
-        sv.stdout.on('data', (d) => String(d).includes('http://') && resolve(sv));
-        sv.on('error', reject);
-        setTimeout(() => reject(new Error('서버가 뜨지 않음')), 10000);
-      });
-      const down = (sv) => new Promise((r) => { sv.once('exit', r); sv.kill(); });
-      const fakeHeic = Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypheic', 'latin1'), Buffer.alloc(40)]);
-      const heicPath = path.join(tmp, '아이폰.heic');
-      fs.writeFileSync(heicPath, fakeHeic);
-      let hs = await up();
-      const hctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, acceptDownloads: true, colorScheme: 'light' });
-      const hp = await hctx.newPage();
-      await hp.goto(`http://localhost:${HPORT}/`, { waitUntil: 'networkidle' });
-      await until(hp, () => !!navigator.serviceWorker.controller, undefined, { timeout: 60000 });
-      const goOffline = async () => {
-        await down(hs);
-        await hctx.setOffline(true);
-        await hp.reload({ waitUntil: 'load' });
-        await until(hp, () => window.__pdfWorkshop && window.__pdfWorkshop.ready);
-        await until(hp, () => window.__pdfWorkshop.pwa().offline, undefined, { timeout: 5000 }).catch(() => {});
-      };
-      await goOffline();
-      // 서버 없이 합쳐 저장
-      await hp.setInputFiles('#home-input', [fileA, fileB]);
-      await until(hp, () => document.querySelectorAll('#edit-grid .page-card canvas').length === 7, undefined, { timeout: 20000 });
-      const [hdl] = await Promise.all([hp.waitForEvent('download'), hp.click('#edit-save')]);
-      const hdoc = await PDFDocument.load(fs.readFileSync(await hdl.path()));
-      // HEIC을 한 번도 안 쓴 채 → 안내
-      await hp.click('#logo');
-      await hp.evaluate(() => document.getElementById('toasts').replaceChildren());
-      await hp.setInputFiles('#home-input', [heicPath]);
-      await until(hp, () => /변환기|변환하지/.test(document.getElementById('toasts').textContent), undefined, { timeout: 15000 });
-      const heicOff = await hp.textContent('#toasts');
-      // 인터넷이 돌아오면 새로고침 없이 다시 넣어도 변환기를 받고, 캐시에 들어간다
-      hs = await up();
-      await hctx.setOffline(false);
-      await hp.evaluate(() => document.getElementById('toasts').replaceChildren());
-      await hp.setInputFiles('#home-input', [heicPath]);
-      await until(hp, () => /변환하지 못했어요|불러오지 못했어요|인터넷이 연결되면/.test(document.getElementById('toasts').textContent), undefined, { timeout: 30000 });
-      const heicOn = await hp.textContent('#toasts');
-      const rtCached = /변환하지 못했어요/.test(heicOn) && await hp.evaluate(async () => {
-        await new Promise((r) => setTimeout(r, 600));
-        const c = await caches.open((await caches.keys()).find((n) => n.startsWith('pdfws-')));
-        return !!(await c.match('/vendor/heic/heic-to.js'));
-      });
-      await goOffline();
-      await hp.evaluate(() => document.getElementById('toasts').replaceChildren());
-      await hp.setInputFiles('#home-input', [heicPath]);
-      await until(hp, () => /변환/.test(document.getElementById('toasts').textContent), undefined, { timeout: 20000 });
-      const heicOff2 = await hp.textContent('#toasts');
-      await hctx.close();
-      check('서버에 닿지 않는 진짜 오프라인: 새로고침 → 합쳐 저장 7쪽', hdoc.getPageCount() === 7, `${hdl.suggestedFilename()} ${hdoc.getPageCount()}쪽`);
-      check('HEIC: 한 번도 안 쓰고 오프라인이면 "인터넷이 연결되면 아이폰 사진 변환기를 받아요" → 한 번 받으면 캐시에 들어가 오프라인에서도 변환기를 씀',
-        /인터넷이 연결되면 아이폰 사진 변환기를 받아요/.test(heicOff) && rtCached && !/인터넷이 연결되면/.test(heicOff2) && /변환하지 못했어요/.test(heicOff2),
-        `처음: "${heicOff.slice(0, 30)}…" · 받은 뒤 캐시 ${rtCached} · 다시 오프라인: "${heicOff2.slice(0, 26)}…"(가짜 HEIC이라 변환 실패가 정상)`);
+      const DPORT = 4000 + Math.floor(Math.random() * 2000) + 3000;
+      const ds = spawn(process.execPath, ['server.js'], { cwd: root, env: { ...process.env, PORT: String(DPORT), SCHOOL_URL: 'http://127.0.0.1:9' }, stdio: 'pipe' });
+      await new Promise((resolve, reject) => { ds.stdout.on('data', (d) => String(d).includes('http://') && resolve()); ds.on('error', reject); setTimeout(() => reject(new Error('서버가 뜨지 않음')), 10000); });
+      const r = await fetch(`http://localhost:${DPORT}/api/enter`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ t: makeTicket() }) });
+      const b = await r.json();
+      await new Promise((res) => { ds.once('exit', res); ds.kill(); });
+      check('스쿨 공개 키를 못 받으면 503 "스쿨에 잠깐 연결이 안 돼요…"', r.status === 503 && b.error === 'school_unreachable' && /스쿨에 잠깐 연결이 안 돼요/.test(b.message), `${r.status} ${b.error}`);
     }
 
-    // 새 버전 배포 흉내: 같은 주소에서 커밋만 다른 서버로 바꿔 띄운다
-    const UPORT = 4000 + Math.floor(Math.random() * 2000) + 2000;
-    const startAs = (commit) => new Promise((resolve, reject) => {
-      const s = spawn(process.execPath, ['server.js'], { cwd: root, env: { ...process.env, PORT: String(UPORT), RAILWAY_GIT_COMMIT_SHA: commit }, stdio: 'pipe' });
-      s.stdout.on('data', (d) => String(d).includes('http://') && resolve(s));
-      s.on('error', reject);
-      setTimeout(() => reject(new Error('서버가 뜨지 않음')), 10000);
-    });
-    const stopped = (s) => new Promise((r) => { s.once('exit', r); s.kill(); });
-    let s1 = await startAs('aaaaaaa');
-    const uctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: 'light' });
-    const u = await uctx.newPage();
-    await u.goto(`http://localhost:${UPORT}/`, { waitUntil: 'networkidle' });
-    await until(u, () => !!navigator.serviceWorker.controller, undefined, { timeout: 60000 });
-    await stopped(s1);
-    s1 = await startAs('bbbbbbb');
-    await u.setInputFiles('#home-input', [fileA]);
-    await until(u, () => document.querySelectorAll('#edit-grid .page-card').length === 3);
-    await u.evaluate(async () => { const r = await navigator.serviceWorker.getRegistration(); await r.update(); });
-    await until(u, () => !document.getElementById('update-bar').hidden, undefined, { timeout: 60000 });
-    const bar1 = await u.textContent('#update-text');
-    await u.click('#update-go');
-    await u.waitForTimeout(500);
-    const bar2 = await u.evaluate(() => ({ text: document.getElementById('update-text').textContent, cards: document.querySelectorAll('#edit-grid .page-card').length, ver: document.querySelector('meta[name="app-version"]').content }));
-    await Promise.all([u.waitForEvent('load'), u.click('#update-go')]);
-    await until(u, () => window.__pdfWorkshop && window.__pdfWorkshop.ready);
-    const after = await u.evaluate(() => ({ ver: document.querySelector('meta[name="app-version"]').content, shown: document.getElementById('home-version').textContent }));
-    check('새 버전 배포 → "새 버전이 있어요 [새로고침]" 띠, 작업 중이면 한 번 더 확인 후에만 새로고침',
-      /새 버전이 있어요/.test(bar1) && /작업이 사라져요/.test(bar2.text) && bar2.cards === 3 && bar2.ver === 'aaaaaaa' && after.ver === 'bbbbbbb' && after.shown === 'v bbbbbbb',
-      `"${bar1}" → 누르면 "${bar2.text.slice(0, 24)}…"(카드 ${bar2.cards}장 유지) → 한 번 더 → v ${after.ver}`);
-    await uctx.close();
-    await stopped(s1);
+    // 로그: 결과와 까닭의 종류만
+    await new Promise((r) => setTimeout(r, 300));
+    const leaked = [PASS, reused, reused.split('.')[1], 'sub-test-0001', 'sch-test-0001', forged].filter((v) => v && serverLog.includes(v));
+    check('서버 로그에 입장권 · 가명 번호 · 통행증 값이 없음 (enter ok / enter fail reason=… 만)', leaked.length === 0 && /enter ok/.test(serverLog) && /enter fail reason=expired/.test(serverLog),
+      leaked.length ? `${leaked.length}개 샘` : serverLog.split('\n').filter((l) => /^enter/.test(l)).slice(0, 3).join(' | '));
+
+    // ── 안내 화면: #t= 로 들어오기 · 실패 문장 · 네 크기 · 다크 ──
+    {
+      const gctx = await rawContext({ viewport: { width: 1280, height: 720 }, colorScheme: 'light' });
+      const g = await gctx.newPage();
+      const gerr = [];
+      watch(g, gerr);
+      await g.goto(`${BASE}/#t=${makeTicket()}`);
+      await until(g, () => !!(window.__pdfWorkshop && window.__pdfWorkshop.ready), undefined, { timeout: 20000 });
+      const inUrl = g.url();
+      const bad = await g.context().newPage();
+      await bad.goto(`${BASE}/#t=${makeTicket({ iat: now - 400, exp: now - 200 })}`);
+      // 통행증이 이미 생긴 창이라 새 창은 앱이 열린다: 실패 문장은 통행증 없는 창에서 본다
+      await bad.close();
+      const fctx = await rawContext({ viewport: { width: 1280, height: 720 } });
+      const f = await fctx.newPage();
+      await f.goto(`${BASE}/#t=${makeTicket({ iat: now - 400, exp: now - 200 })}`);
+      await until(f, () => !document.getElementById('gate-error').hidden, undefined, { timeout: 10000 });
+      const failText = await f.textContent('#gate-error');
+      const failUrl = f.url();
+      check('안내 화면: #t=입장권 → 통행증 받고 #을 지운 주소로 다시 열려 PDF 화면 · 실패하면 까닭 문장 + [스쿨로 가기]',
+        !/#t=/.test(inUrl) && /만료/.test(failText) && !/#t=/.test(failUrl) && await f.isVisible('#gate-school') && gerr.length === 0,
+        `열림 ${inUrl.replace(BASE, '')} · 실패 "${failText.slice(0, 30)}…"`);
+      await gctx.close();
+      await fctx.close();
+
+      const sizes = [
+        { name: 'phone', width: 390, height: 844, hasTouch: true, isMobile: true },
+        { name: 'tablet', width: 820, height: 1180, hasTouch: true },
+        { name: 'tablet-wide', width: 1180, height: 820, hasTouch: true },
+        { name: 'laptop', width: 1280, height: 720 },
+        { name: 'laptop-dark', width: 1280, height: 720, dark: true },
+      ];
+      const probs = [];
+      for (const sz of sizes) {
+        const c = await rawContext({ viewport: { width: sz.width, height: sz.height }, hasTouch: !!sz.hasTouch, isMobile: !!sz.isMobile, colorScheme: sz.dark ? 'dark' : 'light' });
+        const pg = await c.newPage();
+        await pg.goto(BASE, { waitUntil: 'networkidle' });
+        const m = await pg.evaluate(() => {
+          const out = [];
+          if (document.documentElement.scrollWidth > window.innerWidth + 1) out.push('가로 스크롤');
+          document.querySelectorAll('a, button').forEach((el) => { const r = el.getBoundingClientRect(); if (r.width > 0 && r.height < 44) out.push(`작은 단추 ${Math.round(r.height)}px`); });
+          document.querySelectorAll('body *').forEach((el) => {
+            const own = [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
+            if (own && el.getBoundingClientRect().width > 0 && parseFloat(getComputedStyle(el).fontSize) < 12) out.push(`작은 글자 ${getComputedStyle(el).fontSize}`);
+          });
+          return { out, bg: getComputedStyle(document.body).backgroundColor };
+        });
+        if (sz.dark && m.bg === 'rgb(244, 246, 250)') m.out.push('다크 모드 아님');
+        if (m.out.length) probs.push(`${sz.name}: ${m.out.slice(0, 3).join(', ')}`);
+        if (SCREENS) await pg.screenshot({ path: path.join(root, 'docs', 'screens', `gate-${sz.name}.png`) });
+        await c.close();
+      }
+      check('안내 화면: 390×844 · 820×1180 · 1180×820(터치) · 1280×720 · 다크에서 가로 스크롤 없음 · 단추 44px · 글자 12px', probs.length === 0, probs.join(' | ') || '5개 모두 통과');
+    }
+
+    // ── 옛 워커 청소: 622bfcd를 같은 주소에서 띄워 워커 · 캐시를 심고, 새 버전으로 바꿔 다시 연다 ──
+    {
+      const { spawnSync } = await import('node:child_process');
+      const oldDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdf-old-'));
+      const tarRes = spawnSync('git', ['archive', '--format=tar', '622bfcd'], { cwd: root, maxBuffer: 256 * 1024 * 1024 });
+      const untar = spawnSync('tar', ['-xf', '-', '-C', oldDir], { input: tarRes.stdout });
+      fs.symlinkSync(path.join(root, 'node_modules'), path.join(oldDir, 'node_modules'), 'junction');
+      const WPORT = 4000 + Math.floor(Math.random() * 2000) + 4000;
+      const run = (cwd) => new Promise((resolve, reject) => {
+        const sv = spawn(process.execPath, ['server.js'], { cwd, env: { ...process.env, PORT: String(WPORT) }, stdio: 'pipe' });
+        sv.stdout.on('data', (d) => String(d).includes('http://') && resolve(sv));
+        sv.on('error', reject);
+        setTimeout(() => reject(new Error('서버가 뜨지 않음')), 15000);
+      });
+      const halt = (sv) => new Promise((r) => { sv.once('exit', r); sv.kill(); });
+      let result = { planted: false };
+      if (tarRes.status === 0 && untar.status === 0) {
+        let sv = await run(oldDir);
+        const wctx = await rawContext({ viewport: { width: 1280, height: 900 } });
+        const w = await wctx.newPage();
+        const WURL = `http://localhost:${WPORT}/`;
+        await w.goto(WURL, { waitUntil: 'networkidle' });
+        await until(w, () => !!navigator.serviceWorker.controller, undefined, { timeout: 60000 });
+        const planted = await w.evaluate(async () => ({ regs: (await navigator.serviceWorker.getRegistrations()).length, caches: (await caches.keys()).filter((n) => n.startsWith('pdfws-')).length }));
+        await halt(sv);
+        sv = await run(root);
+        // 옛 워커가 캐시에서 화면을 먼저 주지만, 브라우저가 /sw.js 를 새로 받아 끄기 워커로 바뀌고 창을 다시 연다
+        await w.goto(WURL).catch(() => {});
+        const end = Date.now() + 60000;
+        let state = null;
+        while (Date.now() < end) {
+          state = await w.evaluate(async () => ({
+            gate: !!document.getElementById('gate'),
+            regs: (await navigator.serviceWorker.getRegistrations()).length,
+            caches: (await caches.keys()).filter((n) => n.startsWith('pdfws-')).length,
+          })).catch(() => null);
+          if (state && state.gate && state.regs === 0 && state.caches === 0) break;
+          await new Promise((r) => setTimeout(r, 500));
+        }
+        // 바탕화면 아이콘처럼 연 창(standalone)
+        const icon = await wctx.newPage();
+        await icon.addInitScript(() => {
+          const real = window.matchMedia.bind(window);
+          window.matchMedia = (q) => (/display-mode:\s*standalone/.test(q) ? { matches: true, media: q, addEventListener() {}, removeEventListener() {} } : real(q));
+        });
+        await icon.goto(WURL, { waitUntil: 'networkidle' });
+        const iconText = await icon.evaluate(() => (document.getElementById('gate-icon') && !document.getElementById('gate-icon').hidden ? document.getElementById('gate-icon').textContent : ''));
+        if (SCREENS) await icon.screenshot({ path: path.join(root, 'docs', 'screens', 'gate-icon.png') });
+        await wctx.close();
+        await halt(sv);
+        result = { planted: planted.regs === 1 && planted.caches >= 1, state, iconText };
+      }
+      check('옛 워커 청소: 622bfcd로 워커 · 캐시를 심은 뒤 새 버전 → 워커 등록 0 · pdfws- 캐시 0 · 안내 화면',
+        result.planted && result.state && result.state.gate && result.state.regs === 0 && result.state.caches === 0,
+        result.state ? `심음 ${result.planted} → 등록 ${result.state.regs} · 캐시 ${result.state.caches} · 안내 ${result.state.gate}` : `옛 버전을 풀지 못함`);
+      check('바탕화면 아이콘(standalone)으로 연 창: "바탕화면 아이콘으로는 이제 열 수 없어요 … 지워도 돼요"',
+        /바탕화면 아이콘으로는 이제 열 수 없어요/.test(result.iconText || '') && /지워도 돼요/.test(result.iconText || ''), (result.iconText || '').slice(0, 40));
+    }
   }
 
   // ── 11-d. 안내 페이지 · 처음 화면 아래쪽 ──
@@ -2637,7 +2758,6 @@ try {
     const rerr2 = [];
     watch(r, rerr2);
     await r.goto(BASE, { waitUntil: 'networkidle' });
-    await until(r, () => !!navigator.serviceWorker.controller, undefined, { timeout: 60000 });
     // 기본 꺼짐: 파일을 넣어도 저장하지 않는다
     await r.setInputFiles('#home-input', [fileA, fileB]);
     await until(r, () => document.querySelectorAll('#edit-grid .page-card').length === 7);
@@ -2684,6 +2804,8 @@ try {
     await until(r, () => !document.getElementById('resume-note').hidden, undefined, { timeout: 5000 });
     rStep = '지우기';
     await r.click('#resume-drop');
+    // 지우기는 IndexedDB에서 비동기로 끝난다: 끝났다는 알림을 보고 나서 다시 연다
+    await until(r, () => /지난 작업을 지웠어요/.test(document.getElementById('toasts').textContent), undefined, { timeout: 5000 }).catch(() => {});
     await r.reload({ waitUntil: 'networkidle' });
     await r.waitForTimeout(600);
     const noteAfterDrop = await r.evaluate(async () => ({ hidden: document.getElementById('resume-note').hidden, stored: await window.__pdfWorkshop.resumeStored() }));
@@ -2947,6 +3069,7 @@ try {
 } finally {
   await browser.close();
   server.kill();
+  school.close();
 }
 
 const wide = (s) => [...s].reduce((n, ch) => n + (/[ᄀ-ᇿ㄰-㆏가-힣]/.test(ch) ? 2 : 1), 0);

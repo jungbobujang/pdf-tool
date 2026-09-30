@@ -1,10 +1,13 @@
 'use strict';
 
-// 정적 파일만 제공하는 서버. 업로드를 받는 경로는 없다.
+// 정적 파일만 제공하는 서버. 업로드를 받는 경로는 없다(PDF는 브라우저 밖으로 나가지 않는다).
+// 스쿨 입장권(도구 연결 규칙 v1): 스쿨 도구함의 [열기]로 온 선생님만 화면을 받는다(lib/gate.js).
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { execSync } = require('child_process');
 const express = require('express');
+const gate = require('./lib/gate');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -92,31 +95,7 @@ const CSP_WHY = {
 const escHtml = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const CSP_LIST_HTML = CSP_RULES.map((r) => `<li><code>${escHtml(r)}</code><span>${escHtml(CSP_WHY[r.split(' ')[0]] || '')}</span></li>`).join('\n        ');
 
-// 오프라인용 서비스 워커가 설치 때 미리 받아 둘 파일 (커밋이 바뀌면 캐시 이름도 바뀐다)
-const listDir = (dir, prefix) => {
-  try { return fs.readdirSync(dir).filter((f) => !f.startsWith('.')).map((f) => `${prefix}/${encodeURIComponent(f)}`); } catch { return []; }
-};
 const PAGES = ['/check', '/privacy', '/licenses'].filter((p) => fs.existsSync(path.join(PUBLIC, 'pages', `${p.slice(1)}.html`)));
-function precacheList() {
-  return [
-    '/',
-    ...ASSETS.map((a) => `/${a}?v=${COMMIT}`),
-    `/compress-worker.js?v=${COMMIT}`,
-    '/manifest.webmanifest',
-    ...listDir(path.join(PUBLIC, 'icons'), '/icons'),
-    ...PAGES,
-    '/changelog.json',
-    ...PAGE_ASSETS.map((a) => `/${a}?v=${COMMIT}`),
-    '/vendor/pdf-lib.min.js', '/vendor/pdf.min.js', '/vendor/pdf.worker.min.js', '/vendor/jszip.min.js', '/vendor/pako.min.js', '/vendor/fontkit.min.js',
-    '/vendor/jpeg-decoder.js',
-    '/vendor/pretendard/pretendardvariable.min.css',
-    // 화면 글꼴: 모든 굵기가 든 가변 글꼴 한 개(화면이 바로 씀)
-    ...listDir(nm('pretendard', 'dist', 'web', 'variable', 'woff2'), '/vendor/pretendard/woff2'),
-  ];
-}
-// 미리 받지 않고 처음 쓸 때 받아 두는 것(런타임 캐시, 같은 캐시 이름):
-// 아이폰 사진 변환기(약 3MB), pdf.js 문자표 · 표준 글꼴(필요한 PDF에서만), 워터마크용 글꼴
-const RUNTIME_PREFIXES = ['/vendor/heic/', '/vendor/cmaps/', '/vendor/standard_fonts/', '/vendor/fonts/'];
 
 // 라이브러리는 CDN 없이 node_modules에서 직접 제공한다.
 const VENDOR = {
@@ -191,26 +170,68 @@ app.get('/version', (req, res) => {
   res.json(VERSION);
 });
 
-// 서비스 워커: 커밋과 미리 받을 목록을 넣어서 준다. 늘 새로 확인해야 새 버전을 알아챈다.
-const SW_JS = () => fs.readFileSync(path.join(PUBLIC, 'sw.js'), 'utf8')
-  .replace("'__COMMIT__'", JSON.stringify(COMMIT))
-  .replace('[/* __PRECACHE__ */]', JSON.stringify(precacheList(), null, 1))
-  .replace('[/* __RUNTIME__ */]', JSON.stringify(RUNTIME_PREFIXES));
-const SW_CACHED = SW_JS();
+// ─────────────────────────────────────────────────────────────
+// 스쿨 입장권 · 통행증
+// ─────────────────────────────────────────────────────────────
+// 스쿨 주소(공개 키를 받는 곳 · 안내 화면의 [스쿨로 가기])
+const SCHOOL_URL = (process.env.SCHOOL_URL || 'https://school-production-082b.up.railway.app').replace(/\/+$/, '');
+// 통행증 서명 비밀: 서버가 시작할 때마다 새로 만든다(그래서 재배포하면 다시 [열기]가 필요하다).
+// PASS_SECRET(64자리 16진수)은 여러 서버를 띄우는 점검에서만 쓴다.
+const PASS_SECRET = /^[0-9a-f]{64}$/i.test(process.env.PASS_SECRET || '') ? Buffer.from(process.env.PASS_SECRET, 'hex') : crypto.randomBytes(32);
+const pubkey = gate.createPubkeyCache(SCHOOL_URL);
+const jtis = gate.createJtiStore();
+const enterLimit = gate.createRateLimit(20, 60 * 1000);
+const hasPass = (req) => !!gate.readPass(PASS_SECRET, gate.cookieOf(req));
+
+// 안내 화면: 통행증이 없을 때 모든 페이지 대신 준다
+const GATE_HTML = () => renderHtml(path.join(PUBLIC, 'gate.html')).replace(/__SCHOOL_URL__/g, SCHOOL_URL);
+const GATE_CACHED = GATE_HTML();
+function sendGate(res) {
+  res.set('Cache-Control', 'no-store');
+  res.type('html').send(process.env.NODE_ENV === 'development' ? GATE_HTML() : GATE_CACHED);
+}
+
+const ENTER_TEXT = {
+  school_unreachable: '스쿨에 잠깐 연결이 안 돼요. 잠시 뒤 스쿨에서 다시 [열기]를 눌러 주세요.',
+  too_many: '너무 자주 시도했어요. 1분 뒤에 스쿨에서 다시 [열기]를 눌러 주세요.',
+};
+app.post('/api/enter', express.json({ limit: '4kb' }), async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const fail = (status, reason, message) => {
+    // 로그에는 결과와 까닭의 종류만. 입장권 · 가명 번호 · 쿠키 값은 남기지 않는다
+    console.log(`enter fail reason=${reason}`);
+    res.status(status).json({ error: reason, message: `${message} 스쿨 → 도구함에서 다시 [열기]를 눌러 주세요.` });
+  };
+  if (!enterLimit(gate.clientIp(req))) {
+    console.log('enter fail reason=too_many');
+    return res.status(429).json({ error: 'too_many', message: ENTER_TEXT.too_many });
+  }
+  const key = await pubkey.get();
+  if (!key) {
+    console.log('enter fail reason=school_unreachable');
+    return res.status(503).json({ error: 'school_unreachable', message: ENTER_TEXT.school_unreachable });
+  }
+  const result = gate.checkTicket(req.body && req.body.t, key, { jtis });
+  if (!result.ok) return fail(result.reason === 'format' ? 400 : 403, result.reason, gate.REASONS[result.reason] || gate.REASONS.format);
+  res.set('Set-Cookie', gate.passCookie(gate.makePass(PASS_SECRET, result.body)));
+  console.log('enter ok');
+  res.json({ ok: true });
+});
+
+// 옛 설치를 치우는 "끄기 워커". 통행증 없이 받을 수 있어야 옛 워커가 이것으로 바뀌어 스스로 지워진다.
+// 옛 바탕화면 아이콘 · 한 번 열었던 브라우저가 정리될 수 있게 이 주소는 몇 달 남겨 둔다.
 app.get('/sw.js', (req, res) => {
   res.set('Cache-Control', 'no-cache');
   res.type('application/javascript');
-  res.send(process.env.NODE_ENV === 'development' ? SW_JS() : SW_CACHED);
+  res.sendFile(path.join(PUBLIC, 'sw.js'));
 });
-app.get('/manifest.webmanifest', (req, res) => {
-  res.set('Cache-Control', 'no-cache');
-  res.type('application/manifest+json');
-  res.sendFile(path.join(PUBLIC, 'manifest.webmanifest'));
-});
+// 바탕화면 설치는 끝났다(2026-09-30)
+app.get('/manifest.webmanifest', (req, res) => res.status(404).send('Not found'));
 
 // 안내 페이지: 직접 확인하는 법 · 개인정보 안내 · 사용한 라이브러리
 const PAGE_HTML = Object.fromEntries(PAGES.map((p) => [p, renderHtml(path.join(PUBLIC, 'pages', `${p.slice(1)}.html`))]));
 app.get(PAGES, (req, res) => {
+  if (!hasPass(req)) return sendGate(res);
   res.set('Cache-Control', 'no-cache');
   res.type('html').send(process.env.NODE_ENV === 'development' ? renderHtml(path.join(PUBLIC, 'pages', `${req.path.slice(1)}.html`)) : PAGE_HTML[req.path]);
 });
@@ -218,9 +239,13 @@ app.get('/changelog.json', (req, res, next) => { res.set('Cache-Control', 'no-ca
 
 // HTML은 항상 서버에 새로 확인한다.
 app.get(['/', '/index.html'], (req, res) => {
+  if (!hasPass(req)) return sendGate(res);
   res.set('Cache-Control', 'no-cache');
   res.type('html').send(process.env.NODE_ENV === 'development' ? renderIndex() : INDEX_HTML);
 });
+
+// 안내 화면의 원본은 채워서만 준다
+app.get('/gate.html', (req, res) => sendGate(res));
 
 app.use(express.static(PUBLIC, {
   index: false,
