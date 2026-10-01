@@ -1,4 +1,5 @@
-/* 안내 화면: 주소 뒤 #t=입장권 이 있으면 서버에 보내 통행증을 받고, #을 지운 주소로 다시 연다.
+/* 안내 화면: 주소 뒤 #t=입장권 이 있으면 서버에 보내 통행증을 받고, #을 지운 주소로 다시 연다
+   (&tool=이름 이 있었으면 #이름 만 붙여서 그 도구로).
    입장권은 화면에 보이거나 어디에 남지 않는다(주소에서도 바로 지운다). */
 (function () {
   'use strict';
@@ -42,6 +43,9 @@
   }
   var ticket = '';
   try { ticket = decodeURIComponent(match[1]); } catch (e) { ticket = match[1]; }
+  // 스쿨 도구함이 하위 도구를 고르면 #t=입장권&tool=compress. 이름 모양만 여기서 거르고, 열 수 있는 도구인지는 앱이 본다
+  var toolMatch = hash.match(/&tool=([a-z0-9-]{1,20})(?:&|$)/);
+  var tool = toolMatch ? toolMatch[1] : '';
   // 입장권은 주소창 · 방문 기록에 남기지 않는다
   history.replaceState(null, '', location.pathname + location.search);
   $('gate-plain').hidden = true;
@@ -55,7 +59,7 @@
   }).then(function (res) {
     return res.json().catch(function () { return {}; }).then(function (body) { return { ok: res.ok, body: body }; });
   }).then(function (r) {
-    if (r.ok) { location.replace(location.pathname + location.search); return; }
+    if (r.ok) { location.replace(location.pathname + location.search + (tool ? '#' + tool : '')); return; }
     showError((r.body && r.body.message) || '열지 못했어요. 아래 [스쿨에서 열기]를 다시 눌러 주세요.');
   }).catch(function () {
     showError('PDF 작업실 서버에 연결하지 못했어요. 인터넷 연결을 확인하고 아래 [스쿨에서 열기]를 다시 눌러 주세요.');

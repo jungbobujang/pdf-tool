@@ -1996,6 +1996,108 @@ try {
       await gctx.close();
       await fctx.close();
 
+      // ── 도구 바로 열기: #t=입장권&tool=이름 (통행증 없음 · 있음 · 틀린 입장권 · 이상한 이름 · 이름 없음) ──
+      // 들어오기 1분 20회에 다른 점검과 같이 걸리지 않게 창마다 다른 X-Real-IP
+      const state = (pg) => pg.evaluate(() => ({
+        work: !document.getElementById('view-work').hidden,
+        home: !document.getElementById('view-home').hidden,
+        tab: (document.querySelector('.tab[aria-selected="true"]') || {}).dataset?.tab || '',
+        gate: !!document.getElementById('gate-error'),
+        hash: location.hash,
+        href: location.href,
+      }));
+      const ready = (pg) => until(pg, () => !!(window.__pdfWorkshop && window.__pdfWorkshop.ready), undefined, { timeout: 20000 });
+      const noT = (s) => !/[#&]t=/.test(s.href);
+      {
+        const c = await rawContext({ viewport: { width: 1280, height: 800 }, extraHTTPHeaders: { 'X-Real-IP': '198.51.100.61' } });
+        const pg = await c.newPage();
+        const errs = [];
+        watch(pg, errs);
+        await pg.goto(`${BASE}/#t=${makeTicket()}&tool=compress`);
+        await ready(pg);
+        const s = await state(pg);
+        check('도구 바로 열기: 통행증 없음 + 입장권 + tool=compress → 용량 줄이기, 주소 #compress (t= 없음)',
+          s.work && s.tab === 'compress' && s.hash === '#compress' && noT(s) && errs.length === 0, `${s.tab} · ${s.hash}${errs.length ? ` · 오류 ${errs[0]}` : ''}`);
+        await c.close();
+      }
+      {
+        const c = await browser.newContext({ viewport: { width: 1280, height: 800 }, extraHTTPHeaders: { 'X-Real-IP': '198.51.100.62' } });
+        const pg = await c.newPage();
+        const errs = [];
+        watch(pg, errs);
+        let enters = 0;
+        pg.on('request', (r) => { if (r.url().endsWith('/api/enter')) enters += 1; });
+        const entered = pg.waitForResponse((r) => r.url().endsWith('/api/enter'), { timeout: 15000 });
+        await pg.goto(`${BASE}/#t=${makeTicket({ sub: 'sub-test-0002' })}&tool=decorate`);
+        await ready(pg);
+        const er = await entered;
+        await pg.waitForTimeout(300);
+        const s = await state(pg);
+        const pass = ((await c.cookies()).find((k) => k.name === 'pdf_pass') || {}).value || '';
+        let sub = '';
+        try { sub = JSON.parse(Buffer.from(pass.split('.')[0], 'base64url').toString('utf8')).sub; } catch { sub = ''; }
+        check('도구 바로 열기: 통행증 있음 + #t=입장권&tool=decorate → 꾸미기, 주소 #decorate, /api/enter 1번, 통행증이 새 사람 것으로',
+          s.work && s.tab === 'decorate' && s.hash === '#decorate' && noT(s) && enters === 1 && er.status() === 200 && pass && pass !== PASS && sub === 'sub-test-0002' && errs.length === 0,
+          `${s.tab} · ${s.hash} · enter ${enters}번 ${er.status()} · 통행증 ${pass && pass !== PASS ? '바뀜' : '그대로✗'} · 가명 ${sub === 'sub-test-0002' ? '새 사람' : '✗'}`);
+        await c.close();
+      }
+      {
+        const c = await browser.newContext({ viewport: { width: 1280, height: 800 }, extraHTTPHeaders: { 'X-Real-IP': '198.51.100.63' } });
+        const pg = await c.newPage();
+        const errs = [];
+        watch(pg, errs);
+        const entered = pg.waitForResponse((r) => r.url().endsWith('/api/enter'), { timeout: 15000 });
+        await pg.goto(`${BASE}/#t=wrong-value&tool=decorate`);
+        await ready(pg);
+        const er = await entered;
+        await pg.waitForTimeout(300);
+        const s = await state(pg);
+        const pass = ((await c.cookies()).find((k) => k.name === 'pdf_pass') || {}).value || '';
+        const other = errs.filter((e) => !/\/api\/enter|status of 400/.test(e));
+        check('도구 바로 열기: 통행증 있음 + 틀린 입장권 → 꾸미기 그대로, 오류 화면 없음, 통행증 그대로',
+          s.work && s.tab === 'decorate' && s.hash === '#decorate' && noT(s) && !s.gate && er.status() === 400 && pass === PASS && other.length === 0,
+          `${s.tab} · enter ${er.status()} · 통행증 ${pass === PASS ? '그대로' : '바뀜✗'}${other.length ? ` · 오류 ${other[0]}` : ''}`);
+        await c.close();
+      }
+      {
+        // 허용 목록 밖 · 이상한 이름 → 처음 화면. 통행증 있음(앱) · 없음(안내 화면) 둘 다
+        const bads = ['../x', 'COMPRESS', '%3Cscript%3Ealert(1)%3C%2Fscript%3E', '<script>x</script>', 'a'.repeat(21), 'compress-but-not-a', 'compress%00'];
+        const res = [];
+        for (const [withPass, ip] of [[true, '198.51.100.64'], [false, '198.51.100.65']]) {
+          const c = await (withPass ? browser.newContext : rawContext)({ viewport: { width: 1280, height: 800 }, extraHTTPHeaders: { 'X-Real-IP': ip } });
+          for (const v of bads) {
+            const pg = await c.newPage();
+            const errs = [];
+            watch(pg, errs);
+            await pg.goto(`${BASE}/#t=${makeTicket()}&tool=${v}`);
+            await ready(pg);
+            await pg.waitForTimeout(200);
+            const s = await state(pg);
+            const ok = s.home && !s.work && noT(s) && !/script|\.\./i.test(s.hash) && errs.length === 0;
+            res.push({ v, withPass, ok, s });
+            await pg.close();
+          }
+          await c.close();
+        }
+        const bad = res.filter((r) => !r.ok);
+        check('도구 바로 열기: tool=../x · COMPRESS · <script> · 21자 · 허용 밖 이름 → 처음 화면 (통행증 있음 · 없음)', bad.length === 0,
+          bad.length ? bad.map((r) => `${r.withPass ? '통행증' : '안내'} ${r.v.slice(0, 12)} → ${r.s.tab}/${r.s.hash}`).join(' · ') : `${res.length}가지 모두 처음 화면`);
+      }
+      {
+        // tool= 없음: 지금과 같음(통행증 있음 → 처음 화면 · # 없음, 통행증 없음 → 안내 화면 거쳐 처음 화면)
+        const out = [];
+        for (const [withPass, ip] of [[true, '198.51.100.66'], [false, '198.51.100.67']]) {
+          const c = await (withPass ? browser.newContext : rawContext)({ viewport: { width: 1280, height: 800 }, extraHTTPHeaders: { 'X-Real-IP': ip } });
+          const pg = await c.newPage();
+          await pg.goto(`${BASE}/#t=${makeTicket()}`);
+          await ready(pg);
+          const s = await state(pg);
+          out.push(s.home && !s.work && s.hash === '' && noT(s));
+          await c.close();
+        }
+        check('도구 바로 열기: tool= 없으면 지금과 같이 처음 화면 · 주소에 # 없음 (통행증 있음 · 없음)', out.every(Boolean), out.map((x) => (x ? '처음 화면' : '✗')).join(' · '));
+      }
+
       const sizes = [
         { name: 'phone', width: 390, height: 844, hasTouch: true, isMobile: true },
         { name: 'tablet', width: 820, height: 1180, hasTouch: true },

@@ -2,6 +2,23 @@
 (function () {
   'use strict';
 
+  // 스쿨 도구함에서 통행증이 이미 있는 채로 열리면(#t=입장권&tool=이름) 서버가 안내 화면 없이 앱을 준다.
+  // 무엇보다 먼저: 입장권을 주소에서 지우고, 안내 화면과 같은 방법으로 통행증을 지금 사람 것으로 새로 받는다.
+  // 실패해도 지금 통행증으로 계속 쓴다(조용히). 도구 이름은 #이름 으로 바꿔 두면 아래 toolFromHash가 연다.
+  {
+    const hash = String(location.hash || '');
+    const m = hash.match(/^#t=([^&]+)/);
+    if (m) {
+      const tm = hash.match(/&tool=([a-z0-9-]{1,20})(?:&|$)/);
+      try { history.replaceState(null, '', location.pathname + location.search + (tm ? `#${tm[1]}` : '')); } catch { /* 못 바꿔도 계속 */ }
+      let ticket = m[1];
+      try { ticket = decodeURIComponent(ticket); } catch { /* 그대로 */ }
+      try {
+        fetch('/api/enter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ t: ticket }) }).catch(() => {});
+      } catch { /* fetch가 없는 브라우저 */ }
+    }
+  }
+
   const { PDFDocument } = PDFLib;
   const Core = PdfCore;
   const { UserError } = Core;
@@ -620,7 +637,8 @@
   // 주소의 #도구 이름. 예전 이름(lock, number)은 새 도구로 이어 준다.
   const TOOL_ALIAS = { lock: 'security', password: 'security', number: 'decorate', numbers: 'decorate', shrink: 'compress' };
   function toolFromHash() {
-    const raw = decodeURIComponent(location.hash.slice(1)).toLowerCase();
+    let raw = '';
+    try { raw = decodeURIComponent(location.hash.slice(1)).toLowerCase(); } catch { return null; }
     const t = TOOL_ALIAS[raw] || raw;
     return tabs.some((x) => x.dataset.tab === t) ? t : null;
   }
