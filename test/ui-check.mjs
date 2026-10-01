@@ -1,33 +1,31 @@
-// 헤드리스 브라우저 점검 (playwright가 있을 때만).
+// 헤드리스 브라우저 점검. 검사는 한 창씩 차례로 돈다(workers 1과 같음).
 // 실행: node test/ui-check.mjs            점검만
 //       node test/ui-check.mjs --screens  점검 + docs/screens/ 에 스크린샷 저장
-//   playwright를 프로젝트 밖에 설치했다면 PLAYWRIGHT_DIR=그 폴더 로 알려 준다.
+//   playwright(@playwright/test, package.json에 판 고정)나 Chromium이 없으면 건너뛰지 않고 실패한다.
+//   일부러 건너뛸 때만 SKIP_UI=1 (크게 "건너뜀(SKIP_UI)"을 찍고 끝낸다).
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { uiPreflight, uiVerdict, SKIP_BANNER } from './ui-guard.mjs';
 
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SCREENS = process.argv.includes('--screens');
 
-function loadPlaywright() {
-  const bases = [process.env.PLAYWRIGHT_DIR, root].filter(Boolean);
-  for (const base of bases) {
-    const req = createRequire(path.join(path.resolve(base), 'noop.js'));
-    for (const name of ['playwright', 'playwright-core', '@playwright/test']) {
-      try { return req(name); } catch { /* 다음 후보 */ }
-    }
-  }
-  return null;
-}
-const pw = loadPlaywright();
-if (!pw) {
-  console.log('playwright가 없어 브라우저 점검을 건너뜀');
+const pre = uiPreflight({ root });
+if (pre.action === 'skip') {
+  console.log(SKIP_BANNER);
+  console.log('test:ui: 건너뜀(SKIP_UI) — 실행한 화면 검사 0개');
   process.exit(0);
 }
+if (pre.action === 'fail') {
+  console.error(pre.message);
+  process.exit(1);
+}
+const pw = pre.pw;
 
 const PDFLib = require('@cantoo/pdf-lib');
 const { PDFDocument, StandardFonts, rgb } = PDFLib;
@@ -130,7 +128,8 @@ const setCookie = firstEnter.headers.get('set-cookie') || '';
 const PASS = (setCookie.match(/pdf_pass=([^;]+)/) || [])[1] || '';
 if (!PASS) throw new Error(`통행증을 받지 못함 (${firstEnter.status})`);
 
-const browser = await pw.chromium.launch();
+// UI_CHANNEL=chromium: headless-shell 대신 정식 Chromium으로(같은 PC에서 다른 검사가 headless-shell을 정리할 때)
+const browser = await pw.chromium.launch(process.env.UI_CHANNEL ? { channel: process.env.UI_CHANNEL } : {});
 // 기존 점검은 모두 통행증을 가진 상태로 돈다. 안내 화면 점검만 rawContext(통행증 없음)를 쓴다
 const rawContext = browser.newContext.bind(browser);
 browser.newContext = async (opts) => {
@@ -3137,7 +3136,7 @@ try {
 
 const wide = (s) => [...s].reduce((n, ch) => n + (/[ᄀ-ᇿ㄰-㆏가-힣]/.test(ch) ? 2 : 1), 0);
 const padR = (s, n) => s + ' '.repeat(Math.max(0, n - wide(s)));
-const c1 = Math.max(...rows.map((r) => wide(r.name)));
+const c1 = Math.max(...rows.map((r) => wide(r.name)), 4);
 console.log(`\n| ${padR('항목', c1)} | 결과 | 세부`);
 console.log(`|${'-'.repeat(c1 + 2)}|------|${'-'.repeat(40)}`);
 for (const r of rows) console.log(`| ${padR(r.name, c1)} | ${r.skip ? '건너뜀' : r.ok ? '통과' : '실패'} | ${r.detail}`);
@@ -3145,4 +3144,6 @@ const failed = rows.filter((r) => !r.ok).length;
 if (uiMeasures.length) console.log(`\n용량 줄이기 실측(브라우저)\n- ${uiMeasures.join('\n- ')}`);
 const skipped = rows.filter((r) => r.skip).length;
 console.log(`\n${rows.length}개 중 ${rows.length - failed - skipped}개 통과${skipped ? `, ${skipped}개 건너뜀` : ""}${failed ? `, ${failed}개 실패` : ""}`);
-process.exit(failed ? 1 : 0);
+const verdict = uiVerdict(rows);
+if (verdict.message) console.error(verdict.message);
+process.exit(verdict.code);

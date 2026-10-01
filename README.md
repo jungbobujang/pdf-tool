@@ -233,7 +233,7 @@ npm start
 
 ```bash
 npm run verify      # (HEIC 판별 · 쪽 크기 · 양면 · 빈 쪽 · 파일 정보 · 일괄 · zip 한글 이름 포함) 합치기 · 범위 · 회전 · 교체 · 암호 · 쪽번호 · 여러 쪽 순서 · 나눠 저장 · 워터마크 · 도장 · 용량 줄이기 검증 (node, 30초쯤)
-npm run test:ui     # 헤드리스 브라우저 점검 (playwright가 있을 때만, 없으면 건너뜀). HEIC 점검은 HEIC_SAMPLES="a.heic;b.heic"로 샘플을 알려 줄 때만
+npm run test:ui     # 헤드리스 브라우저 점검 (한 창씩 차례로). playwright · Chromium이 없으면 실패. HEIC 점검은 HEIC_SAMPLES="a.heic;b.heic"로 샘플을 알려 줄 때만
 npm run screens     # 점검 + docs/screens/ 스크린샷 다시 찍기
 node test/real-files.mjs "경로/파일1.pdf" "경로/파일2.pdf"   # 실제 PDF로 node · 브라우저(Worker · 메인 스레드) 실측. 파일은 저장소에 넣지 않음
 ```
@@ -252,6 +252,13 @@ node test/real-files.mjs "경로/파일1.pdf" "경로/파일2.pdf"   # 실제 PD
 
 `npm run verify`는 만들어 둔 `/licenses` 페이지와 새 소식 JSON이 package.json · CHANGELOG.md와 맞는지도 확인합니다.
 
+관문이 조용히 비지 않게:
+
+- `@playwright/test`는 devDependencies에 판을 고정해 둡니다. 처음 받은 PC는 `npm ci` 후 `npx playwright install chromium`.
+- `test:ui`는 playwright를 못 불러오거나 Chromium이 없으면 건너뛰지 않고 "test:ui 실패: playwright가 없어요 → npm ci 후 npx playwright install chromium"을 찍고 종료 코드 1로 끝납니다. 실행한 검사가 0개여도 실패입니다.
+- 일부러 건너뛸 때만 `SKIP_UI=1`(PowerShell은 `$env:SKIP_UI = "1"`, 끝나면 `$env:SKIP_UI = $null`). 그때는 "건너뜀(SKIP_UI)"을 크게 찍으니 관문 보고에 그대로 적어 주세요.
+- `verify`는 내보내는 HTML(`public/` 전체 · 라이선스 생성기를 지금 돌린 결과)과 `server.js` · `scripts/` · `lib/`에 `<link rel="manifest"` 줄이 다시 생기지 않았는지 봅니다. `public/manifest.webmanifest` 파일 자체는 남아 있고 서버가 404로 막습니다.
+
 ### 실제 파일로 확인하기
 
 ```bash
@@ -262,7 +269,7 @@ node test/real-files.mjs "C:\경로\파일1.pdf" "C:\경로\파일2.pdf"
 - 파일은 저장소에 넣지 않고 경로로만 읽습니다. 결과에는 파일 이름 대신 "파일 1", "파일 2"만 적습니다.
 - 용량 줄이기를 node와 브라우저(Worker · 메인 스레드)에서 실제로 재 봅니다.
 
-`test:ui`는 프로젝트에 playwright가 없으면 `PLAYWRIGHT_DIR=<playwright를 설치한 폴더>`로 위치를 알려 줄 수 있습니다.
+`test:ui`는 저장소에 설치된 playwright만 씁니다(밖에 따로 깐 것은 판이 달라질 수 있어 쓰지 않음). `UI_CHANNEL=chromium`을 주면 headless-shell 대신 정식 Chromium으로 돕니다. 같은 PC에서 다른 저장소 검사가 돌면서 Chromium을 정리하면 검사 도중 "Target page, context or browser has been closed"로 끊길 수 있으니, 그때는 다른 검사가 끝난 뒤에 돌려 주세요.
 
 ## 구성
 

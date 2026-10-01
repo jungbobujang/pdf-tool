@@ -2,12 +2,14 @@
 // "사용한 라이브러리" 페이지(public/pages/licenses.html)를 만든다.
 //   node scripts/gen-licenses.mjs          만들기 (npm run build 에서 자동)
 //   node scripts/gen-licenses.mjs --check  만든 페이지가 package.json과 맞는지만 확인 (verify에서)
+//   node scripts/gen-licenses.mjs --out=파일  다른 곳에 만들기 (verify가 manifest 줄이 되살아나지 않는지 볼 때)
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const OUT = path.join(root, 'public', 'pages', 'licenses.html');
+const outArg = process.argv.find((a) => a.startsWith('--out='));
+const OUT = outArg ? path.resolve(outArg.slice(6)) : path.join(root, 'public', 'pages', 'licenses.html');
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 
 // 어디에 쓰는지 (사용자 말로)
@@ -22,6 +24,7 @@ const USE = {
   pretendard: '화면 글꼴 · 한글 워터마크 글꼴',
   express: '이 사이트의 파일을 보내 주는 서버 (브라우저에는 포함되지 않음)',
   'axe-core': '자동 접근성 검사 (개발용, 사이트에 포함되지 않음)',
+  '@playwright/test': '화면 자동 검사 브라우저 (개발용, 사이트에 포함되지 않음)',
 };
 
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -156,4 +159,4 @@ ${list.filter((l) => l.dev).map(item).join('\n')}
 `;
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
 fs.writeFileSync(OUT, html);
-console.log(`사용한 라이브러리 페이지: ${path.relative(root, OUT)} (${list.length}개)`);
+console.log(`사용한 라이브러리 페이지: ${outArg ? OUT : path.relative(root, OUT)} (${list.length}개)`);

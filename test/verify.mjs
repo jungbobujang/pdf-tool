@@ -762,6 +762,66 @@ const { colorSamplesPdf } = await import('./node-codec.mjs');
   }
 }
 
+// ── 관문이 조용히 비지 않게: 빌드 결과에 manifest 줄 없음 · test:ui가 못 돌면 실패 ──
+{
+  const { spawnSync } = await import('node:child_process');
+  const os = require('node:os');
+  const path = require('node:path');
+  const G = await import('./ui-guard.mjs');
+  const root = require('node:url').fileURLToPath(new URL('..', import.meta.url));
+  const work = path.join(os.tmpdir(), 'pdf-work');
+  fs.mkdirSync(work, { recursive: true });
+  const tmp = fs.mkdtempSync(path.join(work, 'verify-'));
+  const rel = (f) => path.relative(root, f).replace(/\\/g, '/');
+
+  // 내보내는 HTML(public 전체, server.js는 public의 HTML을 그대로 보낸다) + 라이선스 생성기를 지금 돌린 결과
+  const gen = spawnSync(process.execPath, ['scripts/gen-licenses.mjs', `--out=${path.join(tmp, 'build', 'licenses.html')}`], { cwd: root, encoding: 'utf8' });
+  const builtHits = G.manifestLinks([path.join(root, 'public'), path.join(tmp, 'build')]);
+  // 빌드 스크립트 · 서버가 그 줄을 끼워 넣는 코드가 있는지
+  const srcFiles = ['server.js', ...['scripts', 'lib'].flatMap((d) => fs.readdirSync(path.join(root, d)).filter((f) => /\.(m?js|cjs)$/.test(f)).map((f) => `${d}/${f}`))];
+  const srcHits = srcFiles.filter((f) => G.hasManifestLink(fs.readFileSync(path.join(root, f), 'utf8')));
+  check('빌드 결과에 manifest 줄 없음(public HTML · 라이선스 생성기 · 빌드 스크립트 · 서버)',
+    gen.status === 0 && fs.existsSync(path.join(tmp, 'build', 'licenses.html')) && builtHits.length === 0 && srcHits.length === 0,
+    gen.status !== 0 ? `라이선스 생성 실패: ${(gen.stderr || '').trim().slice(0, 120)}`
+      : builtHits.length || srcHits.length ? `manifest 줄이 다시 생겼어요: ${[...builtHits.map(rel), ...srcHits].join(', ')} → 그 줄을 지워 주세요`
+        : `public HTML · 라이선스 생성 결과 깨끗 · 소스 ${srcFiles.length}개 깨끗`);
+
+  // 가짜 빌드: manifest 줄을 넣으면 위 검사가 잡아야 한다
+  const fake = path.join(tmp, 'fake-build');
+  fs.mkdirSync(path.join(fake, 'pages'), { recursive: true });
+  fs.writeFileSync(path.join(fake, 'index.html'), '<!doctype html><head>\n  <link rel="manifest" href="/manifest.webmanifest">\n</head>');
+  fs.writeFileSync(path.join(fake, 'pages', 'ok.html'), '<!doctype html><head><link rel="icon" href="/x.svg"></head>');
+  fs.writeFileSync(path.join(fake, 'pages', 'b.html'), "<head><LINK href='/m.json' REL=manifest></head>");
+  const fakeHits = G.manifestLinks([fake]).map((f) => path.basename(f)).sort();
+  check('단위: manifest 줄을 넣은 가짜 빌드는 실패로 잡힘', same(fakeHits, ['b.html', 'index.html']), `잡은 파일 ${fakeHits.join(', ') || '없음'}`);
+
+  // playwright를 못 찾는 것처럼 꾸며 진짜 ui-check.mjs를 돌린다
+  const fixture = path.join(tmp, 'no-playwright.cjs');
+  fs.writeFileSync(fixture, `const M = require('module'); const o = M._resolveFilename;
+M._resolveFilename = function (req, ...a) { if (/^(@playwright\\/test|playwright|playwright-core)(\\/|$)/.test(req)) { const e = new Error('Cannot find module ' + req); e.code = 'MODULE_NOT_FOUND'; throw e; } return o.call(this, req, ...a); };`);
+  const env = { ...process.env };
+  delete env.SKIP_UI;
+  const noPw = spawnSync(process.execPath, ['-r', fixture, 'test/ui-check.mjs'], { cwd: root, encoding: 'utf8', env, timeout: 60000 });
+  check('단위: playwright가 없으면 test:ui 실패(종료 1 · 까닭 한 줄)',
+    noPw.status === 1 && (noPw.stderr || '').includes(G.NO_PW_MSG) && !/건너뜀/.test(noPw.stdout || ''),
+    `종료 ${noPw.status} · ${(noPw.stderr || noPw.stdout || '').trim().split('\n')[0]}`);
+  const skip = spawnSync(process.execPath, ['-r', fixture, 'test/ui-check.mjs'], { cwd: root, encoding: 'utf8', env: { ...env, SKIP_UI: '1' }, timeout: 60000 });
+  check('단위: SKIP_UI=1일 때만 건너뜀(크게 표시)', skip.status === 0 && (skip.stdout || '').includes('건너뜀(SKIP_UI)') && (skip.stdout || '').includes('####'),
+    `종료 ${skip.status}`);
+
+  const noBrowser = G.uiPreflight({ env: {}, root, load: () => ({ chromium: { executablePath: () => path.join(tmp, 'none', 'chrome.exe') } }) });
+  const noModule = G.uiPreflight({ env: {}, root, load: () => null });
+  check('단위: Chromium이 없어도 실패', noBrowser.action === 'fail' && noBrowser.message === G.NO_BROWSER_MSG && noModule.action === 'fail' && noModule.message === G.NO_PW_MSG,
+    `${noBrowser.action} · ${noModule.action}`);
+
+  const v0 = G.uiVerdict([]);
+  const vSkip = G.uiVerdict([{ name: 'a', ok: true, skip: true }]);
+  const vOk = G.uiVerdict([{ name: 'a', ok: true }, { name: 'b', ok: true, skip: true }]);
+  const vFail = G.uiVerdict([{ name: 'a', ok: false }]);
+  check('단위: 실행한 화면 검사가 0개면 실패', v0.code === 1 && vSkip.code === 1 && v0.message === G.ZERO_MSG && vOk.code === 0 && vOk.ran === 1 && vFail.code === 1,
+    `0개 ${v0.code} · 건너뜀만 ${vSkip.code} · 1개 통과 ${vOk.code} · 1개 실패 ${vFail.code}`);
+}
+
 // ── 결과 표 ─────────────────────────────────────────
 const width = (s) => [...s].reduce((n, ch) => n + (/[ᄀ-ᇿ㄰-㆏가-힣]/.test(ch) ? 2 : 1), 0);
 const padR = (s, n) => s + ' '.repeat(Math.max(0, n - width(s)));
