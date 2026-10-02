@@ -59,7 +59,13 @@
   }).then(function (res) {
     return res.json().catch(function () { return {}; }).then(function (body) { return { ok: res.ok, body: body }; });
   }).then(function (r) {
-    if (r.ok) { location.replace(location.pathname + location.search + (tool ? '#' + tool : '')); return; }
+    if (r.ok) {
+      // #이름 만 붙여서 location.replace 하면 같은 문서 안에서 조각만 바뀌어 안내 화면이 그대로 남는다.
+      // 주소를 먼저 맞춰 둔 뒤 새로 불러온다(통행증이 생겼으니 서버가 PDF 화면을 준다).
+      var dest = location.pathname + location.search + (tool ? '#' + tool : '');
+      try { history.replaceState(null, '', dest); location.reload(); } catch (e) { location.replace(dest); }
+      return;
+    }
     showError((r.body && r.body.message) || '열지 못했어요. 아래 [스쿨에서 열기]를 다시 눌러 주세요.');
   }).catch(function () {
     showError('PDF 작업실 서버에 연결하지 못했어요. 인터넷 연결을 확인하고 아래 [스쿨에서 열기]를 다시 눌러 주세요.');

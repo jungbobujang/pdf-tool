@@ -2196,7 +2196,33 @@ try {
       const { spawnSync } = await import('node:child_process');
       const oldDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdf-old-'));
       const tarRes = spawnSync('git', ['archive', '--format=tar', '622bfcd'], { cwd: root, maxBuffer: 256 * 1024 * 1024 });
-      const untar = spawnSync('tar', ['-xf', '-', '-C', oldDir], { input: tarRes.stdout });
+      // tar 명령은 쓰지 않는다: 윈도우 tar(bsdtar)는 한글 이름(docs/안내문.html)에서 멈춘다. 직접 푼다.
+      const untarBuffer = (buf, dest) => {
+        let off = 0;
+        let longName = '';
+        while (off + 512 <= buf.length) {
+          const h = buf.subarray(off, off + 512);
+          if (h.every((b) => b === 0)) break;
+          const str = (s, e) => h.subarray(s, e).toString('utf8').replace(/\0[\s\S]*$/, '');
+          const prefix = str(345, 500);
+          const name = longName || (prefix ? `${prefix}/${str(0, 100)}` : str(0, 100));
+          const size = parseInt(str(124, 136).trim() || '0', 8) || 0;
+          const type = String.fromCharCode(h[156]);
+          const body = buf.subarray(off + 512, off + 512 + size);
+          off += 512 + Math.ceil(size / 512) * 512;
+          longName = '';
+          if (type === 'L') { longName = body.toString('utf8').replace(/\0[\s\S]*$/, ''); continue; }
+          if (type === 'x' || type === 'g' || !name) continue;
+          const full = path.join(dest, name);
+          if (!full.startsWith(dest)) continue;
+          if (type === '5') { fs.mkdirSync(full, { recursive: true }); continue; }
+          if (type !== '0' && type !== '7' && type !== '\0') continue;
+          fs.mkdirSync(path.dirname(full), { recursive: true });
+          fs.writeFileSync(full, body);
+        }
+      };
+      let untar = { status: 1 };
+      try { untarBuffer(tarRes.stdout || Buffer.alloc(0), oldDir); untar = { status: fs.existsSync(path.join(oldDir, 'server.js')) ? 0 : 1 }; } catch { untar = { status: 1 }; }
       fs.symlinkSync(path.join(root, 'node_modules'), path.join(oldDir, 'node_modules'), 'junction');
       const WPORT = 4000 + Math.floor(Math.random() * 2000) + 4000;
       const run = (cwd) => new Promise((resolve, reject) => {
