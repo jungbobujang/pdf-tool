@@ -334,7 +334,7 @@ CHANGELOG.md         사용자 말로 적은 변경 기록(새 소식)
 - GitHub `main`에 push하면 Railway가 자동으로 빌드 · 배포합니다(보통 1분 안팎). 빌드 때 `npm run build`가 `/licenses` 페이지와 새 소식 JSON을 다시 만듭니다.
 - 배포 뒤에는 `/version`의 commit이 push한 커밋과 같은지 확인하세요. 3분이 지나도 다르면 아래 수동 배포를 씁니다.
 - 새 버전이 배포되면 이미 열어 둔 사람에게는 "새 버전이 있어요 [새로고침]" 띠가 뜹니다(서비스 워커 캐시 이름에 커밋이 들어 있어 새 버전이 옛 캐시를 교체).
-- 다른 주소로 배포하면 공유 미리보기 그림 주소를 위해 `PUBLIC_URL` 환경 변수를 그 주소로 넣으세요(기본 https://pdf-tool-production-a037.up.railway.app).
+- 다른 주소로 배포하면 공유 미리보기 그림 주소를 위해 `PUBLIC_URL` 환경 변수를 그 주소로 넣으세요(기본 https://edit.up.railway.app).
 - 의견 설문을 붙이려면 `public/config.js`의 `FEEDBACK_URL`에 설문 주소(https)만 넣고 push하면 됩니다.
 
 ### 수동 배포: `npm run deploy` (Railway CLI 로그인 필요)
