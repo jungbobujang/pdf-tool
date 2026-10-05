@@ -38,6 +38,19 @@ jobs:
           sudo apt-get install -y -qq fonts-noto-cjk > /dev/null
           npx playwright install --with-deps chromium
       - name: verify
-        run: npm run verify
+        run: |
+          set -o pipefail
+          npm run verify 2>&1 | tee "$RUNNER_TEMP/verify.log"
       - name: test:ui
-        run: npm run test:ui
+        run: |
+          set -o pipefail
+          npm run test:ui 2>&1 | tee "$RUNNER_TEMP/ui.log"
+      # 기록 파일을 내려받지 않아도 GitHub 화면 · API(check-run annotations)에서 실패한 줄을 바로 읽게
+      - name: 실패한 검사 한 줄씩
+        if: failure()
+        run: |
+          for f in "$RUNNER_TEMP/verify.log" "$RUNNER_TEMP/ui.log"; do
+            [ -f "$f" ] || continue
+            grep -E '\| 실패 \||Error|예외' "$f" | head -40 | cut -c1-900 | sed -e 's/%/%25/g' | while IFS= read -r line; do echo "::error title=$(basename "$f")::$line"; done
+            tail -n 3 "$f" | sed -e 's/%/%25/g' | while IFS= read -r line; do echo "::notice title=$(basename "$f") 끝::$line"; done
+          done
