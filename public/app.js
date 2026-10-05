@@ -5,19 +5,22 @@
   // 스쿨 도구함에서 통행증이 이미 있는 채로 열리면(#t=입장권&tool=이름) 서버가 안내 화면 없이 앱을 준다.
   // 무엇보다 먼저: 입장권을 주소에서 지우고, 안내 화면과 같은 방법으로 통행증을 지금 사람 것으로 새로 받는다.
   // 실패해도 지금 통행증으로 계속 쓴다(조용히). 도구 이름은 #이름 으로 바꿔 두면 아래 toolFromHash가 연다.
-  {
+  // &pc=shared: 스쿨에서 "내 교실 PC"로 정하지 않은 PC. 서명 · 도장은 누구 것인지(pdf_who) 정해진 뒤에 읽는다(ENTERING).
+  const ENTERING = (() => {
     const hash = String(location.hash || '');
     const m = hash.match(/^#t=([^&]+)/);
-    if (m) {
-      const tm = hash.match(/&tool=([a-z0-9-]{1,20})(?:&|$)/);
-      try { history.replaceState(null, '', location.pathname + location.search + (tm ? `#${tm[1]}` : '')); } catch { /* 못 바꿔도 계속 */ }
-      let ticket = m[1];
-      try { ticket = decodeURIComponent(ticket); } catch { /* 그대로 */ }
-      try {
-        fetch('/api/enter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ t: ticket }) }).catch(() => {});
-      } catch { /* fetch가 없는 브라우저 */ }
-    }
-  }
+    if (!m) return Promise.resolve();
+    const tm = hash.match(/&tool=([a-z0-9-]{1,20})(?:&|$)/);
+    const pc = /&pc=shared(?:&|$)/.test(hash) ? 'shared' : 'mine';
+    try { history.replaceState(null, '', location.pathname + location.search + (tm ? `#${tm[1]}` : '')); } catch { /* 못 바꿔도 계속 */ }
+    let ticket = m[1];
+    try { ticket = decodeURIComponent(ticket); } catch { /* 그대로 */ }
+    try {
+      const sent = fetch('/api/enter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ t: ticket, pc }) }).then(() => {}, () => {});
+      // 서버가 늦어도 6초 뒤에는 지금 쿠키로 계속
+      return Promise.race([sent, new Promise((r) => setTimeout(r, 6000))]);
+    } catch { return Promise.resolve(); /* fetch가 없는 브라우저 */ }
+  })();
 
   const { PDFDocument } = PDFLib;
   const Core = PdfCore;
@@ -2811,30 +2814,64 @@
     });
   }
 
+  // ── 이 브라우저를 쓰는 사람: 스쿨 가명 번호에서 만든 짧은 표(쿠키 pdf_who) · 빌려 쓰는 PC인지(pdf_pc=shared) ──
+  // 스쿨에서 막 들어오는 중이면(ENTERING) 쿠키가 새 사람 것으로 바뀐 뒤에 읽는다.
+  // 표가 없으면(점검 · 표가 생기기 전 통행증) 예전처럼 이 브라우저를 한 사람이 쓴다고 본다.
+  const Who = (() => {
+    let cached = null;
+    const cookie = (name) => {
+      try {
+        const hit = String(document.cookie || '').split(';').map((x) => x.trim()).find((x) => x.startsWith(`${name}=`));
+        return hit ? hit.slice(name.length + 1) : '';
+      } catch { return ''; }
+    };
+    const read = () => {
+      const who = cookie('pdf_who');
+      return { owner: /^[0-9a-f]{16}$/.test(who) ? who : '', shared: cookie('pdf_pc') === 'shared' };
+    };
+    return {
+      ready: async () => { if (!cached) { await ENTERING; cached = read(); } return cached; },
+      now: () => cached || read(),
+    };
+  })();
+
   // ── 서명 · 도장 보관 (이 브라우저에만: IndexedDB, 안 되면 이번 방문 동안만) ──
+  // 선생님마다 따로(owner). 빌려 쓰는 PC에서 새로 만든 것은 IndexedDB에 쓰지 않고 이 창에만(temp) 둔다.
+  // 표가 생기기 전에 보관한 것(owner 없음)은 누구 것인지 몰라 숨기고, 이 PC 주인이 [내 것으로] · [지우기]를 고른다.
   const Stamps = (() => {
     let items = null;
+    let loading = null;
+    let me = { owner: '', shared: false };
+    let legacy = [];
     const listeners = new Set();
     const tx = (mode, fn) => dbTx('stamps', mode, fn);
-    async function list() {
-      if (!items) {
-        const rows = (await tx('readonly', (st) => st.getAll())) || [];
-        items = rows.sort((a, b) => a.created - b.created).map((r) => ({ ...r, bytes: new Uint8Array(r.bytes) }));
-      }
+    const toItem = (r) => ({ ...r, bytes: new Uint8Array(r.bytes) });
+    const row = (it) => ({ ...it, bytes: it.bytes.buffer.slice(0), processed: undefined, url: undefined, temp: undefined });
+    async function load() {
+      me = await Who.ready();
+      const rows = (await tx('readonly', (st) => st.getAll())) || [];
+      legacy = me.owner ? rows.filter((r) => !r.owner) : [];
+      items = rows.filter((r) => (r.owner || '') === me.owner).sort((a, b) => a.created - b.created).map(toItem);
       return items;
+    }
+    async function list() {
+      if (items) return items;
+      if (!loading) loading = load();
+      return loading;
     }
     const notify = () => listeners.forEach((f) => f());
     async function add(item) {
       await list();
-      const it = { id: `st${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, created: Date.now(), clearWhite: false, ...item };
+      const it = { id: `st${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, created: Date.now(), clearWhite: false, ...item, owner: me.owner };
+      if (me.shared) it.temp = true;
       items.push(it);
-      await tx('readwrite', (st) => st.put({ ...it, bytes: it.bytes.buffer.slice(0) }));
+      if (!it.temp) await tx('readwrite', (st) => st.put(row(it)));
       notify();
       return it;
     }
     async function update(it) {
       delete it.processed;
-      await tx('readwrite', (st) => st.put({ ...it, bytes: it.bytes.buffer.slice(0), processed: undefined, url: undefined }));
+      if (!it.temp) await tx('readwrite', (st) => st.put(row(it)));
       if (it.url) { URL.revokeObjectURL(it.url); delete it.url; }
       notify();
     }
@@ -2845,6 +2882,30 @@
       items = items.filter((x) => x.id !== id);
       await tx('readwrite', (st) => st.delete(id));
       notify();
+    }
+    /** 숨겨 둔 예전 보관을 지금 선생님 것으로(이 PC 주인만: 빌려 쓰는 PC에서는 부르지 않는다) */
+    async function claimLegacy() {
+      await list();
+      if (me.shared || !me.owner) return 0;
+      const n = legacy.length;
+      for (const r of legacy) {
+        const it = { ...toItem(r), owner: me.owner };
+        await tx('readwrite', (st) => st.put(row(it)));
+        items.push(it);
+      }
+      items.sort((a, b) => a.created - b.created);
+      legacy = [];
+      notify();
+      return n;
+    }
+    async function dropLegacy() {
+      await list();
+      if (me.shared) return 0;
+      const n = legacy.length;
+      for (const r of legacy) await tx('readwrite', (st) => st.delete(r.id));
+      legacy = [];
+      notify();
+      return n;
     }
     /** 실제로 넣을 PNG (흰 배경 지우기 반영) */
     async function pngOf(it) {
@@ -2857,15 +2918,70 @@
       return it.url;
     }
     const byId = (id) => (items || []).find((x) => x.id === id);
-    /** 이 브라우저에 보관한 서명 · 도장을 모두 지운다(설정 → 모두 지우기) */
+    /** 이 브라우저에 보관한 서명 · 도장을 모두 지운다(설정 → 모두 지우기: 다른 선생님 것까지) */
     async function clearAll() {
       (items || []).forEach((it) => it.url && URL.revokeObjectURL(it.url));
       items = [];
+      legacy = [];
       await tx('readwrite', (st) => st.clear());
       notify();
     }
-    return { list, add, update, remove, pngOf, urlOf, byId, clearAll, onChange: (f) => listeners.add(f) };
+    return {
+      list, add, update, remove, pngOf, urlOf, byId, clearAll, claimLegacy, dropLegacy,
+      onChange: (f) => listeners.add(f),
+      shared: () => me.shared,
+      legacyCount: () => legacy.length,
+      state: async () => { await list(); return { owner: me.owner ? 'set' : '', shared: me.shared, count: items.length, temp: items.filter((x) => x.temp).length, legacy: legacy.length }; },
+    };
   })();
+
+  /**
+   * 서명 · 도장 칸의 안내([data-stamp-notes]: 꾸미기 · 도장 만들기 · 서명 그리기)
+   * 빌려 쓰는 PC면 "창을 닫으면 지워져요", 숨겨 둔 예전 보관이 있으면 [내 것으로] · [지우기]
+   */
+  const STAMP_WHERE = {
+    mine: { sign: '투명 배경 PNG로 이 브라우저에만 보관돼요.', keep: '이 브라우저에만 · 꾸미기에서도 바로 골라요', decor: '만든 서명과 도장은 이 브라우저에만 보관돼요.' },
+    shared: { sign: '빌려 쓰는 PC라 이 창에만 둬요. 창을 닫으면 지워져요.', keep: '이 창에만 · 창을 닫으면 지워져요', decor: '빌려 쓰는 PC라 만든 서명과 도장은 이 창에만 둬요.' },
+  };
+  async function paintStampNotes() {
+    await Stamps.list();
+    const shared = Stamps.shared();
+    const n = Stamps.legacyCount();
+    document.querySelectorAll('[data-keep-where]').forEach((el) => { el.textContent = STAMP_WHERE[shared ? 'shared' : 'mine'][el.dataset.keepWhere] || el.textContent; });
+    document.querySelectorAll('[data-stamp-notes]').forEach((box) => {
+      const parts = [];
+      if (shared) {
+        parts.push(h('p', { class: 'hint-box warn stamp-shared' }, '빌려 쓰는 PC예요. 여기서 만든 서명 · 도장은 이 창에만 두고, 창을 닫으면 지워져요. ',
+          h('small', null, '내 PC라면 스쿨 → 내 정보에서 "이 PC는 내 교실 PC예요"를 체크하고 도구함에서 다시 열어 주세요.')));
+      }
+      if (n) {
+        parts.push(h('div', { class: 'hint-box stamp-legacy' },
+          h('p', null, `이 브라우저에 누구 것인지 모르는 예전 서명 · 도장 ${n}개가 있어 숨겨 뒀어요.`),
+          shared
+            ? h('small', null, '이 PC 주인 선생님이 열면 정리할 수 있어요.')
+            : h('div', { class: 'btn-row' },
+              h('button', { type: 'button', class: 'btn sm', 'data-legacy': 'claim' }, '내 것으로'),
+              h('button', { type: 'button', class: 'btn sm', 'data-legacy': 'drop' }, '지우기'))));
+      }
+      box.replaceChildren(...parts);
+      box.hidden = !parts.length;
+    });
+  }
+  Stamps.onChange(() => { paintStampNotes().catch(() => {}); });
+  document.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-legacy]');
+    if (!b) return;
+    const n = Stamps.legacyCount();
+    if (b.dataset.legacy === 'claim') {
+      await Stamps.claimLegacy();
+      toast(`예전 서명 · 도장 ${n}개를 내 것으로 옮겼어요.`, '', 'ok');
+      return;
+    }
+    const yes = await confirmBox({ title: `숨겨 둔 예전 서명 · 도장 ${n}개를 지울까요?`, body: '이 브라우저에서만 지워요. 되돌릴 수 없어요.', yes: '지우기' });
+    if (!yes) return;
+    await Stamps.dropLegacy();
+    toast(`예전 서명 · 도장 ${n}개를 지웠어요.`, '', 'info');
+  });
 
   /** 밝은(흰) 부분을 투명하게. 스캔한 도장용 */
   async function whiteToAlpha(bytes) {
@@ -3233,6 +3349,7 @@
     const selNote = h('small', { class: 'sel-note' });
     const stampBody = [
       chipBox,
+      h('div', { class: 'stamp-notes', 'data-stamp-notes': true, hidden: true }),
       h('div', { class: 'btn-row' },
         h('button', { type: 'button', class: 'btn sm', 'data-act': 'draw' }, icon('pen', 'ic sm'), '손으로 그리기'),
         h('button', { type: 'button', class: 'btn sm', 'data-act': 'upload' }, icon('upload', 'ic sm'), '이미지 올리기'),
@@ -3240,7 +3357,7 @@
       h('label', { class: 'check' }, clearWhite, h('span', null, '흰 배경 지우기 ', h('small', null, '(스캔한 도장용, 고른 이미지에 적용)'))),
       targetSeg, selNote,
       h('p', { class: 'hint-box' }, '서명 이미지를 넣는 기능이에요. 인증서로 하는 법적 전자서명과는 달라요.'),
-      h('p', { class: 'sub' }, '미리보기에서 끌어서 옮기고, 오른쪽 아래 모서리를 끌어 크기를 바꿔요. 만든 서명과 도장은 이 브라우저에만 보관돼요.'),
+      h('p', { class: 'sub' }, '미리보기에서 끌어서 옮기고, 오른쪽 아래 모서리를 끌어 크기를 바꿔요. ', h('span', { 'data-keep-where': 'decor' }, '만든 서명과 도장은 이 브라우저에만 보관돼요.')),
     ];
     // 4) 암호
     const pw1 = h('input', { type: 'password', 'data-f': 'pw', autocomplete: 'new-password', 'aria-label': '열기 암호' });
@@ -3342,6 +3459,7 @@
       }));
       chipBox.replaceChildren(...chips);
       if (!list.length) chipBox.append(h('li', { class: 'stamp-empty' }, '아직 보관한 서명 · 도장이 없어요.'));
+      paintStampNotes().catch(() => {});
       syncItem('stamp');
       sums.stamp.textContent = summary('stamp');
     }
@@ -5950,16 +6068,30 @@
   const Resume = (() => {
     const KEY = 'pdfws.resume';
     let LIMIT = 500 * 1024 * 1024;
-    const isOn = () => { try { return localStorage.getItem(KEY) === '1'; } catch { return false; } };
+    // 빌려 쓰는 PC에서는 늘 꺼짐(이 PC 주인이 켜 두었어도). 저장은 선생님마다 따로(edit-표)
+    const isOn = () => { if (Who.now().shared) return false; try { return localStorage.getItem(KEY) === '1'; } catch { return false; } };
     const setOn = (v) => { try { if (v) localStorage.setItem(KEY, '1'); else localStorage.removeItem(KEY); } catch { /* 저장소를 못 쓰면 켜지지 않는다 */ } };
     let timer = 0;
     let pending = null; // 아직 [이어하기]/[지우기]를 고르지 않은 지난 작업
     let warned = false;
     let lastSaved = 0;
     const note = $('resume-note');
-    const get = () => dbTx('session', 'readonly', (st) => st.get('edit'));
-    const clear = () => dbTx('session', 'readwrite', (st) => st.delete('edit'));
+    const rowId = () => (Who.now().owner ? `edit-${Who.now().owner}` : 'edit');
+    async function get() {
+      await Who.ready();
+      if (Who.now().shared) return null;
+      const mine = await dbTx('session', 'readonly', (st) => st.get(rowId()));
+      // 표가 생기기 전에 저장한 작업('edit')은 이 PC 주인 것으로 보고 이어 준다(다음 저장 때 옮겨진다)
+      return mine || (rowId() === 'edit' ? null : dbTx('session', 'readonly', (st) => st.get('edit')));
+    }
+    async function clear() {
+      await Who.ready();
+      if (Who.now().shared) return; // 빌려 쓰는 PC: 이 PC 주인이 저장해 둔 작업은 건드리지 않는다
+      await dbTx('session', 'readwrite', (st) => st.delete(rowId()));
+      if (rowId() !== 'edit') await dbTx('session', 'readwrite', (st) => st.delete('edit'));
+    }
     async function save() {
+      await Who.ready();
       // 지난 작업을 고르기 전에는 덮어쓰지 않는다(고르지 않은 채 새 파일을 넣어도 지난 작업이 남는다)
       if (!isOn() || pending) return;
       // 불러오는 중 · 처리 중에는 반쯤 된 상태를 저장하지 않고 끝난 뒤로 미룬다
@@ -5976,7 +6108,9 @@
         return;
       }
       warned = false;
-      const ok = await dbTx('session', 'readwrite', (st) => st.put({ id: 'edit', savedAt: Date.now(), ...data })); // 성공하면 key('edit')
+      const id = rowId();
+      const ok = await dbTx('session', 'readwrite', (st) => st.put({ id, savedAt: Date.now(), ...data })); // 성공하면 key
+      if (ok && id !== 'edit') await dbTx('session', 'readwrite', (st) => st.delete('edit'));
       if (ok) lastSaved = Date.now();
     }
     editChanged = () => {
@@ -6027,7 +6161,10 @@
         : '지금 저장된 작업은 없어요. 편집 · 합치기에 파일을 넣으면 저장돼요.';
     }
     function openSettings() {
+      const shared = Who.now().shared;
       sw.checked = isOn();
+      sw.disabled = shared;
+      $('set-shared').hidden = !shared;
       usage();
       if (!dlg.open) dlg.showModal();
     }
@@ -6046,7 +6183,7 @@
       usage();
     });
     $('set-wipe').addEventListener('click', async () => {
-      const yes = await confirmBox({ title: '이 브라우저에 저장된 것을 모두 지울까요?', body: '설정, 서명 · 도장, 최근 작업, 예전 오프라인용 파일(캐시)이 남아 있으면 그것까지 지워요. 넣은 PDF 원본 파일은 그대로예요.', yes: '모두 지우기' });
+      const yes = await confirmBox({ title: '이 브라우저에 저장된 것을 모두 지울까요?', body: '설정, 서명 · 도장, 최근 작업, 예전 오프라인용 파일(캐시)이 남아 있으면 그것까지 지워요. 이 브라우저를 함께 쓰는 다른 선생님 것도 지워져요. 넣은 PDF 원본 파일은 그대로예요.', yes: '모두 지우기' });
       if (!yes) return;
       clearTimeout(timer);
       pending = null;
@@ -6451,6 +6588,7 @@
             toast('도장을 꾸미기로 가져왔어요.', hasFile ? '미리보기에서 도장을 끌어 서명 칸에 놓고 저장하세요.' : 'PDF를 넣으면 도장이 보여요. 끌어서 서명 칸에 놓으세요.', 'ok');
           },
         }))
+        .then(() => { paintStampNotes().catch(() => {}); })
         .catch((e) => {
           started = null;
           console.warn(e);
@@ -6501,5 +6639,5 @@
     if (t && (t !== activeTab || activeView !== 'work')) openTool(t);
   });
 
-  window.__pdfWorkshop = { version: 5, ready: true, guide: Guide.state, compress: Shrink.state, worker: Squeeze.inWorker, lastStage: () => errCtx.stage, pwa: Pwa.state, hasWork, resume: Resume.state, resumeStored: Resume.stored, resumeLimit: Resume.setLimitForTest, resumeFlush: Resume.flush, viewer: Edit.viewerState, find: Edit.findState, news: News.state, feedback: Feedback.state, title: Title.compute, stamp: () => (self.StampTool ? self.StampTool.state() : null), stampLoad: () => StampLoader.ensure() };
+  window.__pdfWorkshop = { version: 5, ready: true, guide: Guide.state, compress: Shrink.state, worker: Squeeze.inWorker, lastStage: () => errCtx.stage, pwa: Pwa.state, hasWork, resume: Resume.state, resumeStored: Resume.stored, resumeLimit: Resume.setLimitForTest, resumeFlush: Resume.flush, viewer: Edit.viewerState, find: Edit.findState, news: News.state, feedback: Feedback.state, title: Title.compute, stamp: () => (self.StampTool ? self.StampTool.state() : null), stampLoad: () => StampLoader.ensure(), stamps: Stamps.state };
 })();

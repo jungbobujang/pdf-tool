@@ -490,7 +490,11 @@
     if (mine.length >= MAX_MINE) { say(`내 도장은 ${MAX_MINE}개까지 보관해요.`, '아래 내 도장에서 안 쓰는 것을 지운 뒤 다시 해 주세요.'); return null; }
     const img = await makeImage();
     const it = await api.Stamps.add({ kind: 'made', bytes: img.bytes, w: img.w, h: img.h, mm: img.wMm, name: `${img.label} ${mmText()}`, config: C.pickState(st), configKey: key, clearWhite: false });
-    if (!quiet) say('내 도장에 보관했어요.', '이 브라우저에만 남아요. 꾸미기의 서명 · 도장에서도 바로 골라요(공용 PC면 설정 → 모두 지우기).', 'ok');
+    if (!quiet) {
+      say('내 도장에 보관했어요.', api.Stamps.shared && api.Stamps.shared()
+        ? '빌려 쓰는 PC라 이 창에만 둬요. 창을 닫으면 지워져요. 꾸미기의 서명 · 도장에서는 바로 골라요.'
+        : '이 브라우저에만 남아요. 꾸미기의 서명 · 도장에서도 바로 골라요.', 'ok');
+    }
     return it;
   }
   async function toPdf() {

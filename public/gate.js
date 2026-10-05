@@ -46,6 +46,8 @@
   // 스쿨 도구함이 하위 도구를 고르면 #t=입장권&tool=compress. 이름 모양만 여기서 거르고, 열 수 있는 도구인지는 앱이 본다
   var toolMatch = hash.match(/&tool=([a-z0-9-]{1,20})(?:&|$)/);
   var tool = toolMatch ? toolMatch[1] : '';
+  // 스쿨에서 "내 교실 PC"로 정하지 않은 PC면 &pc=shared: 통행증을 창을 닫으면 사라지게, 서명 · 도장은 이 창에만
+  var pc = /&pc=shared(?:&|$)/.test(hash) ? 'shared' : 'mine';
   // 입장권은 주소창 · 방문 기록에 남기지 않는다
   history.replaceState(null, '', location.pathname + location.search);
   $('gate-plain').hidden = true;
@@ -55,7 +57,7 @@
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'same-origin',
-    body: JSON.stringify({ t: ticket }),
+    body: JSON.stringify({ t: ticket, pc: pc }),
   }).then(function (res) {
     return res.json().catch(function () { return {}; }).then(function (body) { return { ok: res.ok, body: body }; });
   }).then(function (r) {

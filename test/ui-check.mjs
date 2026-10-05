@@ -353,6 +353,131 @@ try {
     await sctx.close();
   }
 
+  // ── 2-c. 공용 PC: 선생님마다 따로 · 빌려 쓰는 PC(&pc=shared)는 이 창에만 · 예전 보관은 숨기고 주인이 정리 ──
+  {
+    const c = await browser.newContext({ viewport: { width: 1280, height: 900 }, extraHTTPHeaders: { 'X-Real-IP': '198.51.100.81' } });
+    const errs = [];
+    const ready = (pg) => until(pg, () => !!(window.__pdfWorkshop && window.__pdfWorkshop.ready), undefined, { timeout: 20000 });
+    const stampReady = (pg) => until(pg, () => { const s = window.__pdfWorkshop.stamp(); return s && s.ready && s.cards > 0; }, undefined, { timeout: 15000 });
+    const stamps = (pg) => pg.evaluate(() => window.__pdfWorkshop.stamps());
+    const cookie = async (name) => (await c.cookies()).find((k) => k.name === name) || null;
+    const idbRows = (pg) => pg.evaluate(() => new Promise((res) => {
+      const r = indexedDB.open('pdf-workshop', 2);
+      r.onsuccess = () => {
+        const q = r.result.transaction('stamps', 'readonly').objectStore('stamps').getAll();
+        q.onsuccess = () => { res(q.result.map((x) => ({ id: x.id, owner: x.owner || '' }))); r.result.close(); };
+      };
+      r.onerror = () => res(null);
+    }));
+    // 표가 생기기 전 판이 보관한 도장(owner 없음)을 하나 넣어 둔다
+    const seedLegacy = (pg, id) => pg.evaluate((id) => new Promise((res) => {
+      const cv = document.createElement('canvas');
+      cv.width = 8; cv.height = 8;
+      cv.getContext('2d').fillRect(0, 0, 8, 8);
+      cv.toBlob(async (b) => {
+        const buf = await b.arrayBuffer();
+        const r = indexedDB.open('pdf-workshop', 2);
+        r.onupgradeneeded = () => { ['stamps', 'session'].forEach((n) => { if (!r.result.objectStoreNames.contains(n)) r.result.createObjectStore(n, { keyPath: 'id' }); }); };
+        r.onsuccess = () => {
+          const t = r.result.transaction('stamps', 'readwrite');
+          t.objectStore('stamps').put({ id, kind: 'made', bytes: buf, w: 8, h: 8, mm: 15, name: '예전 도장', created: Date.now(), clearWhite: false });
+          t.oncomplete = () => { r.result.close(); res(true); };
+        };
+      }, 'image/png');
+    }), id);
+    try {
+      const p0 = await c.newPage();
+      watch(p0, errs);
+      await p0.goto(BASE, { waitUntil: 'networkidle' });
+      await seedLegacy(p0, 'stold1');
+      await p0.close();
+
+      // 선생님 A: 내 교실 PC(스쿨이 pc를 붙이지 않음)
+      const pA = await c.newPage();
+      watch(pA, errs);
+      let entered = pA.waitForResponse((r) => r.url().endsWith('/api/enter'), { timeout: 15000 });
+      await pA.goto(`${BASE}/#t=${makeTicket({ sub: 'sub-pc-a' })}&tool=stamp`);
+      await ready(pA);
+      await entered;
+      await stampReady(pA);
+      const sA = await stamps(pA);
+      const passA = await cookie('pdf_pass');
+      const whoA = ((await cookie('pdf_who')) || {}).value || '';
+      await until(pA, () => !!document.querySelector('#panel-stamp [data-stamp-notes] [data-legacy="claim"]'));
+      check('공용 PC: 내 PC로 들어오면 통행증 8시간 · 예전 보관(주인 모름)은 숨기고 [내 것으로] · [지우기]',
+        sA.owner === 'set' && !sA.shared && sA.count === 0 && sA.legacy === 1 && passA && passA.expires > 0 && /^[0-9a-f]{16}$/.test(whoA),
+        `표 ${sA.owner ? '있음' : '없음✗'} · 빌려 씀 ${sA.shared} · 내 것 ${sA.count} · 숨김 ${sA.legacy} · 통행증 ${passA && passA.expires > 0 ? '8시간' : '세션✗'}`);
+      await pA.click('#panel-stamp [data-legacy="claim"]');
+      await until(pA, () => window.__pdfWorkshop.stamps().then((s) => s.count === 1 && s.legacy === 0));
+      await pA.fill('#st-name', '김하늘');
+      await pA.click('[data-st-act="keep"]');
+      await until(pA, () => document.querySelectorAll('#st-shelf li').length === 2);
+      const rowsA = await idbRows(pA);
+      check('공용 PC: [내 것으로] · 새로 보관한 도장 모두 A 선생님 표로 저장', rowsA.length === 2 && rowsA.every((r) => r.owner === whoA),
+        rowsA.map((r) => `${r.id.slice(0, 6)}:${r.owner === whoA ? 'A' : r.owner || '없음'}`).join(' · '));
+      await seedLegacy(pA, 'stold2');
+      await pA.close();
+
+      // 선생님 B: 빌려 쓰는 PC(&pc=shared), 통행증 없이 안내 화면으로 들어온다
+      await c.clearCookies();
+      const pB = await c.newPage();
+      watch(pB, errs);
+      await pB.goto(`${BASE}/#t=${makeTicket({ sub: 'sub-pc-b' })}&tool=stamp&pc=shared`);
+      await ready(pB);
+      await stampReady(pB);
+      const sB = await stamps(pB);
+      const passB = await cookie('pdf_pass');
+      const pcB = await cookie('pdf_pc');
+      await until(pB, () => !!document.querySelector('#panel-stamp .stamp-shared'));
+      const noteB = await pB.evaluate(() => ({
+        legacy: !!document.querySelector('#panel-stamp .stamp-legacy'),
+        buttons: document.querySelectorAll('#panel-stamp [data-legacy]').length,
+        keep: document.querySelector('[data-keep-where="keep"]').textContent,
+      }));
+      check('공용 PC: 빌려 쓰는 PC → 통행증은 창을 닫으면 사라짐 · A 도장 안 보임 · 예전 보관은 숨김(정리 단추 없음)',
+        sB.shared && sB.count === 0 && sB.legacy === 1 && passB && passB.expires === -1 && pcB && pcB.value === 'shared' && noteB.legacy && noteB.buttons === 0 && /이 창에만/.test(noteB.keep) && /enter ok pc=shared/.test(serverLog),
+        `빌려 씀 ${sB.shared} · 보이는 도장 ${sB.count} · 통행증 ${passB ? (passB.expires === -1 ? '세션' : '8시간✗') : '없음✗'} · 정리 단추 ${noteB.buttons}`);
+      await pB.fill('#st-name', '박정보');
+      await pB.click('[data-st-act="keep"]');
+      await until(pB, () => document.querySelectorAll('#st-shelf li').length === 1);
+      const sB2 = await stamps(pB);
+      const rowsB = await idbRows(pB);
+      await pB.evaluate(() => document.querySelector('[data-settings]').click());
+      await until(pB, () => document.getElementById('settings-dialog').open);
+      const setB = await pB.evaluate(() => ({ disabled: document.getElementById('set-resume').disabled, note: !document.getElementById('set-shared').hidden }));
+      await pB.keyboard.press('Escape');
+      check('공용 PC: 빌려 쓰는 PC에서 보관한 도장은 이 창에만(IndexedDB에 안 씀) · 작업 이어하기 막힘',
+        sB2.count === 1 && sB2.temp === 1 && rowsB.length === 3 && !rowsB.some((r) => r.owner && r.owner !== whoA) && setB.disabled && setB.note,
+        `이 창 ${sB2.temp}개 · 저장된 줄 ${rowsB.length}개 · 이어하기 ${setB.disabled ? '막힘' : '열림✗'}`);
+      await pB.close();
+
+      // 다시 A: B의 세션 통행증이 남은 창에서 열어도 A 것만(쿠키가 바뀐 뒤에 읽는다)
+      const pA2 = await c.newPage();
+      watch(pA2, errs);
+      entered = pA2.waitForResponse((r) => r.url().endsWith('/api/enter'), { timeout: 15000 });
+      await pA2.goto(`${BASE}/#t=${makeTicket({ sub: 'sub-pc-a' })}&tool=stamp`);
+      await ready(pA2);
+      await entered;
+      await stampReady(pA2);
+      await until(pA2, () => document.querySelectorAll('#st-shelf li').length === 2);
+      const sA2 = await stamps(pA2);
+      const pcA2 = await cookie('pdf_pc');
+      await until(pA2, () => !!document.querySelector('#panel-stamp [data-legacy="drop"]'));
+      await pA2.click('#panel-stamp [data-legacy="drop"]');
+      await pA2.click('#cf-yes');
+      await until(pA2, () => window.__pdfWorkshop.stamps().then((s) => s.legacy === 0));
+      const rowsA2 = await idbRows(pA2);
+      check('공용 PC: A가 다시 열면 A 도장 2개만 · 예전 보관 [지우기] · 빌려 쓰는 PC 표시 지움',
+        sA2.count === 2 && !sA2.shared && sA2.temp === 0 && !pcA2 && rowsA2.length === 2,
+        `A 도장 ${sA2.count} · 빌려 씀 ${sA2.shared} · pdf_pc ${pcA2 ? '남음✗' : '없음'} · 저장된 줄 ${rowsA2.length}`);
+      await pA2.close();
+      check('공용 PC: 콘솔 에러 · 실패한 요청 0개', errs.length === 0, errs.length ? errs.join(' | ').slice(0, 300) : '0개');
+    } catch (e) {
+      check('공용 PC 흐름', false, String((e && e.stack) || e).slice(0, 300));
+    }
+    await c.close();
+  }
+
   // ── 3. 처음 화면에서 PDF + 사진을 함께 넣기 ──
   await page.setInputFiles('#home-input', [fileA, fileB, png]);
   await until(page, () => document.querySelectorAll('#edit-grid .page-card').length === 7);

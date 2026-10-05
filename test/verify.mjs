@@ -925,6 +925,23 @@ M._resolveFilename = function (req, ...a) { if (/^(@playwright\\/test|playwright
     `0개 ${v0.code} · 건너뜀만 ${vSkip.code} · 1개 통과 ${vOk.code} · 1개 실패 ${vFail.code}`);
 }
 
+// ── 빌려 쓰는 PC: 들어올 때 주는 쿠키 (lib/gate.js) ──
+{
+  const gate = require('../lib/gate.js');
+  const shared = gate.enterCookies('p.s', 'sub-a', { shared: true });
+  const mine = gate.enterCookies('p.s', 'sub-a');
+  const tagA = gate.ownerTag('sub-a');
+  const tagB = gate.ownerTag('sub-b');
+  check('빌려 쓰는 PC: 통행증은 창을 닫으면 사라지는 쿠키 · 화면용 표(pdf_who · pdf_pc=shared)',
+    shared.length === 3 && /^pdf_pass=p\.s; HttpOnly; Secure; SameSite=Lax; Path=\/$/.test(shared[0]) && !/Max-Age/.test(shared[1]) &&
+    shared[1] === `pdf_who=${tagA}; Secure; SameSite=Lax; Path=/` && /^pdf_pc=shared;/.test(shared[2]) && !/HttpOnly/.test(shared[1] + shared[2]),
+    shared.map((c) => c.split(';')[0].replace(/=.*/, '')).join(' · '));
+  check('내 PC: 통행증 8시간 · pdf_pc 지움 · 표는 가명 번호마다 다르고 늘 같음(16자리)',
+    /Max-Age=28800$/.test(mine[0]) && /Max-Age=28800$/.test(mine[1]) && /^pdf_pc=; .*Max-Age=0$/.test(mine[2]) &&
+    /^[0-9a-f]{16}$/.test(tagA) && tagA !== tagB && tagA === gate.ownerTag('sub-a'),
+    `${tagA === gate.ownerTag('sub-a') ? '같음' : '다름✗'} · ${tagA !== tagB ? '사람마다 다름' : '같음✗'}`);
+}
+
 // ── 결과 표 ─────────────────────────────────────────
 const width = (s) => [...s].reduce((n, ch) => n + (/[ᄀ-ᇿ㄰-㆏가-힣]/.test(ch) ? 2 : 1), 0);
 const padR = (s, n) => s + ' '.repeat(Math.max(0, n - width(s)));

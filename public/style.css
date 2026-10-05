@@ -1676,6 +1676,11 @@ kbd {
 .check small, .sel-note { color: var(--muted); font-weight: 400; font-size: 12.5px; }
 .hint-box { margin: 0; padding: 9px 12px; border-radius: 10px; background: var(--ground); color: var(--muted); font-size: 12.5px; }
 .hint-box.warn { background: var(--warn-bg); color: var(--warn-ink); border: 1px solid var(--warn-line); font-weight: 700; }
+/* 서명 · 도장 안내: 빌려 쓰는 PC · 숨겨 둔 예전 보관 */
+.stamp-notes { display: grid; gap: 8px; margin: 8px 0 0; }
+.stamp-notes .hint-box p { margin: 0; }
+.stamp-notes .hint-box small { display: block; margin-top: 4px; font-weight: 400; font-size: 12.5px; }
+.stamp-legacy .btn-row { margin-top: 8px; }
 .inline-num { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; }
 .inline-num input { width: 90px; min-height: 38px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); font-size: 15px; text-align: right; }
 .acc-body .field input { max-width: 360px; }

@@ -216,8 +216,10 @@ app.post('/api/enter', express.json({ limit: '4kb' }), async (req, res) => {
   }
   const result = gate.checkTicket(req.body && req.body.t, key, { jtis });
   if (!result.ok) return fail(result.reason === 'format' ? 400 : 403, result.reason, gate.REASONS[result.reason] || gate.REASONS.format);
-  res.set('Set-Cookie', gate.passCookie(gate.makePass(PASS_SECRET, result.body)));
-  console.log('enter ok');
+  // 빌려 쓰는 PC면(스쿨이 #…&pc=shared) 통행증을 창을 닫으면 사라지는 쿠키로, 화면은 서명 · 도장을 이 창에만 둔다
+  const shared = !!(req.body && req.body.pc === 'shared');
+  res.set('Set-Cookie', gate.enterCookies(gate.makePass(PASS_SECRET, result.body), result.body.sub, { shared }));
+  console.log(`enter ok${shared ? ' pc=shared' : ''}`);
   res.json({ ok: true });
 });
 

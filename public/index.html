@@ -862,13 +862,14 @@
                 <button type="button" class="btn primary st-wide" data-st-act="pdf"><span>PDF에 찍기</span><small>꾸미기에서 서명 칸에 놓기 · 모든 쪽 같은 자리에도</small></button>
                 <button type="button" class="btn" data-st-act="copy"><span>복사해서 붙이기</span><small id="st-copy-small">한글 · 워드에서 Ctrl+V</small></button>
                 <button type="button" class="btn" data-st-act="png"><span>PNG 저장</span><small id="st-png-small">투명 배경</small></button>
-                <button type="button" class="btn st-wide" data-st-act="keep"><span>내 도장에 보관</span><small>이 브라우저에만 · 꾸미기에서도 바로 골라요</small></button>
+                <button type="button" class="btn st-wide" data-st-act="keep"><span>내 도장에 보관</span><small data-keep-where="keep">이 브라우저에만 · 꾸미기에서도 바로 골라요</small></button>
               </div>
               <p class="st-note" id="st-copy-alt" hidden>한글에서 붙인 크기나 바탕이 이상하면 <button type="button" class="btn sm" id="st-copy-plain">그림만 복사</button>로 한 번 더 해 보세요.</p>
               <section class="st-shelf" aria-labelledby="st-shelf-h">
                 <h2 class="st-label" id="st-shelf-h">내 도장</h2>
                 <ul class="st-shelf-list" id="st-shelf"></ul>
                 <p class="st-note" id="st-shelf-empty">아직 없어요. 마음에 드는 도장을 [내 도장에 보관]하면 여기에 모이고, 꾸미기의 서명 · 도장에도 나와요.</p>
+                <div class="stamp-notes" data-stamp-notes hidden></div>
               </section>
             </section>
 
@@ -1099,12 +1100,13 @@
         <input type="checkbox" class="switch-input" role="switch" id="set-resume">
         <span class="switch" aria-hidden="true"></span>
       </label>
-      <p class="notice">파일은 이 브라우저 안(IndexedDB)에만 저장돼요. 공용 컴퓨터에서는 끄는 게 좋아요.</p>
+      <p class="notice">파일은 이 브라우저 안(IndexedDB)에만, 선생님마다 따로 저장돼요. 공용 컴퓨터에서는 끄는 게 좋아요.</p>
+      <p class="notice warn" id="set-shared" hidden>빌려 쓰는 PC라 작업 이어하기를 쓸 수 없어요. 내 PC라면 스쿨 → 내 정보에서 "이 PC는 내 교실 PC예요"를 체크하고 도구함에서 다시 열어 주세요.</p>
       <p class="sub" id="set-usage" role="status"></p>
       <div class="set-danger">
         <div>
           <strong>이 브라우저에 저장된 것 모두 지우기</strong>
-          <span>설정 · 서명 · 도장 · 최근 작업 · 오프라인용 파일(캐시)을 모두 지워요. 넣은 PDF 원본은 그대로예요.</span>
+          <span>설정 · 서명 · 도장 · 최근 작업 · 오프라인용 파일(캐시)을 이 브라우저를 함께 쓰는 선생님 것까지 모두 지워요. 넣은 PDF 원본은 그대로예요.</span>
         </div>
         <button type="button" class="btn danger" id="set-wipe">모두 지우기</button>
       </div>
@@ -1180,7 +1182,7 @@
         </fieldset>
         <button type="button" class="btn" id="sign-clear">지우기</button>
       </div>
-      <p class="sub">투명 배경 PNG로 이 브라우저에만 보관돼요.</p>
+      <p class="sub" data-keep-where="sign">투명 배경 PNG로 이 브라우저에만 보관돼요.</p>
       <div class="btn-row end">
         <button type="button" class="btn" id="sign-cancel">취소</button>
         <button type="submit" class="btn primary" id="sign-ok">저장</button>
