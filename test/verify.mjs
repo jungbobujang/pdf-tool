@@ -983,6 +983,29 @@ M._resolveFilename = function (req, ...a) { if (/^(@playwright\\/test|playwright
     P.detectKind(new Uint8Array([0x89, 0x50, 0x4e, 0x47])) === 'png' && P.detectKind(new Uint8Array(4), 'a.txt') === '');
 }
 
+// ── EDIT: 도구 주소 · 안내 화면 이름 · 입장권 · 예전 주소를 어디로 보낼지 (lib/edit-tools.js · public/edit/route.js) ──
+{
+  const E = require('../lib/edit-tools.js');
+  const sandbox = {};
+  require('node:vm').runInNewContext(require('node:fs').readFileSync(new URL('../public/edit/route.js', import.meta.url), 'utf8'), { self: sandbox });
+  const R = sandbox.EditRoute;
+  const same = E.TOOLS.every((t) => R.TOOL_PATH[t.id] === t.path) && Object.keys(R.TOOL_PATH).length === E.TOOLS.length;
+  check('EDIT: 서버(lib/edit-tools.js)와 화면(edit/route.js)의 도구 주소가 같다', same, E.TOOLS.map((t) => `${t.id}→${t.path}`).join(' · '));
+  const g = (u) => { const x = E.gateFor(u); return `${x.name}/${x.go}`; };
+  check('EDIT: 안내 화면 이름과 [스쿨에서 열기] 도구(주소마다)',
+    g('/') === 'EDIT/pdf' && g('/pdf') === 'PDF 작업실/pdf' && g('/check') === 'EDIT/pdf' && g('/stamp') === '도장 만들기/stamp' && g('/stamp/') === '도장 만들기/stamp' && g('/photo') === '사진 작업실/photo' && g('/photograph') === 'EDIT/pdf',
+    ['/', '/pdf', '/stamp', '/photo', '/photograph'].map((u) => `${u} ${g(u)}`).join(' · '));
+  const d = (p, t, f) => R.destFor(p, t, f);
+  const cases = [
+    [['/', '', true], '/pdf'], [['/', 'compress', true], '/pdf#compress'], [['/', 'stamp', true], '/stamp'], [['/', 'photo', false], '/photo'],
+    [['/', 'feedback', false], '/pdf#feedback'], [['/', '', false], null], [['/', '../x', true], '/pdf'], [['/', 'nope', false], '/pdf'],
+    [['/pdf', 'compress', true], '/pdf#compress'], [['/pdf', '', true], '/pdf'], [['/stamp', 'stamp', true], '/stamp'], [['/photo/', '', true], '/photo'],
+  ];
+  const bad = cases.filter(([a, want]) => d(...a) !== want);
+  check('EDIT: 입장권 · 예전 주소(/#이름)를 도구 주소로(PDF 안 도구는 /pdf#이름, 이름 없으면 /pdf, 입구에 그냥 오면 그대로)', bad.length === 0,
+    bad.length ? bad.map(([a, want]) => `${a.join(',')} → ${d(...a)}(기대 ${want})`).join(' | ') : `${cases.length}가지`);
+}
+
 // ── 결과 표 ─────────────────────────────────────────
 const width = (s) => [...s].reduce((n, ch) => n + (/[ᄀ-ᇿ㄰-㆏가-힣]/.test(ch) ? 2 : 1), 0);
 const padR = (s, n) => s + ' '.repeat(Math.max(0, n - width(s)));

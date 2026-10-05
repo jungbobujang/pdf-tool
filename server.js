@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const { execSync } = require('child_process');
 const express = require('express');
 const gate = require('./lib/gate');
+const edit = require('./lib/edit-tools');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -60,7 +61,12 @@ function renderHtml(file) {
   }
   return html;
 }
-const renderIndex = () => renderHtml(path.join(PUBLIC, 'index.html'));
+/** 절대 주소로 부르는 파일(/edit/common.js …)에 ?v=커밋 */
+function versioned(html, list) {
+  for (const a of list) html = html.split(`"${a}"`).join(`"${a}?v=${COMMIT}"`);
+  return html;
+}
+const renderIndex = () => versioned(renderHtml(path.join(PUBLIC, 'index.html')), ['/edit/common.js']);
 const INDEX_HTML = renderIndex();
 
 // 브라우저에 거는 규칙(CSP). /check 페이지에서도 이 내용을 그대로 보여 준다.
@@ -186,12 +192,18 @@ const jtis = gate.createJtiStore();
 const enterLimit = gate.createRateLimit(20, 60 * 1000);
 const hasPass = (req) => !!gate.readPass(PASS_SECRET, gate.cookieOf(req));
 
-// 안내 화면: 통행증이 없을 때 모든 페이지 대신 준다
-const GATE_HTML = () => renderHtml(path.join(PUBLIC, 'gate.html')).replace(/__SCHOOL_URL__/g, SCHOOL_URL);
-const GATE_CACHED = GATE_HTML();
-function sendGate(res) {
+// 안내 화면: 통행증이 없을 때 모든 페이지 대신 준다. 이름과 [스쿨에서 열기]는 그 주소의 도구(EDIT)로
+const GATE_HTML = (info) => renderHtml(path.join(PUBLIC, 'gate.html'))
+  .replace(/__SCHOOL_URL__/g, SCHOOL_URL)
+  .replace(/__TOOL_NAME__/g, info.name)
+  .replace(/__GO__/g, info.go);
+const GATE_CACHED = new Map();
+function sendGate(res, req) {
+  const info = edit.gateFor(req ? req.path : '/');
+  const key = `${info.go}:${info.name}`;
+  if (!GATE_CACHED.has(key)) GATE_CACHED.set(key, GATE_HTML(info));
   res.set('Cache-Control', 'no-store');
-  res.type('html').send(process.env.NODE_ENV === 'development' ? GATE_HTML() : GATE_CACHED);
+  res.type('html').send(process.env.NODE_ENV === 'development' ? GATE_HTML(info) : GATE_CACHED.get(key));
 }
 
 const ENTER_TEXT = {
@@ -236,35 +248,57 @@ app.get('/manifest.webmanifest', (req, res) => res.status(404).send('Not found')
 // 안내 페이지: 직접 확인하는 법 · 개인정보 안내 · 사용한 라이브러리
 const PAGE_HTML = Object.fromEntries(PAGES.map((p) => [p, renderHtml(path.join(PUBLIC, 'pages', `${p.slice(1)}.html`))]));
 app.get(PAGES, (req, res) => {
-  if (!hasPass(req)) return sendGate(res);
+  if (!hasPass(req)) return sendGate(res, req);
   res.set('Cache-Control', 'no-cache');
   res.type('html').send(process.env.NODE_ENV === 'development' ? renderHtml(path.join(PUBLIC, 'pages', `${req.path.slice(1)}.html`)) : PAGE_HTML[req.path]);
 });
 app.get('/changelog.json', (req, res, next) => { res.set('Cache-Control', 'no-cache'); next(); });
 
 // HTML은 항상 서버에 새로 확인한다.
-app.get(['/', '/index.html'], (req, res) => {
-  if (!hasPass(req)) return sendGate(res);
+// EDIT 입구(/): 도구 셋(PDF · 사진 · 도장)을 고르는 한 장. 예전 길(/#t=…&tool= · /#도구)은 그 도구 주소로 보낸다
+const EDIT_ASSETS = ['/edit/edit.css', '/edit/route.js', '/edit/edit.js'];
+const renderEdit = () => versioned(renderHtml(path.join(PUBLIC, 'edit', 'index.html')), EDIT_ASSETS);
+const EDIT_HTML = renderEdit();
+app.get(['/', '/index.html', '/edit', '/edit/', '/edit/index.html'], (req, res) => {
+  if (req.path !== '/') return res.redirect(302, '/');
+  if (!hasPass(req)) return sendGate(res, req);
+  res.set('Cache-Control', 'no-cache');
+  res.type('html').send(process.env.NODE_ENV === 'development' ? renderEdit() : EDIT_HTML);
+});
+
+// PDF 작업실(/pdf). 화면 파일은 상대 주소(style.css …)라 끝에 /를 붙인 주소는 /pdf로 돌린다(# 뒤는 그대로 따라간다)
+// (express는 끝의 /를 가리지 않으므로 req.path로 나눈다)
+app.get(['/pdf', '/pdf/index.html'], (req, res) => {
+  if (req.path !== '/pdf') return res.redirect(302, '/pdf');
+  if (!hasPass(req)) return sendGate(res, req);
   res.set('Cache-Control', 'no-cache');
   res.type('html').send(process.env.NODE_ENV === 'development' ? renderIndex() : INDEX_HTML);
 });
 
 // 사진 작업실(/photo): PDF 작업실과 같은 통행증 · 같은 규칙(CSP). 사진은 브라우저 밖으로 나가지 않는다
 const PHOTO_ASSETS = ['/photo/photo.css', '/photo/photo-core.js', '/photo/photo.js'];
-function renderPhoto() {
-  let html = renderHtml(path.join(PUBLIC, 'photo', 'index.html'));
-  for (const a of PHOTO_ASSETS) html = html.split(`"${a}"`).join(`"${a}?v=${COMMIT}"`);
-  return html;
-}
+const renderPhoto = () => versioned(renderHtml(path.join(PUBLIC, 'photo', 'index.html')), PHOTO_ASSETS);
 const PHOTO_HTML = renderPhoto();
-app.get(['/photo', '/photo/', '/photo/index.html'], (req, res) => {
-  if (!hasPass(req)) return sendGate(res);
+app.get(['/photo', '/photo/index.html'], (req, res) => {
+  if (req.path !== '/photo') return res.redirect(302, '/photo');
+  if (!hasPass(req)) return sendGate(res, req);
   res.set('Cache-Control', 'no-cache');
   res.type('html').send(process.env.NODE_ENV === 'development' ? renderPhoto() : PHOTO_HTML);
 });
 
+// 도장 만들기(/stamp): PDF 작업실 안의 탭에서 나와 자기 주소로. 서명 · 도장 보관은 PDF 작업실과 같이 쓴다(edit/common.js)
+const STAMP_ASSETS = ['/style.css', '/stamp/stamp-page.css', '/edit/common.js', '/stamp/stamp-core.js', '/stamp/stamp.js', '/stamp/stamp-page.js'];
+const renderStamp = () => versioned(renderHtml(path.join(PUBLIC, 'stamp', 'index.html')), STAMP_ASSETS);
+const STAMP_HTML = renderStamp();
+app.get(['/stamp', '/stamp/index.html'], (req, res) => {
+  if (req.path !== '/stamp') return res.redirect(302, '/stamp');
+  if (!hasPass(req)) return sendGate(res, req);
+  res.set('Cache-Control', 'no-cache');
+  res.type('html').send(process.env.NODE_ENV === 'development' ? renderStamp() : STAMP_HTML);
+});
+
 // 안내 화면의 원본은 채워서만 준다
-app.get('/gate.html', (req, res) => sendGate(res));
+app.get('/gate.html', (req, res) => sendGate(res, req));
 
 app.use(express.static(PUBLIC, {
   index: false,

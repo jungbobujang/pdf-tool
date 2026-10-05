@@ -3,24 +3,8 @@
   'use strict';
 
   // 스쿨 도구함에서 통행증이 이미 있는 채로 열리면(#t=입장권&tool=이름) 서버가 안내 화면 없이 앱을 준다.
-  // 무엇보다 먼저: 입장권을 주소에서 지우고, 안내 화면과 같은 방법으로 통행증을 지금 사람 것으로 새로 받는다.
-  // 실패해도 지금 통행증으로 계속 쓴다(조용히). 도구 이름은 #이름 으로 바꿔 두면 아래 toolFromHash가 연다.
-  // &pc=shared: 스쿨에서 "내 교실 PC"로 정하지 않은 PC. 서명 · 도장은 누구 것인지(pdf_who) 정해진 뒤에 읽는다(ENTERING).
-  const ENTERING = (() => {
-    const hash = String(location.hash || '');
-    const m = hash.match(/^#t=([^&]+)/);
-    if (!m) return Promise.resolve();
-    const tm = hash.match(/&tool=([a-z0-9-]{1,20})(?:&|$)/);
-    const pc = /&pc=shared(?:&|$)/.test(hash) ? 'shared' : 'mine';
-    try { history.replaceState(null, '', location.pathname + location.search + (tm ? `#${tm[1]}` : '')); } catch { /* 못 바꿔도 계속 */ }
-    let ticket = m[1];
-    try { ticket = decodeURIComponent(ticket); } catch { /* 그대로 */ }
-    try {
-      const sent = fetch('/api/enter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ t: ticket, pc }) }).then(() => {}, () => {});
-      // 서버가 늦어도 6초 뒤에는 지금 쿠키로 계속
-      return Promise.race([sent, new Promise((r) => setTimeout(r, 6000))]);
-    } catch { return Promise.resolve(); /* fetch가 없는 브라우저 */ }
-  })();
+  // 입장권을 주소에서 지우고 통행증을 지금 사람 것으로 새로 받는 일은 EDIT 공통(edit/common.js)이 먼저 했다.
+  // 도구 이름은 #이름 으로 바뀌어 있어 아래 toolFromHash가 연다.
 
   const { PDFDocument } = PDFLib;
   const Core = PdfCore;
@@ -625,7 +609,6 @@
   let activeView = 'home';
   let guideSync = () => {}; // 사용법 패널 애니메이션 켜고 끄기 (Guide가 채운다)
   let editChanged = () => {}; // 편집 상태가 바뀔 때 (최근 작업 이어하기가 채운다)
-  let stampOpened = () => {}; // 도장 만들기를 처음 열 때 화면 코드를 불러온다 (StampLoader가 채운다)
 
   /** 처음 화면(home) ↔ 작업 화면(work) */
   function showView(name) {
@@ -643,6 +626,8 @@
   function toolFromHash() {
     let raw = '';
     try { raw = decodeURIComponent(location.hash.slice(1)).toLowerCase(); } catch { return null; }
+    // EDIT: 도장 만들기 · 사진 작업실은 자기 주소에 있다(예전 /#stamp · 스쿨의 &tool=stamp)
+    if (raw === 'stamp' || raw === 'photo') { location.replace(`/${raw}`); return null; }
     const t = TOOL_ALIAS[raw] || raw;
     return tabs.some((x) => x.dataset.tab === t) ? t : null;
   }
@@ -673,7 +658,6 @@
     if (activeView === 'work') setHash(name);
     try { localStorage.setItem('pdfws.tab', name); } catch { /* 무시 */ }
     guideSync();
-    if (name === 'stamp') stampOpened();
   }
   // 휴대폰에서는 탭 막대가 처음 화면에도 보이므로 누르면 작업 화면으로 넘어간다.
   tabs.forEach((t, i) => {
@@ -2814,126 +2798,10 @@
     });
   }
 
-  // ── 이 브라우저를 쓰는 사람: 스쿨 가명 번호에서 만든 짧은 표(쿠키 pdf_who) · 빌려 쓰는 PC인지(pdf_pc=shared) ──
-  // 스쿨에서 막 들어오는 중이면(ENTERING) 쿠키가 새 사람 것으로 바뀐 뒤에 읽는다.
-  // 표가 없으면(점검 · 표가 생기기 전 통행증) 예전처럼 이 브라우저를 한 사람이 쓴다고 본다.
-  const Who = (() => {
-    let cached = null;
-    const cookie = (name) => {
-      try {
-        const hit = String(document.cookie || '').split(';').map((x) => x.trim()).find((x) => x.startsWith(`${name}=`));
-        return hit ? hit.slice(name.length + 1) : '';
-      } catch { return ''; }
-    };
-    const read = () => {
-      const who = cookie('pdf_who');
-      return { owner: /^[0-9a-f]{16}$/.test(who) ? who : '', shared: cookie('pdf_pc') === 'shared' };
-    };
-    return {
-      ready: async () => { if (!cached) { await ENTERING; cached = read(); } return cached; },
-      now: () => cached || read(),
-    };
-  })();
-
-  // ── 서명 · 도장 보관 (이 브라우저에만: IndexedDB, 안 되면 이번 방문 동안만) ──
-  // 선생님마다 따로(owner). 빌려 쓰는 PC에서 새로 만든 것은 IndexedDB에 쓰지 않고 이 창에만(temp) 둔다.
-  // 표가 생기기 전에 보관한 것(owner 없음)은 누구 것인지 몰라 숨기고, 이 PC 주인이 [내 것으로] · [지우기]를 고른다.
-  const Stamps = (() => {
-    let items = null;
-    let loading = null;
-    let me = { owner: '', shared: false };
-    let legacy = [];
-    const listeners = new Set();
-    const tx = (mode, fn) => dbTx('stamps', mode, fn);
-    const toItem = (r) => ({ ...r, bytes: new Uint8Array(r.bytes) });
-    const row = (it) => ({ ...it, bytes: it.bytes.buffer.slice(0), processed: undefined, url: undefined, temp: undefined });
-    async function load() {
-      me = await Who.ready();
-      const rows = (await tx('readonly', (st) => st.getAll())) || [];
-      legacy = me.owner ? rows.filter((r) => !r.owner) : [];
-      items = rows.filter((r) => (r.owner || '') === me.owner).sort((a, b) => a.created - b.created).map(toItem);
-      return items;
-    }
-    async function list() {
-      if (items) return items;
-      if (!loading) loading = load();
-      return loading;
-    }
-    const notify = () => listeners.forEach((f) => f());
-    async function add(item) {
-      await list();
-      const it = { id: `st${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, created: Date.now(), clearWhite: false, ...item, owner: me.owner };
-      if (me.shared) it.temp = true;
-      items.push(it);
-      if (!it.temp) await tx('readwrite', (st) => st.put(row(it)));
-      notify();
-      return it;
-    }
-    async function update(it) {
-      delete it.processed;
-      if (!it.temp) await tx('readwrite', (st) => st.put(row(it)));
-      if (it.url) { URL.revokeObjectURL(it.url); delete it.url; }
-      notify();
-    }
-    async function remove(id) {
-      await list();
-      const it = items.find((x) => x.id === id);
-      if (it && it.url) URL.revokeObjectURL(it.url);
-      items = items.filter((x) => x.id !== id);
-      await tx('readwrite', (st) => st.delete(id));
-      notify();
-    }
-    /** 숨겨 둔 예전 보관을 지금 선생님 것으로(이 PC 주인만: 빌려 쓰는 PC에서는 부르지 않는다) */
-    async function claimLegacy() {
-      await list();
-      if (me.shared || !me.owner) return 0;
-      const n = legacy.length;
-      for (const r of legacy) {
-        const it = { ...toItem(r), owner: me.owner };
-        await tx('readwrite', (st) => st.put(row(it)));
-        items.push(it);
-      }
-      items.sort((a, b) => a.created - b.created);
-      legacy = [];
-      notify();
-      return n;
-    }
-    async function dropLegacy() {
-      await list();
-      if (me.shared) return 0;
-      const n = legacy.length;
-      for (const r of legacy) await tx('readwrite', (st) => st.delete(r.id));
-      legacy = [];
-      notify();
-      return n;
-    }
-    /** 실제로 넣을 PNG (흰 배경 지우기 반영) */
-    async function pngOf(it) {
-      if (!it.clearWhite) return it.bytes;
-      if (!it.processed) it.processed = await whiteToAlpha(it.bytes);
-      return it.processed;
-    }
-    async function urlOf(it) {
-      if (!it.url) it.url = URL.createObjectURL(new Blob([await pngOf(it)], { type: 'image/png' }));
-      return it.url;
-    }
-    const byId = (id) => (items || []).find((x) => x.id === id);
-    /** 이 브라우저에 보관한 서명 · 도장을 모두 지운다(설정 → 모두 지우기: 다른 선생님 것까지) */
-    async function clearAll() {
-      (items || []).forEach((it) => it.url && URL.revokeObjectURL(it.url));
-      items = [];
-      legacy = [];
-      await tx('readwrite', (st) => st.clear());
-      notify();
-    }
-    return {
-      list, add, update, remove, pngOf, urlOf, byId, clearAll, claimLegacy, dropLegacy,
-      onChange: (f) => listeners.add(f),
-      shared: () => me.shared,
-      legacyCount: () => legacy.length,
-      state: async () => { await list(); return { owner: me.owner ? 'set' : '', shared: me.shared, count: items.length, temp: items.filter((x) => x.temp).length, legacy: legacy.length }; },
-    };
-  })();
+  // ── 이 브라우저를 쓰는 사람 · 서명 · 도장 보관: EDIT 공통(edit/common.js) — 도장 만들기(/stamp)와 같이 쓴다 ──
+  // 선생님마다 따로(owner), 빌려 쓰는 PC에서 만든 것은 이 탭에만(창을 닫으면 지워진다).
+  const Who = EditCommon.Who;
+  const Stamps = EditCommon.Stamps;
 
   /**
    * 서명 · 도장 칸의 안내([data-stamp-notes]: 꾸미기 · 도장 만들기 · 서명 그리기)
@@ -2982,24 +2850,6 @@
     await Stamps.dropLegacy();
     toast(`예전 서명 · 도장 ${n}개를 지웠어요.`, '', 'info');
   });
-
-  /** 밝은(흰) 부분을 투명하게. 스캔한 도장용 */
-  async function whiteToAlpha(bytes) {
-    const bmp = await createImageBitmap(new Blob([bytes]));
-    const c = makeCanvas(bmp.width, bmp.height);
-    const ctx = c.getContext('2d');
-    ctx.drawImage(bmp, 0, 0);
-    bmp.close && bmp.close();
-    const img = ctx.getImageData(0, 0, c.width, c.height);
-    const d = img.data;
-    for (let i = 0; i < d.length; i += 4) {
-      const lum = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-      if (lum >= 235) d[i + 3] = 0;
-      else if (lum > 195) d[i + 3] = Math.round(d[i + 3] * ((235 - lum) / 40));
-    }
-    ctx.putImageData(img, 0, 0);
-    return canvasToBytes(c, 'image/png');
-  }
 
   /** 올린 그림을 PNG로(너무 크면 긴 변 1200px로 줄여 보관) */
   async function imageFileToPng(file) {
@@ -6288,7 +6138,8 @@
       }
     }
     wireDrop($('home-drop'), $('home-input'), route);
-    document.querySelectorAll('.tool-card').forEach((card) =>
+    // 도장 만들기 카드는 EDIT의 다른 도구(/stamp)로 가는 링크라 여기서 열지 않는다
+    document.querySelectorAll('.tool-card[data-open]').forEach((card) =>
       card.addEventListener('click', () => openTool(card.dataset.open, true)));
     return { route };
   })();
@@ -6560,47 +6411,6 @@
     state: () => ({ controlled: !!(navigator.serviceWorker && navigator.serviceWorker.controller), updateShown: false, offline: Net.isOffline() }),
   }))();
 
-  // ═══════════════════════════════════════════════════════════
-  // 도장 만들기: 처음 열 때 stamp/stamp-core.js · stamp/stamp.js를 불러온다(다른 도구만 쓰는 사람은 받지 않는다)
-  // ═══════════════════════════════════════════════════════════
-  const StampLoader = (() => {
-    let started = null;
-    const script = (src) => new Promise((resolve, reject) => {
-      const el = document.createElement('script');
-      el.src = `${src}?v=${encodeURIComponent(VER)}`;
-      el.onload = resolve;
-      el.onerror = () => reject(new Error(`${src}를 받지 못했어요`));
-      document.head.append(el);
-    });
-    function ensure() {
-      if (started) return started;
-      started = script('stamp/stamp-core.js')
-        .then(() => script('stamp/stamp.js'))
-        .then(() => self.StampTool.mount({
-          ver: VER,
-          toast,
-          download,
-          Stamps,
-          isActive: () => activeView === 'work' && activeTab === 'stamp' && !isBusy(),
-          useInDecor: (id) => {
-            const hasFile = Decor.useStamp(id);
-            openTool('decorate');
-            toast('도장을 꾸미기로 가져왔어요.', hasFile ? '미리보기에서 도장을 끌어 서명 칸에 놓고 저장하세요.' : 'PDF를 넣으면 도장이 보여요. 끌어서 서명 칸에 놓으세요.', 'ok');
-          },
-        }))
-        .then(() => { paintStampNotes().catch(() => {}); })
-        .catch((e) => {
-          started = null;
-          console.warn(e);
-          $('st-loading').textContent = '도장 도구를 불러오지 못했어요. 인터넷 연결을 확인하고 새로 고침해 주세요.';
-        });
-      return started;
-    }
-    stampOpened = ensure;
-    if (activeTab === 'stamp' && activeView === 'work') ensure();
-    return { ensure };
-  })();
-
   // 저장 단축키: Ctrl+S = 바로 저장, Ctrl+Shift+S = 설정하고 저장… (브라우저의 "페이지 저장"은 막는다)
   document.addEventListener('keydown', (e) => {
     if (!(e.ctrlKey || e.metaKey) || e.altKey || e.key.toLowerCase() !== 's') return;
@@ -6613,7 +6423,6 @@
       decorate: () => Decor.shortcutSave(withOpts),
       compress: () => Shrink.shortcutSave(withOpts),
       img2pdf: () => $('img-save').click(),
-      stamp: () => self.StampTool && self.StampTool.save(),
     }[activeTab];
     if (run) run();
     else toast('이 도구는 아래 버튼으로 저장해요.', '', 'info');
@@ -6639,5 +6448,17 @@
     if (t && (t !== activeTab || activeView !== 'work')) openTool(t);
   });
 
-  window.__pdfWorkshop = { version: 5, ready: true, guide: Guide.state, compress: Shrink.state, worker: Squeeze.inWorker, lastStage: () => errCtx.stage, pwa: Pwa.state, hasWork, resume: Resume.state, resumeStored: Resume.stored, resumeLimit: Resume.setLimitForTest, resumeFlush: Resume.flush, viewer: Edit.viewerState, find: Edit.findState, news: News.state, feedback: Feedback.state, title: Title.compute, stamp: () => (self.StampTool ? self.StampTool.state() : null), stampLoad: () => StampLoader.ensure(), stamps: Stamps.state };
+  // 도장 만들기(/stamp)의 [PDF에 찍기]로 왔으면 그 도장을 꾸미기에 골라 둔다(같은 탭에서 넘겨준 것 하나)
+  const pendingStamp = (async () => {
+    const id = EditCommon.takePendingStamp();
+    if (!id) return false;
+    await Stamps.list();
+    if (!Stamps.byId(id)) return false;
+    Decor.useStamp(id);
+    openTool('decorate');
+    toast('도장을 꾸미기로 가져왔어요.', 'PDF를 넣으면 도장이 보여요. 끌어서 서명 칸에 놓고 저장하세요.', 'ok');
+    return true;
+  })();
+
+  window.__pdfWorkshop = { version: 5, pendingStamp: () => pendingStamp, ready: true, guide: Guide.state, compress: Shrink.state, worker: Squeeze.inWorker, lastStage: () => errCtx.stage, pwa: Pwa.state, hasWork, resume: Resume.state, resumeStored: Resume.stored, resumeLimit: Resume.setLimitForTest, resumeFlush: Resume.flush, viewer: Edit.viewerState, find: Edit.findState, news: News.state, feedback: Feedback.state, title: Title.compute, stamps: Stamps.state };
 })();

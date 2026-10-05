@@ -35,6 +35,9 @@ const uiMeasures = [];
 
 const PORT = 4000 + Math.floor(Math.random() * 2000);
 const BASE = `http://localhost:${PORT}`;
+// EDIT: / 는 입구(도구 셋 고르기), PDF 작업실은 /pdf, 도장 만들기는 /stamp, 사진 작업실은 /photo
+const APP = `${BASE}/pdf`;
+const STAMP = `${BASE}/stamp`;
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pdf-ui-'));
 
 /** 문서처럼 보이는 샘플 PDF (제목 + 글줄 모양) */
@@ -62,7 +65,12 @@ async function writePdf(name, doc, opts) {
 async function until(pg, fn, arg, { timeout = 10000 } = {}) {
   const end = Date.now() + timeout;
   for (;;) {
-    if (await pg.evaluate(fn, arg)) return;
+    let ok = false;
+    try { ok = await pg.evaluate(fn, arg); } catch (e) {
+      // 입장권 · 예전 주소로 들어오면 도구 주소로 넘어간다: 넘어가는 동안의 오류는 기다린다
+      if (!/Execution context was destroyed|Cannot find context|because of a navigation/i.test(String(e && e.message))) throw e;
+    }
+    if (ok) return;
     if (Date.now() > end) throw new Error(`기다리다 시간 초과: ${String(fn).slice(0, 120)}`);
     await new Promise((r) => setTimeout(r, 100));
   }
@@ -162,7 +170,7 @@ try {
 
   const errors = [];
   watch(page, errors);
-  await page.goto(BASE, { waitUntil: 'networkidle' });
+  await page.goto(APP, { waitUntil: 'networkidle' });
   await until(page, () => window.__pdfWorkshop && window.__pdfWorkshop.ready);
 
   // ── 1. 처음 화면 ──
@@ -182,7 +190,7 @@ try {
     };
   });
   check('처음 화면: 제목이 보임', home.tw > 200 && home.th > 20 && home.work, `"${home.title}" ${home.tw}×${home.th}, 작업 화면 숨김`);
-  check('처음 화면: 도구 카드 7개가 보임', home.cards.length === 7 && home.cards.every((c) => c.w > 100 && c.h > 100 && c.bottom <= home.vh),
+  check('처음 화면: 도구 카드 7개가 보임(도장 만들기는 /stamp로 가는 카드)', home.cards.length === 7 && home.cards.every((c) => c.w > 100 && c.h > 100 && c.bottom <= home.vh),
     home.cards.map((c) => `${c.t}(${c.w}×${c.h})`).join(', '));
   check('Pretendard 글꼴 적용', home.font, home.font ? '"Pretendard Variable" 로드됨' : '대체 글꼴 사용 중');
 
@@ -203,13 +211,13 @@ try {
     return { text: el.textContent, visible: r.width > 0 && r.height > 0 && r.bottom <= innerHeight };
   });
   await page.click('#logo');
-  const html = await (await fetch(`${BASE}/`, { headers: { Cookie: `pdf_pass=${PASS}` } })).text();
-  const busted = ['style.css', 'pdf-core.js', 'app.js'].every((a) => html.includes(`${a}?v=${ver.commit}`));
+  const html = await (await fetch(APP, { headers: { Cookie: `pdf_pass=${PASS}` } })).text();
+  const busted = ['style.css', 'pdf-core.js', 'app.js', '/edit/common.js'].every((a) => html.includes(`${a}?v=${ver.commit}`));
   check('화면에 v 표시가 보인다 (+ 파일 주소에 ?v=커밋)', homeVer.text === `v ${ver.commit}` && homeVer.w > 0 && homeVer.h > 0 && sideVer.text === `v ${ver.commit}` && sideVer.visible && busted,
     `처음 화면 "${homeVer.text}", 사이드바 "${sideVer.text}", ?v=${ver.commit} ${busted ? '적용' : '없음'}`);
 
   // ── 2. 카드 → 작업 화면, 로고 → 처음 화면 ──
-  const tools = ['edit', 'img2pdf', 'pdf2img', 'decorate', 'compress', 'security', 'stamp'];
+  const tools = ['edit', 'img2pdf', 'pdf2img', 'decorate', 'compress', 'security'];
   const nav = [];
   for (const t of tools) {
     await page.click(`.tool-card[data-open="${t}"]`);
@@ -226,7 +234,13 @@ try {
     const back = await page.evaluate(() => !document.getElementById('view-home').hidden && document.getElementById('view-work').hidden);
     nav.push(`${t}:${ok1 && back ? 'OK' : 'X'}`);
   }
-  check('도구 카드 → 해당 도구, 로고 → 처음 화면', nav.every((x) => x.endsWith('OK')), nav.join(' '));
+  const stampCard = await page.evaluate(() => {
+    const a = document.querySelector('a.tool-card[data-edit="stamp"]');
+    return { href: a && a.getAttribute('href'), tab: !!document.getElementById('tab-stamp'), panel: !!document.getElementById('panel-stamp'), edit: (document.getElementById('edit-link') || {}).getAttribute ? document.getElementById('edit-link').getAttribute('href') : '' };
+  });
+  check('도구 카드 → 해당 도구, 로고 → 처음 화면 · 도장 만들기 카드는 /stamp 주소(PDF 작업실 안 탭 없음) · EDIT 도구 → /',
+    nav.every((x) => x.endsWith('OK')) && stampCard.href === '/stamp' && !stampCard.tab && !stampCard.panel && stampCard.edit === '/',
+    `${nav.join(' ')} · 도장 ${stampCard.href} · 탭 ${stampCard.tab ? '남음✗' : '없음'}`);
 
   // 사이드바 키보드 이동
   await page.click('.tool-card[data-open="edit"]');
@@ -238,7 +252,7 @@ try {
     const r = e.getBoundingClientRect();
     return r.width > 100 && r.height > 30;
   }));
-  check('사이드바 도구 7개 · 화살표 키 이동', tabRects.length === 7 && tabRects.every(Boolean) && kb.sel === 'pdf2img' && kb.focus === 'tab-pdf2img',
+  check('사이드바 도구 6개 · 화살표 키 이동', tabRects.length === 6 && tabRects.every(Boolean) && kb.sel === 'pdf2img' && kb.focus === 'tab-pdf2img',
     `↓↓ → ${kb.sel}`);
   await page.click('#logo');
 
@@ -250,11 +264,16 @@ try {
     const serr = [];
     watch(sp, serr);
     const toasts = () => sp.evaluate(() => document.getElementById('toasts').textContent);
-    const stState = () => sp.evaluate(() => window.__pdfWorkshop.stamp());
+    const stState = () => sp.evaluate(() => window.__stampPage.stamp());
     try {
-      await sp.goto(BASE, { waitUntil: 'networkidle' });
-      await sp.click('.tool-card[data-open="stamp"]');
-      await until(sp, () => { const s = window.__pdfWorkshop.stamp(); return s && s.ready && s.cards > 0; }, undefined, { timeout: 15000 });
+      // PDF 작업실의 도장 카드 → /stamp (EDIT의 다른 도구)
+      await sp.goto(APP, { waitUntil: 'networkidle' });
+      await sp.click('a.tool-card[data-edit="stamp"]');
+      await sp.waitForURL(`${STAMP}`);
+      await until(sp, () => { const p = window.__stampPage; const s = p && p.stamp(); return s && s.ready && s.cards > 0; }, undefined, { timeout: 15000 });
+      const page0 = await sp.evaluate(() => ({ title: document.title, pdf: document.getElementById('sp-pdf').getAttribute('href'), edit: document.getElementById('sp-edit').getAttribute('href'), guide: !document.getElementById('sp-guide').open }));
+      check('도장 만들기(/stamp): PDF 작업실 카드로 옴 · 제목 "도장 만들기 · EDIT" · [PDF 작업실] /pdf · [EDIT 도구] / · 사용법은 접힘',
+        page0.title === '도장 만들기 · EDIT' && page0.pdf === '/pdf' && page0.edit === '/' && page0.guide, JSON.stringify(page0));
       const s0 = await stState();
       await sp.click('[data-st-act="png"]');
       check('도장 만들기: 빈 이름은 예시로 보이고 저장은 막힘(이름을 먼저)', s0.sample === true && s0.cards === 12 && /이름을 먼저/.test(await toasts()),
@@ -328,12 +347,17 @@ try {
       check('도장 만들기: 날짜 확인 도장(부서 · 날짜 · 이름) · 모양은 원형 · 둥근 네모만', dateShapes.join() === '원형,둥근 네모', dateShapes.join(' · '));
       await sp.click('#st-k-name');
       await sp.click('#st-v-fonts');
-      await until(sp, () => window.__pdfWorkshop.stamp().cards === 17);
+      await until(sp, () => window.__stampPage.stamp().cards === 17);
       if (SCREENS) { await sp.waitForTimeout(800); await sp.screenshot({ path: path.join(root, 'docs', 'screens', 'stamp-fonts.png') }); }
       await sp.click('#st-v-pick');
 
+      // [PDF에 찍기] → 같은 탭에서 PDF 작업실 꾸미기로(넘길 도장은 이 탭에만 적어 둔다)
       await sp.click('[data-st-act="pdf"]');
+      await sp.waitForURL(`${APP}#decorate`);
+      await until(sp, () => !!(window.__pdfWorkshop && window.__pdfWorkshop.ready), undefined, { timeout: 20000 });
+      const handed = await sp.evaluate(() => window.__pdfWorkshop.pendingStamp());
       await until(sp, () => document.querySelector('.tab[aria-selected="true"]').dataset.tab === 'decorate');
+      const leftover = await sp.evaluate(() => sessionStorage.getItem('edit.useStamp'));
       await sp.setInputFiles('#decor-input', [fileA]);
       await until(sp, () => document.querySelectorAll('.pv-stamp img[src^="blob:"]').length === 1, undefined, { timeout: 15000 });
       await sp.waitForTimeout(300);
@@ -344,8 +368,9 @@ try {
       });
       const pageW = (await PDFLib.PDFDocument.load(fs.readFileSync(fileA))).getPage(0).getWidth();
       const want = 15 / ((pageW * 25.4) / 72);
-      check('도장 만들기: [PDF에 찍기] → 꾸미기에 그 도장이 실제 크기로 · 쪽번호는 꺼 둠', pv.chips === 1 && Math.abs(pv.ratio - want) < 0.01 && pv.num === false,
-        `쪽 폭 대비 ${(pv.ratio * 100).toFixed(1)}%(기대 ${(want * 100).toFixed(1)}%) · 고른 도장 ${pv.chips}개 · 쪽번호 ${pv.num ? '켜짐' : '꺼짐'}`);
+      check('도장 만들기: [PDF에 찍기] → /pdf#decorate 꾸미기에 그 도장이 실제 크기로 · 쪽번호는 꺼 둠 · 넘긴 표시는 한 번 쓰고 지움',
+        handed === true && leftover === null && pv.chips === 1 && Math.abs(pv.ratio - want) < 0.01 && pv.num === false,
+        `넘김 ${handed} · 쪽 폭 대비 ${(pv.ratio * 100).toFixed(1)}%(기대 ${(want * 100).toFixed(1)}%) · 고른 도장 ${pv.chips}개 · 쪽번호 ${pv.num ? '켜짐' : '꺼짐'}`);
       check('도장 만들기: 콘솔 에러 · 실패한 요청 0개', serr.length === 0, serr.length ? serr.join(' | ').slice(0, 300) : '0개');
     } catch (e) {
       check('도장 만들기 흐름', false, String((e && e.stack) || e).slice(0, 300));
@@ -358,8 +383,8 @@ try {
     const c = await browser.newContext({ viewport: { width: 1280, height: 900 }, extraHTTPHeaders: { 'X-Real-IP': '198.51.100.81' } });
     const errs = [];
     const ready = (pg) => until(pg, () => !!(window.__pdfWorkshop && window.__pdfWorkshop.ready), undefined, { timeout: 20000 });
-    const stampReady = (pg) => until(pg, () => { const s = window.__pdfWorkshop.stamp(); return s && s.ready && s.cards > 0; }, undefined, { timeout: 15000 });
-    const stamps = (pg) => pg.evaluate(() => window.__pdfWorkshop.stamps());
+    const stampReady = (pg) => until(pg, () => { const p = window.__stampPage; const s = p && p.stamp(); return s && s.ready && s.cards > 0; }, undefined, { timeout: 20000 });
+    const stamps = (pg) => pg.evaluate(() => window.__stampPage.stamps());
     const cookie = async (name) => (await c.cookies()).find((k) => k.name === name) || null;
     const idbRows = (pg) => pg.evaluate(() => new Promise((res) => {
       const r = indexedDB.open('pdf-workshop', 2);
@@ -388,7 +413,7 @@ try {
     try {
       const p0 = await c.newPage();
       watch(p0, errs);
-      await p0.goto(BASE, { waitUntil: 'networkidle' });
+      await p0.goto(APP, { waitUntil: 'networkidle' });
       await seedLegacy(p0, 'stold1');
       await p0.close();
 
@@ -397,18 +422,18 @@ try {
       watch(pA, errs);
       let entered = pA.waitForResponse((r) => r.url().endsWith('/api/enter'), { timeout: 15000 });
       await pA.goto(`${BASE}/#t=${makeTicket({ sub: 'sub-pc-a' })}&tool=stamp`);
-      await ready(pA);
       await entered;
       await stampReady(pA);
+      const urlA = pA.url();
       const sA = await stamps(pA);
       const passA = await cookie('pdf_pass');
       const whoA = ((await cookie('pdf_who')) || {}).value || '';
       await until(pA, () => !!document.querySelector('#panel-stamp [data-stamp-notes] [data-legacy="claim"]'));
-      check('공용 PC: 내 PC로 들어오면 통행증 8시간 · 예전 보관(주인 모름)은 숨기고 [내 것으로] · [지우기]',
-        sA.owner === 'set' && !sA.shared && sA.count === 0 && sA.legacy === 1 && passA && passA.expires > 0 && /^[0-9a-f]{16}$/.test(whoA),
+      check('공용 PC: 예전 스쿨 주소(/#t=…&tool=stamp) → /stamp · 내 PC로 들어오면 통행증 8시간 · 예전 보관(주인 모름)은 숨기고 [내 것으로] · [지우기]',
+        urlA === STAMP && sA.owner === 'set' && !sA.shared && sA.count === 0 && sA.legacy === 1 && passA && passA.expires > 0 && /^[0-9a-f]{16}$/.test(whoA),
         `표 ${sA.owner ? '있음' : '없음✗'} · 빌려 씀 ${sA.shared} · 내 것 ${sA.count} · 숨김 ${sA.legacy} · 통행증 ${passA && passA.expires > 0 ? '8시간' : '세션✗'}`);
       await pA.click('#panel-stamp [data-legacy="claim"]');
-      await until(pA, () => window.__pdfWorkshop.stamps().then((s) => s.count === 1 && s.legacy === 0));
+      await until(pA, () => window.__stampPage.stamps().then((s) => s.count === 1 && s.legacy === 0));
       await pA.fill('#st-name', '김하늘');
       await pA.click('[data-st-act="keep"]');
       await until(pA, () => document.querySelectorAll('#st-shelf li').length === 2);
@@ -422,9 +447,9 @@ try {
       await c.clearCookies();
       const pB = await c.newPage();
       watch(pB, errs);
-      await pB.goto(`${BASE}/#t=${makeTicket({ sub: 'sub-pc-b' })}&tool=stamp&pc=shared`);
-      await ready(pB);
+      await pB.goto(`${STAMP}#t=${makeTicket({ sub: 'sub-pc-b' })}&tool=stamp&pc=shared`);
       await stampReady(pB);
+      const urlB = pB.url();
       const sB = await stamps(pB);
       const passB = await cookie('pdf_pass');
       const pcB = await cookie('pdf_pc');
@@ -435,19 +460,24 @@ try {
         keep: document.querySelector('[data-keep-where="keep"]').textContent,
       }));
       check('공용 PC: 빌려 쓰는 PC → 통행증은 창을 닫으면 사라짐 · A 도장 안 보임 · 예전 보관은 숨김(정리 단추 없음)',
-        sB.shared && sB.count === 0 && sB.legacy === 1 && passB && passB.expires === -1 && pcB && pcB.value === 'shared' && noteB.legacy && noteB.buttons === 0 && /이 창에만/.test(noteB.keep) && /enter ok pc=shared/.test(serverLog),
+        urlB === STAMP && sB.shared && sB.count === 0 && sB.legacy === 1 && passB && passB.expires === -1 && pcB && pcB.value === 'shared' && noteB.legacy && noteB.buttons === 0 && /이 창에만/.test(noteB.keep) && /enter ok pc=shared/.test(serverLog),
         `빌려 씀 ${sB.shared} · 보이는 도장 ${sB.count} · 통행증 ${passB ? (passB.expires === -1 ? '세션' : '8시간✗') : '없음✗'} · 정리 단추 ${noteB.buttons}`);
       await pB.fill('#st-name', '박정보');
       await pB.click('[data-st-act="keep"]');
       await until(pB, () => document.querySelectorAll('#st-shelf li').length === 1);
       const sB2 = await stamps(pB);
       const rowsB = await idbRows(pB);
+      // 같은 탭에서 PDF 작업실로: 이 창에 둔 도장이 꾸미기에도 보이고, 작업 이어하기는 막힘
+      await pB.click('#sp-pdf');
+      await pB.waitForURL(APP);
+      await ready(pB);
+      const sBpdf = await pB.evaluate(() => window.__pdfWorkshop.stamps());
       await pB.evaluate(() => document.querySelector('[data-settings]').click());
       await until(pB, () => document.getElementById('settings-dialog').open);
       const setB = await pB.evaluate(() => ({ disabled: document.getElementById('set-resume').disabled, note: !document.getElementById('set-shared').hidden }));
       await pB.keyboard.press('Escape');
-      check('공용 PC: 빌려 쓰는 PC에서 보관한 도장은 이 창에만(IndexedDB에 안 씀) · 작업 이어하기 막힘',
-        sB2.count === 1 && sB2.temp === 1 && rowsB.length === 3 && !rowsB.some((r) => r.owner && r.owner !== whoA) && setB.disabled && setB.note,
+      check('공용 PC: 빌려 쓰는 PC에서 보관한 도장은 이 창에만(IndexedDB에 안 씀) · 같은 창의 PDF 작업실에도 보임 · 작업 이어하기 막힘',
+        sB2.count === 1 && sB2.temp === 1 && sBpdf.count === 1 && sBpdf.temp === 1 && rowsB.length === 3 && !rowsB.some((r) => r.owner && r.owner !== whoA) && setB.disabled && setB.note,
         `이 창 ${sB2.temp}개 · 저장된 줄 ${rowsB.length}개 · 이어하기 ${setB.disabled ? '막힘' : '열림✗'}`);
       await pB.close();
 
@@ -455,8 +485,7 @@ try {
       const pA2 = await c.newPage();
       watch(pA2, errs);
       entered = pA2.waitForResponse((r) => r.url().endsWith('/api/enter'), { timeout: 15000 });
-      await pA2.goto(`${BASE}/#t=${makeTicket({ sub: 'sub-pc-a' })}&tool=stamp`);
-      await ready(pA2);
+      await pA2.goto(`${STAMP}#t=${makeTicket({ sub: 'sub-pc-a' })}&tool=stamp`);
       await entered;
       await stampReady(pA2);
       await until(pA2, () => document.querySelectorAll('#st-shelf li').length === 2);
@@ -464,8 +493,8 @@ try {
       const pcA2 = await cookie('pdf_pc');
       await until(pA2, () => !!document.querySelector('#panel-stamp [data-legacy="drop"]'));
       await pA2.click('#panel-stamp [data-legacy="drop"]');
-      await pA2.click('#cf-yes');
-      await until(pA2, () => window.__pdfWorkshop.stamps().then((s) => s.legacy === 0));
+      await pA2.click('#sp-confirm-yes');
+      await until(pA2, () => window.__stampPage.stamps().then((s) => s.legacy === 0));
       const rowsA2 = await idbRows(pA2);
       check('공용 PC: A가 다시 열면 A 도장 2개만 · 예전 보관 [지우기] · 빌려 쓰는 PC 표시 지움',
         sA2.count === 2 && !sA2.shared && sA2.temp === 0 && !pcA2 && rowsA2.length === 2,
@@ -476,6 +505,107 @@ try {
       check('공용 PC 흐름', false, String((e && e.stack) || e).slice(0, 300));
     }
     await c.close();
+  }
+
+  // ── 2-e. EDIT: / 입구 · 도구 주소(/pdf · /photo · /stamp) · 끝의 / 정리 · 도구마다 안내 화면 · 예전 주소(/#이름) ──
+  {
+    const withPass = { headers: { Cookie: `pdf_pass=${PASS}` }, redirect: 'manual' };
+    const got = async (u, opts = withPass) => { const r = await fetch(BASE + u, opts); return { status: r.status, loc: r.headers.get('location') || '', text: r.status === 200 ? await r.text() : '' }; };
+    const entry = await got('/');
+    const pdf = await got('/pdf');
+    const stampPg = await got('/stamp');
+    const photoPg = await got('/photo');
+    const redirects = await Promise.all([['/pdf/', '/pdf'], ['/pdf/index.html', '/pdf'], ['/stamp/', '/stamp'], ['/stamp/index.html', '/stamp'], ['/photo/', '/photo'], ['/edit', '/'], ['/edit/', '/'], ['/index.html', '/']]
+      .map(async ([u, want]) => { const r = await got(u); return { u, ok: r.status === 302 && r.loc === want, got: `${r.status} ${r.loc}` }; }));
+    const links = [...entry.text.matchAll(/<a class="ed-tool[^"]*" href="([^"]+)"/g)].map((m) => m[1]);
+    const v = (await (await fetch(`${BASE}/version`)).json()).commit;
+    check('EDIT 주소: / 입구(도구 셋 /pdf · /photo · /stamp) · /pdf PDF 작업실 · /stamp 도장 만들기 · /photo 사진 작업실 · 끝의 / · index.html은 제 주소로',
+      entry.status === 200 && /id="ed-tools"/.test(entry.text) && links.join() === '/pdf,/photo,/stamp' &&
+      pdf.status === 200 && /id="home-title"/.test(pdf.text) && !/id="panel-stamp"/.test(pdf.text) &&
+      stampPg.status === 200 && /id="panel-stamp"/.test(stampPg.text) && stampPg.text.includes(`/stamp/stamp.js?v=${v}`) && stampPg.text.includes(`/edit/common.js?v=${v}`) &&
+      photoPg.status === 200 && redirects.every((r) => r.ok),
+      `/ ${entry.status} [${links.join(' ')}] · /pdf ${pdf.status} · /stamp ${stampPg.status} · /photo ${photoPg.status} · ${redirects.filter((r) => !r.ok).map((r) => `${r.u}→${r.got}✗`).join(' ') || '돌림 8곳 OK'}`);
+
+    const noPass = { redirect: 'manual' };
+    const gates = await Promise.all([['/', 'EDIT', 'pdf'], ['/pdf', 'PDF 작업실', 'pdf'], ['/stamp', '도장 만들기', 'stamp'], ['/photo', '사진 작업실', 'photo']].map(async ([u, name, go]) => {
+      const r = await got(u, noPass);
+      const ok = r.status === 200 && /스쿨 선생님 전용 도구예요/.test(r.text) && r.text.includes(`<p class="gate-name">${name}</p>`) && r.text.includes(`/go/${go}"`) && !/__TOOL_NAME__|__GO__/.test(r.text);
+      return { u, ok };
+    }));
+    check('통행증 없이: 도구 주소마다 그 도구 이름의 안내 화면 · [스쿨에서 열기]는 스쿨 /go/그 도구', gates.every((g) => g.ok), gates.map((g) => `${g.u} ${g.ok ? 'OK' : '✗'}`).join(' · '));
+
+    // 예전 주소(/#이름)와 새 주소의 입장권(/pdf#t=…&tool=compress, 통행증 없음)
+    const c = await browser.newContext({ viewport: { width: 1280, height: 800 }, extraHTTPHeaders: { 'X-Real-IP': '198.51.100.71' } });
+    const pg = await c.newPage();
+    const errs = [];
+    watch(pg, errs);
+    const legacy = [];
+    // #feedback은 PDF 작업실에서 의견 창을 열고 #을 지운다
+    for (const [from, want] of [['/#feedback', APP], ['/#compress', `${APP}#compress`], ['/#stamp', STAMP], ['/#photo', `${BASE}/photo`]]) {
+      await pg.goto(BASE + from);
+      const end = Date.now() + 10000;
+      while (pg.url() !== want && Date.now() < end) await pg.waitForTimeout(100);
+      let ok = pg.url() === want;
+      if (ok && from === '/#feedback') ok = await until(pg, () => document.getElementById('feedback-dialog').open).then(() => true, () => false);
+      legacy.push(`${from}→${pg.url().replace(BASE, '')}${from === '/#feedback' && ok ? '(의견 창)' : ''}${ok ? '' : '✗'}`);
+    }
+    await c.close();
+    const rc = await rawContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, extraHTTPHeaders: { 'X-Real-IP': '198.51.100.72' } });
+    const rp = await rc.newPage();
+    watch(rp, errs);
+    await rp.goto(`${APP}#t=${makeTicket()}&tool=compress`);
+    await until(rp, () => !!(window.__pdfWorkshop && window.__pdfWorkshop.ready) && !document.getElementById('panel-compress').hidden, undefined, { timeout: 20000 });
+    const newWay = rp.url();
+    await rc.close();
+    check('예전 주소 /#feedback · /#compress · /#stamp · /#photo → 도구 주소로 · 새 주소 /pdf#t=…&tool=compress(통행증 없음) → 용량 줄이기',
+      legacy.every((x) => !x.endsWith('✗')) && newWay === `${APP}#compress` && errs.length === 0,
+      `${legacy.join(' · ')} · 새 주소 → ${newWay.replace(BASE, '')}${errs.length ? ` · 오류 ${errs[0]}` : ''}`);
+
+    // EDIT 입구 · 도장 만들기: 네 크기 + 다크 (휴대폰 먼저)
+    const sizes = [
+      { name: 'phone', width: 390, height: 844, touch: true },
+      { name: 'tablet', width: 820, height: 1180, touch: true },
+      { name: 'tablet-wide', width: 1180, height: 820, touch: true },
+      { name: 'laptop', width: 1280, height: 720 },
+      { name: 'laptop-dark', width: 1280, height: 720, dark: true },
+    ];
+    const probs = [];
+    const info = [];
+    for (const sz of sizes) {
+      const sc = await browser.newContext({ viewport: { width: sz.width, height: sz.height }, hasTouch: !!sz.touch, isMobile: sz.width < 500, colorScheme: sz.dark ? 'dark' : 'light' });
+      const sp = await sc.newPage();
+      const e2 = [];
+      watch(sp, e2);
+      for (const u of ['/', '/stamp']) {
+        await sp.goto(BASE + u, { waitUntil: 'networkidle' });
+        if (u === '/stamp') await until(sp, () => { const p = window.__stampPage; const s = p && p.stamp(); return s && s.ready && s.cards > 0; }, undefined, { timeout: 15000 });
+        const m = await sp.evaluate((touch) => {
+          const out = [];
+          if (document.documentElement.scrollWidth > window.innerWidth + 1) out.push(`가로 스크롤 ${document.documentElement.scrollWidth}`);
+          document.querySelectorAll('a, button, summary').forEach((el) => {
+            const r = el.getBoundingClientRect();
+            if (r.width === 0 || el.closest('[hidden], .toasts')) return;
+            // 휴대폰 · 태블릿(터치)은 모든 단추 44px, 노트북은 위 줄 · 도구 카드만
+            if (r.height < 44 && (touch || el.closest('.sp-top, .ed-top, .ed-tools'))) out.push(`작은 단추 ${el.id || el.className || el.tagName} ${Math.round(r.height)}px`);
+          });
+          document.querySelectorAll('body *').forEach((el) => {
+            const own = [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
+            if (own && el.getBoundingClientRect().width > 0 && parseFloat(getComputedStyle(el).fontSize) < 12) out.push(`작은 글자 ${el.className || el.tagName} ${getComputedStyle(el).fontSize}`);
+          });
+          document.querySelectorAll('input[type="text"], input:not([type])').forEach((el) => { if (el.getBoundingClientRect().width > 0 && parseFloat(getComputedStyle(el).fontSize) < 16) out.push(`입력칸 글자 ${el.id} ${getComputedStyle(el).fontSize}`); });
+          const cards = [...document.querySelectorAll('.ed-tool')].map((a) => a.getBoundingClientRect());
+          return { out: [...new Set(out)], bg: getComputedStyle(document.body).backgroundColor, cards: cards.length, firstIn: cards.length ? cards[0].bottom <= innerHeight : true, cols: new Set(cards.map((r) => Math.round(r.left))).size };
+        }, !!sz.touch);
+        if (sz.dark && /rgb\(2[34]\d, 2[34]\d, 2[45]\d\)/.test(m.bg)) m.out.push(`다크 아님 ${m.bg}`);
+        if (u === '/' && (m.cards !== 3 || !m.firstIn || (sz.width < 500 && m.cols !== 1))) m.out.push(`카드 ${m.cards}장 · 첫 카드 ${m.firstIn ? '보임' : '안 보임'} · 줄 ${m.cols}`);
+        if (m.out.length) probs.push(`${sz.name}${u}: ${m.out.slice(0, 4).join(', ')}`);
+        if (SCREENS) await sp.screenshot({ path: path.join(root, 'docs', 'screens', `edit-${u === '/' ? 'entrance' : 'stamp'}-${sz.name}.png`) });
+      }
+      if (e2.length) probs.push(`${sz.name}: 콘솔 ${e2[0].slice(0, 80)}`);
+      await sc.close();
+    }
+    check('EDIT 입구 · 도장 만들기: 390(터치) · 820 · 1180(터치) · 1280 · 다크 — 가로 스크롤 없음 · 단추 44px · 글자 12px · 입력칸 16px · 휴대폰은 카드 한 줄',
+      probs.length === 0, probs.join(' | ').slice(0, 500) || '5개 크기 × 2화면 통과');
   }
 
   // ── 2-d. 사진 작업실(/photo): 목적 고르기 → 추천값으로 한 번에 · 위치 정보 지움 · 찍은 날 남김 · [자세히] ──
@@ -830,7 +960,7 @@ try {
   const m = await mctx.newPage();
   const merr = [];
   watch(m, merr);
-  await m.goto(BASE, { waitUntil: 'networkidle' });
+  await m.goto(APP, { waitUntil: 'networkidle' });
   const mh = await m.evaluate(() => ({
     sw: document.documentElement.scrollWidth,
     title: document.getElementById('home-title').getBoundingClientRect().width,
@@ -897,7 +1027,7 @@ try {
           how += ok ? `안전 영역 ${pc.safe}px(CDP)` : `안전 영역 ${pc.safe}px(--safe-b 변수로 흉내)`;
         }
       }
-      await q.goto(BASE, { waitUntil: 'networkidle' });
+      await q.goto(APP, { waitUntil: 'networkidle' });
       const standaloneOn = pc.standalone ? await q.evaluate(() => matchMedia('(display-mode: standalone)').matches) : false;
 
       // 탭 막대: 처음 화면에서도 보이고 7개가 한 줄
@@ -910,8 +1040,8 @@ try {
         });
         return { top: Math.round(r.top), bottom: Math.round(r.bottom), h: Math.round(r.height), vh: innerHeight, pos: getComputedStyle(nav).position, role: nav.getAttribute('role'), orient: nav.getAttribute('aria-orientation'), tabs, rows: new Set(tabs.map((t) => t.top)).size };
       });
-      check(`${pc.label} 처음 화면: 아래쪽 탭 막대 7개 한 줄(아이콘 + 짧은 이름, aria-label은 전체 이름)`,
-        hb.pos === 'fixed' && hb.tabs.length === 7 && hb.rows === 1 && hb.bottom === hb.vh && hb.tabs.every((t) => t.w >= 44 && t.bottom <= hb.vh - pc.safe && t.vis === 'visible') &&
+      check(`${pc.label} 처음 화면: 아래쪽 탭 막대 6개 한 줄(아이콘 + 짧은 이름, aria-label은 전체 이름)`,
+        hb.pos === 'fixed' && hb.tabs.length === 6 && hb.rows === 1 && hb.bottom === hb.vh && hb.tabs.every((t) => t.w >= 44 && t.bottom <= hb.vh - pc.safe && t.vis === 'visible') &&
         hb.role === 'tablist' && hb.orient === 'horizontal' && hb.tabs[1].label === '사진 → PDF',
         `${hb.tabs.map((t) => t.short).join(' / ')} · 막대 높이 ${hb.h}px · ${hb.orient}${how ? ` · ${how}` : ''}${pc.standalone ? (standaloneOn ? ' · display-mode: standalone 적용' : ' · display-mode: standalone 흉내 미지원(이 화면 규칙은 display-mode와 무관, 같은 CSS)') : ''}`);
       if (pc.safe) {
@@ -1069,7 +1199,7 @@ try {
 
       // 접근성(axe): 처음 화면 + 도구 7곳
       if (!pc.safe) {
-        await q.goto(BASE, { waitUntil: 'networkidle' });
+        await q.goto(APP, { waitUntil: 'networkidle' });
         await q.addScriptTag({ path: axePathM });
         const runAxe = () => q.evaluate(async () => {
           const res = await window.axe.run({ exclude: [['.demo-stage']] }, { resultTypes: ['violations'] });
@@ -1092,7 +1222,7 @@ try {
     const nc = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: 'light' });
     await nc.addInitScript(() => { if (navigator.mediaDevices) navigator.mediaDevices.enumerateDevices = async () => []; });
     const ncp = await nc.newPage();
-    await ncp.goto(`${BASE}/#img2pdf`, { waitUntil: 'networkidle' });
+    await ncp.goto(`${APP}#img2pdf`, { waitUntil: 'networkidle' });
     await ncp.waitForTimeout(200);
     const noCam = await ncp.evaluate(() => ({ hidden: document.getElementById('img-camera-btn').hidden, h: document.getElementById('img-camera-btn').getBoundingClientRect().height, album: Math.round(document.querySelector('#img-drop .pick-big[for="img-input"]').getBoundingClientRect().width) }));
     check('카메라가 없는 기기에서는 「카메라로 찍기」 숨김(사진첩 버튼이 한 줄 전체)', noCam.hidden && noCam.h === 0 && noCam.album > 300, `숨김 ${noCam.hidden}, 사진첩 버튼 폭 ${noCam.album}px`);
@@ -1106,7 +1236,7 @@ try {
     const w = await wctx.newPage();
     const werr = [];
     watch(w, werr);
-    await w.goto(BASE, { waitUntil: 'networkidle' });
+    await w.goto(APP, { waitUntil: 'networkidle' });
     await w.setInputFiles('#home-input', [fileMany]);
     await until(w, () => document.querySelectorAll('#edit-grid .page-card').length === 30);
     const cardsW = w.locator('#edit-grid .page-card');
@@ -1275,7 +1405,7 @@ try {
     const n = await nctx.newPage();
     const nerr = [];
     watch(n, nerr);
-    await n.goto(BASE, { waitUntil: 'networkidle' });
+    await n.goto(APP, { waitUntil: 'networkidle' });
     await n.click('.tool-card[data-open="edit"]');
     const hiddenState = await n.evaluate(() => ({
       w: document.getElementById('edit-guide').getBoundingClientRect().width,
@@ -1301,7 +1431,7 @@ try {
     const t = await tctx.newPage();
     const terr = [];
     watch(t, terr);
-    await t.goto(BASE, { waitUntil: 'networkidle' });
+    await t.goto(APP, { waitUntil: 'networkidle' });
     await t.setInputFiles('#home-input', [fileMany]);
     await until(t, () => document.querySelectorAll('#edit-grid .page-card').length === 30);
     await t.waitForTimeout(700); // 파일을 넣으면 첫 카드로 부드럽게 내려가므로 끝날 때까지 기다린다
@@ -1332,7 +1462,7 @@ try {
     const s = await sctx.newPage();
     const serr = [];
     watch(s, serr);
-    await s.goto(BASE, { waitUntil: 'networkidle' });
+    await s.goto(APP, { waitUntil: 'networkidle' });
     await s.setInputFiles('#home-input', [fileMany]);
     await until(s, () => document.querySelectorAll('#edit-grid .page-card').length === 30);
 
@@ -1656,7 +1786,7 @@ try {
       fs.writeFileSync(colorFile, cs.bytes);
       const cctx = await browser.newContext({ viewport: { width: 1280, height: 1000 }, colorScheme: 'light', acceptDownloads: true, deviceScaleFactor: 1 });
       const c = await cctx.newPage();
-      await c.goto(`${BASE}/#compress`, { waitUntil: 'networkidle' });
+      await c.goto(`${APP}#compress`, { waitUntil: 'networkidle' });
       await c.setInputFiles('#cmp-input', [colorFile]);
       await c.waitForSelector('#cmp-target:not([hidden])', { timeout: 60000 });
       await c.fill('#cmp-mb', '0.01'); // 가장 세게 → 모든 사진을 다시 만든다
@@ -1707,7 +1837,7 @@ try {
     if (SCREENS) {
       const dctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: 'light' });
       const d = await dctx.newPage();
-      await d.goto(BASE, { waitUntil: 'networkidle' });
+      await d.goto(APP, { waitUntil: 'networkidle' });
       await d.evaluate(() => document.fonts.ready);
       await d.setInputFiles('#home-input', [await writePdf('회의자료.pdf', await samplePdf(6, 'Meeting'))]);
       await until(d, () => document.querySelectorAll('#edit-grid .page-card').length === 6);
@@ -1762,7 +1892,7 @@ try {
     const x = await xctx.newPage();
     const xerr = [];
     watch(x, xerr);
-    await x.goto(`${BASE}/#edit`, { waitUntil: 'networkidle' });
+    await x.goto(`${APP}#edit`, { waitUntil: 'networkidle' });
     await x.setInputFiles('#edit-input', [mixedFile]);
     await until(x, () => document.querySelectorAll('#edit-grid .page-card').length === 7);
     // 크기 안내줄
@@ -1948,7 +2078,7 @@ try {
     const mp2 = await mx.newPage();
     const mxerr = [];
     watch(mp2, mxerr);
-    await mp2.goto(`${BASE}/#edit`, { waitUntil: 'networkidle' });
+    await mp2.goto(`${APP}#edit`, { waitUntil: 'networkidle' });
     await mp2.setInputFiles('#edit-input', [mixedFile, frontFile, backFile]);
     await until(mp2, () => document.querySelectorAll('#edit-grid .page-card').length === 15);
     await until(mp2, () => !document.getElementById('edit-sizes').hidden);
@@ -1959,7 +2089,7 @@ try {
     await mp2.waitForTimeout(400); // 올라오는 움직임이 끝난 뒤
     const sheet = await mp2.evaluate(() => ({ sheet: document.getElementById('info-pop').classList.contains('sheet'), bottom: Math.round(document.getElementById('info-pop').getBoundingClientRect().bottom), vh: innerHeight }));
     await mp2.keyboard.press('Escape');
-    await mp2.goto(`${BASE}/#security`, { waitUntil: 'networkidle' });
+    await mp2.goto(`${APP}#security`, { waitUntil: 'networkidle' });
     await mp2.setInputFiles('#unlock-input', [l1, l2, l3]);
     const sw2 = await mp2.evaluate(() => document.documentElement.scrollWidth);
     check('400px: 양면 패널 · 크기 안내 · 일괄 목록 가로 스크롤 없음, ⓘ는 아래 시트', sw1 <= 400 && sw2 <= 400 && sheet.sheet && Math.abs(sheet.bottom - sheet.vh) <= 1 && mxerr.length === 0,
@@ -1987,7 +2117,7 @@ try {
     const g = await gctx.newPage();
     const gerr = [];
     watch(g, gerr);
-    await g.goto(`${BASE}/#edit`, { waitUntil: 'networkidle' });
+    await g.goto(`${APP}#edit`, { waitUntil: 'networkidle' });
     await until(g, () => !document.getElementById('view-work').hidden);
 
     const seen = [];
@@ -2096,7 +2226,7 @@ try {
     const r = await rctx.newPage();
     const rerr = [];
     watch(r, rerr);
-    await r.goto(`${BASE}/#edit`, { waitUntil: 'networkidle' });
+    await r.goto(`${APP}#edit`, { waitUntil: 'networkidle' });
     await until(r, () => !document.getElementById('view-work').hidden);
     const still = [];
     for (const t of TOOLS) {
@@ -2116,7 +2246,7 @@ try {
     const dp = await dctx.newPage();
     const derr = [];
     watch(dp, derr);
-    await dp.goto(`${BASE}/#edit`, { waitUntil: 'networkidle' });
+    await dp.goto(`${APP}#edit`, { waitUntil: 'networkidle' });
     await until(dp, () => !document.getElementById('view-work').hidden);
     const drawers = [];
     for (const t of TOOLS.slice(1)) {
@@ -2142,10 +2272,10 @@ try {
     const sp = await sctx.newPage();
     const serr = [];
     watch(sp, serr);
-    await sp.goto(`${BASE}/#edit`, { waitUntil: 'networkidle' });
+    await sp.goto(`${APP}#edit`, { waitUntil: 'networkidle' });
     await until(sp, () => !document.getElementById('view-work').hidden);
     const sws = [];
-    for (const t of [...TOOLS, 'stamp']) {
+    for (const t of TOOLS) {
       await gotoTool(sp, t);
       const s1 = await sp.evaluate(() => document.documentElement.scrollWidth);
       await sp.click(`#panel-${t} .guide-open`);
@@ -2154,7 +2284,7 @@ try {
       await sp.keyboard.press('Escape');
       sws.push({ t, s1, ...s2 });
     }
-    check('400px: 도구 7곳 가로 스크롤 없음 (사용법 서랍 열어도)', sws.every((x) => x.s1 <= 400 && x.sw <= 400 && x.gw <= 400) && serr.length === 0,
+    check('400px: PDF 도구 6곳 가로 스크롤 없음 (사용법 서랍 열어도)', sws.every((x) => x.s1 <= 400 && x.sw <= 400 && x.gw <= 400) && serr.length === 0,
       sws.map((x) => `${x.t} ${x.s1}/${x.sw}`).join(' · '));
     await sctx.close();
 
@@ -2162,7 +2292,7 @@ try {
     const axePath = require.resolve('axe-core/axe.min.js');
     const actx = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: 'light', bypassCSP: true });
     const ap = await actx.newPage();
-    await ap.goto(BASE, { waitUntil: 'networkidle' });
+    await ap.goto(APP, { waitUntil: 'networkidle' });
     await ap.addScriptTag({ path: axePath });
     const axeRun = () => ap.evaluate(async () => {
       // 예시 무대는 aria-hidden 장식이고 움직이는 중에는 투명도가 바뀌므로 뺀다(설명 글은 검사한다)
@@ -2172,16 +2302,23 @@ try {
     const axeAll = [];
     axeAll.push({ where: 'home', v: await axeRun() });
     await ap.click('.tool-card[data-open="edit"]');
-    for (const t of [...TOOLS, 'stamp']) {
+    for (const t of TOOLS) {
       await gotoTool(ap, t);
-      if (t === 'stamp') await until(ap, () => { const s = window.__pdfWorkshop.stamp(); return s && s.ready && s.cards > 0; }, undefined, { timeout: 15000 });
       await ap.waitForTimeout(200);
       axeAll.push({ where: t, v: await axeRun() });
     }
+    // EDIT 입구 · 도장 만들기(/stamp)
+    await ap.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+    await ap.addScriptTag({ path: axePath });
+    axeAll.push({ where: 'edit-entrance', v: await axeRun() });
+    await ap.goto(STAMP, { waitUntil: 'networkidle' });
+    await until(ap, () => { const p = window.__stampPage; const s = p && p.stamp(); return s && s.ready && s.cards > 0; }, undefined, { timeout: 15000 });
+    await ap.addScriptTag({ path: axePath });
+    axeAll.push({ where: 'stamp', v: await axeRun() });
     const crit = axeAll.flatMap((x) => x.v.filter((v) => v.impact === 'critical').map((v) => `${x.where}:${v.id}(${v.where})`));
     const serious = [...new Set(axeAll.flatMap((x) => x.v.filter((v) => v.impact === 'serious').map((v) => `${x.where}:${v.id}(${v.where})`)))];
     const ver = JSON.parse(fs.readFileSync(path.join(path.dirname(axePath), 'package.json'), 'utf8')).version;
-    check(`자동 접근성 검사(axe-core ${ver}): 처음 화면 + 도구 7곳 심각(critical) · 중대(serious) 0개`, crit.length === 0 && serious.length === 0,
+    check(`자동 접근성 검사(axe-core ${ver}): 처음 화면 + PDF 도구 6곳 + EDIT 입구 + 도장 만들기 심각(critical) · 중대(serious) 0개`, crit.length === 0 && serious.length === 0,
       crit.length ? crit.join(' | ').slice(0, 300) : `critical 0개 · serious ${serious.length ? serious.join(',') : '0개'}`);
     await actx.close();
   }
@@ -2194,7 +2331,7 @@ try {
     const csp = [];
     watch(o, oerr);
     o.on('console', (m) => /Content Security Policy|Refused to/i.test(m.text()) && csp.push(m.text()));
-    await o.goto(BASE, { waitUntil: 'networkidle' });
+    await o.goto(APP, { waitUntil: 'networkidle' });
     await until(o, () => window.__pdfWorkshop && window.__pdfWorkshop.ready);
 
     const head = await octx.request.get(`${BASE}/`);
@@ -2255,10 +2392,12 @@ try {
       `/ ${noPass.status} · 안내 페이지 ${pagesNoPass.filter(Boolean).length}/4 · /version ${ver.status}`);
     const withPass = await fetch(`${BASE}/`, { headers: { Cookie: `pdf_pass=${PASS}` } });
     const wpHtml = await withPass.text();
-    check('정상 입장권 → 통행증(HttpOnly · Secure · SameSite=Lax · Path=/ · 8시간) → / 가 기존 PDF 화면',
+    const pdfPass = await fetch(APP, { headers: { Cookie: `pdf_pass=${PASS}` } });
+    const pdfHtml = await pdfPass.text();
+    check('정상 입장권 → 통행증(HttpOnly · Secure · SameSite=Lax · Path=/ · 8시간) → / 는 EDIT 입구 · /pdf 가 PDF 화면',
       firstEnter.status === 200 && /HttpOnly/i.test(setCookie) && /Secure/i.test(setCookie) && /SameSite=Lax/i.test(setCookie) && /Path=\//.test(setCookie) && /Max-Age=28800/.test(setCookie) &&
-      withPass.status === 200 && /id="home-title"/.test(wpHtml),
-      `enter ${firstEnter.status} · / ${withPass.status}`);
+      withPass.status === 200 && /id="ed-tools"/.test(wpHtml) && pdfPass.status === 200 && /id="home-title"/.test(pdfHtml),
+      `enter ${firstEnter.status} · / ${withPass.status} · /pdf ${pdfPass.status}`);
 
     const now = Math.floor(Date.now() / 1000);
     const reused = makeTicket();
@@ -2450,7 +2589,7 @@ try {
       for (const sz of sizes) {
         const c = await rawContext({ viewport: { width: sz.width, height: sz.height }, hasTouch: !!sz.hasTouch, isMobile: !!sz.isMobile, colorScheme: sz.dark ? 'dark' : 'light' });
         const pg = await c.newPage();
-        await pg.goto(BASE, { waitUntil: 'networkidle' });
+        await pg.goto(APP, { waitUntil: 'networkidle' });
         const m = await pg.evaluate(() => {
           const out = [];
           if (document.documentElement.scrollWidth > window.innerWidth + 1) out.push('가로 스크롤');
@@ -2480,7 +2619,7 @@ try {
       for (const sz of [{ w: 390, h: 844, touch: true }, { w: 820, h: 1180, touch: true }, { w: 1280, h: 720 }, { w: 1280, h: 720, dark: true }]) {
         const c = await rawContext({ viewport: { width: sz.w, height: sz.h }, hasTouch: !!sz.touch, isMobile: sz.w < 500, colorScheme: sz.dark ? 'dark' : 'light' });
         const pg = await c.newPage();
-        await pg.goto(BASE, { waitUntil: 'networkidle' });
+        await pg.goto(APP, { waitUntil: 'networkidle' });
         const b = await button(pg);
         const text = (await pg.textContent('#gate-text')).trim();
         found.push({ label: `안내 ${sz.w}${sz.dark ? ' 다크' : ''}`, ok: okButton(b) && text === SENTENCE, detail: b.href });
@@ -2523,7 +2662,7 @@ try {
           window.matchMedia = (q) => (/display-mode: standalone/.test(q) ? { matches: true, media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} } : real(q));
         });
         const pg = await c.newPage();
-        await pg.goto(BASE, { waitUntil: 'networkidle' });
+        await pg.goto(APP, { waitUntil: 'networkidle' });
         const note = await pg.isVisible('#gate-icon') ? await pg.textContent('#gate-icon') : '';
         found.push({ label: '아이콘 안내', ok: /\[스쿨에서 열기\]를 누르면 로그인 뒤 바로 이 화면으로 돌아와요/.test(note) && okButton(await button(pg)), detail: note.slice(0, 30) });
         await c.close();
@@ -2660,7 +2799,7 @@ try {
       perr.length ? perr.join(' | ').slice(0, 200) : pages.map((x) => `${x.u} ${x.ver}`).join(' · '));
 
     // 처음 화면 아래쪽: 요약 카드 · 자주 하는 작업 · 새 소식 · 푸터
-    await pg.goto(BASE, { waitUntil: 'networkidle' });
+    await pg.goto(APP, { waitUntil: 'networkidle' });
     await until(pg, () => !document.getElementById('home-news').hidden);
     const home = await pg.evaluate(() => {
       const r = (sel) => { const e = document.querySelector(sel); if (!e) return null; const b = e.getBoundingClientRect(); return { w: Math.round(b.width), h: Math.round(b.height), l: Math.round(b.left) }; };
@@ -2710,11 +2849,12 @@ try {
     const mctx2 = await browser.newContext({ viewport: { width: 400, height: 860 }, isMobile: true, hasTouch: true, colorScheme: 'light', deviceScaleFactor: 2 });
     const mp3 = await mctx2.newPage();
     const msw = [];
-    for (const u of ['/', '/check', '/privacy', '/licenses']) {
+    for (const u of ['/', '/pdf', '/stamp', '/photo', '/check', '/privacy', '/licenses']) {
       await mp3.goto(BASE + u, { waitUntil: 'networkidle' });
+      if (u === '/stamp') await until(mp3, () => { const p = window.__stampPage; const s = p && p.stamp(); return s && s.ready && s.cards > 0; }, undefined, { timeout: 15000 });
       msw.push(`${u} ${await mp3.evaluate(() => document.documentElement.scrollWidth)}`);
     }
-    check('400px: 처음 화면 전체 · 안내 페이지 3곳 가로 스크롤 없음', msw.every((x) => Number(x.split(' ')[1]) <= 400), msw.join(' · '));
+    check('400px: EDIT 입구 · PDF 작업실 · 도장 만들기 · 사진 작업실 · 안내 페이지 3곳 가로 스크롤 없음', msw.every((x) => Number(x.split(' ')[1]) <= 400), msw.join(' · '));
     await mctx2.close();
   }
 
@@ -2724,7 +2864,7 @@ try {
     const q = await nctx3.newPage();
     const qerr = [];
     watch(q, qerr);
-    await q.goto(BASE, { waitUntil: 'networkidle' });
+    await q.goto(APP, { waitUntil: 'networkidle' });
     await until(q, () => /^v /.test(document.getElementById('home-version').textContent));
     const first = await q.evaluate(() => window.__pdfWorkshop.news());
     // 예전에 써 본 사람 + 옛 새 소식만 본 상태 → 새로고침하면 점
@@ -2755,7 +2895,7 @@ try {
     const copyMsg = await q.textContent('#fb-err');
     await q.keyboard.press('Escape');
     // 안내 페이지의 /#feedback
-    await q.goto(`${BASE}/#feedback`, { waitUntil: 'networkidle' });
+    await q.goto(`${APP}#feedback`, { waitUntil: 'networkidle' });
     const hashOpen = await q.evaluate(() => ({ open: document.getElementById('feedback-dialog').open, hash: location.hash }));
     await q.keyboard.press('Escape');
     const sideFb = await q.evaluate(() => !!document.querySelector('.sidebar [data-feedback]'));
@@ -2801,7 +2941,7 @@ try {
     check('새 소식 · 의견 · 제목 흐름 콘솔 에러 0개', qerr.length === 0, qerr.length ? qerr.join(' | ').slice(0, 200) : '0개');
 
     // 공유 미리보기 · 파비콘
-    const html = await (await nctx3.request.get(BASE)).text();
+    const html = await (await nctx3.request.get(APP)).text();
     const og = (p) => ((html.match(new RegExp(`<meta property="${p}" content="([^"]+)"`)) || [])[1] || '');
     const ogImg = await nctx3.request.get(`${BASE}/icons/og-image.png`);
     const buf = await ogImg.body();
@@ -2817,12 +2957,12 @@ try {
     const octx2 = await browser.newContext({ viewport: { width: 1000, height: 700 } });
     await octx2.addInitScript(() => { delete Promise.allSettled; });
     const ob = await octx2.newPage();
-    await ob.goto(BASE, { waitUntil: 'load' });
+    await ob.goto(APP, { waitUntil: 'load' });
     const old = await ob.evaluate(() => ({ note: document.getElementById('old-browser').getBoundingClientRect().height, text: document.getElementById('old-browser').textContent, home: document.getElementById('view-home').getBoundingClientRect().height }));
     await octx2.close();
     const jctx = await browser.newContext({ viewport: { width: 1000, height: 700 }, javaScriptEnabled: false });
     const jp = await jctx.newPage();
-    await jp.goto(BASE, { waitUntil: 'load' });
+    await jp.goto(APP, { waitUntil: 'load' });
     const nojs = await jp.evaluate(() => document.body.innerText);
     await jctx.close();
     check('오래된 브라우저 · 자바스크립트 꺼짐: "이 브라우저에서는 열 수 없어요. 엣지, 크롬, 웨일로…" 안내만 보임',
@@ -2836,7 +2976,7 @@ try {
     const v = await vctx.newPage();
     const verr = [];
     watch(v, verr);
-    await v.goto(BASE, { waitUntil: 'networkidle' });
+    await v.goto(APP, { waitUntil: 'networkidle' });
     await v.setInputFiles('#home-input', [fileA, fileB]);
     await until(v, () => document.querySelectorAll('#edit-grid .page-card canvas').length === 7, undefined, { timeout: 20000 });
     const vcard = v.locator('#edit-grid .page-card').nth(1);
@@ -2960,7 +3100,7 @@ try {
     watch(bp, berr);
     let downloads = 0;
     bp.on('download', (d) => { downloads++; d.cancel().catch(() => {}); });
-    await bp.goto(BASE, { waitUntil: 'networkidle' });
+    await bp.goto(APP, { waitUntil: 'networkidle' });
     await bp.evaluate(() => {
       window.__toastCount = 0;
       new MutationObserver((ms) => ms.forEach((m) => { window.__toastCount += m.addedNodes.length; })).observe(document.getElementById('toasts'), { childList: true });
@@ -3123,13 +3263,12 @@ try {
           if (SCREENS) await a.screenshot({ path: path.join(shots, `dark-${where}.png`) });
         }
       };
-      await a.goto(BASE, { waitUntil: 'networkidle' });
+      await a.goto(APP, { waitUntil: 'networkidle' });
       await a.evaluate(() => document.fonts.ready);
       await run('home');
-      for (const t of ['img2pdf', 'pdf2img', 'decorate', 'compress', 'security', 'stamp']) {
+      for (const t of ['img2pdf', 'pdf2img', 'decorate', 'compress', 'security']) {
         await a.evaluate((x) => { location.hash = x; }, t);
         await until(a, (x) => !document.getElementById(`panel-${x}`).hidden, t);
-        if (t === 'stamp') await until(a, () => { const s = window.__pdfWorkshop.stamp(); return s && s.ready && s.cards > 0; }, undefined, { timeout: 15000 });
         await a.mouse.move(2, 2);
         await run(t);
       }
@@ -3162,12 +3301,20 @@ try {
         await a.waitForTimeout(u === 'check' ? 1500 : 100);
         await run(u);
       }
+      // EDIT 입구 · 도장 만들기(/stamp, 사용법 펼침)
+      await a.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+      await run('edit-entrance');
+      await a.goto(STAMP, { waitUntil: 'networkidle' });
+      await until(a, () => { const p = window.__stampPage; const s = p && p.stamp(); return s && s.ready && s.cards > 0; }, undefined, { timeout: 15000 });
+      await a.evaluate(() => { document.getElementById('sp-guide').open = true; });
+      await a.mouse.move(2, 2);
+      await run('stamp');
       if (aerr.length) results.push({ scheme, where: 'console', v: aerr.map((e) => ({ id: e.slice(0, 80), impact: 'console' })) });
       await actx.close();
     }
     const bad = results.flatMap((r) => r.v.filter((x) => x.impact === 'critical' || x.impact === 'serious' || x.impact === 'console').map((x) => `${r.scheme}/${r.where}:${x.id}(${x.where || ''})`));
     const screensN = results.length / 2;
-    check(`자동 접근성 검사(axe-core): 라이트 · 다크 × ${screensN}개 화면(도구 6 · 처음 · 창 4 · 안내 3) critical · serious 0개`, bad.length === 0,
+    check(`자동 접근성 검사(axe-core): 라이트 · 다크 × ${screensN}개 화면(PDF 도구 6 · 처음 · 창 4 · 안내 3 · EDIT 입구 · 도장 만들기) critical · serious 0개`, bad.length === 0,
       bad.length ? bad.join(' | ').slice(0, 400) : `${results.length}번 검사 · 모두 0개 (다크 대비 포함)`);
     check('다크 모드: 어두운 화면에 밝은 조각이 남지 않음(쪽 미리보기 · 종이 제외)', brightAll.length === 0, brightAll.length ? brightAll.join(' | ').slice(0, 400) : `${screensN}개 화면 확인`);
 
@@ -3176,7 +3323,7 @@ try {
     for (const [z, w, hgt] of [[150, 853, 600], [200, 640, 450]]) {
       const zc = await browser.newContext({ viewport: { width: w, height: hgt }, colorScheme: 'light', deviceScaleFactor: z / 100 });
       const zp = await zc.newPage();
-      await zp.goto(BASE, { waitUntil: 'networkidle' });
+      await zp.goto(APP, { waitUntil: 'networkidle' });
       const homeSw = await zp.evaluate(() => document.documentElement.scrollWidth);
       await zp.setInputFiles('#home-input', [fileA, fileB]);
       await until(zp, () => document.querySelectorAll('#edit-grid .page-card').length === 7);
@@ -3210,7 +3357,7 @@ try {
     // 포커스 순서: 처음 화면에서 Tab을 누르면 보이는 것만, 위에서 아래로
     const fctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: 'light' });
     const fp = await fctx.newPage();
-    await fp.goto(BASE, { waitUntil: 'networkidle' });
+    await fp.goto(APP, { waitUntil: 'networkidle' });
     const stops = [];
     for (let i = 0; i < 24; i++) {
       await fp.keyboard.press('Tab');
@@ -3230,7 +3377,7 @@ try {
     // 인쇄: 앱 화면 대신 "PDF를 저장한 뒤 그 파일을 인쇄하세요"
     const pc = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const pp2 = await pc.newPage();
-    await pp2.goto(BASE, { waitUntil: 'networkidle' });
+    await pp2.goto(APP, { waitUntil: 'networkidle' });
     await pp2.emulateMedia({ media: 'print' });
     const pr = await pp2.evaluate(() => ({ note: document.querySelector('.print-note').getBoundingClientRect().height, text: document.querySelector('.print-note').innerText, home: document.getElementById('view-home').getBoundingClientRect().height }));
     if (SCREENS) await pp2.screenshot({ path: path.join(shots, 'print.png') });
@@ -3250,7 +3397,7 @@ try {
     const lp = await lctx.newPage();
     const lerr = [];
     watch(lp, lerr);
-    await lp.goto(BASE, { waitUntil: 'networkidle' });
+    await lp.goto(APP, { waitUntil: 'networkidle' });
     const cdpL = await lctx.newCDPSession(lp);
     await cdpL.send('Emulation.setCPUThrottlingRate', { rate: 4 });
     await lp.evaluate(() => {
@@ -3293,7 +3440,7 @@ try {
     try {
     const rerr2 = [];
     watch(r, rerr2);
-    await r.goto(BASE, { waitUntil: 'networkidle' });
+    await r.goto(APP, { waitUntil: 'networkidle' });
     // 기본 꺼짐: 파일을 넣어도 저장하지 않는다
     await r.setInputFiles('#home-input', [fileA, fileB]);
     await until(r, () => document.querySelectorAll('#edit-grid .page-card').length === 7);
@@ -3410,7 +3557,7 @@ try {
       const cp = await cctx.newPage();
       const cerr = [];
       watch(cp, cerr);
-      await cp.goto(`${BASE}/#edit`, { waitUntil: 'networkidle' });
+      await cp.goto(`${APP}#edit`, { waitUntil: 'networkidle' });
       const res = [];
       for (const folded of [false, true]) {
         for (const t of TOOLS6) {
@@ -3457,7 +3604,7 @@ try {
     // 움직임 줄이기: 옮겨가는 효과 없음
     const rctx = await browser.newContext({ viewport: { width: 1920, height: 1000 }, reducedMotion: 'reduce' });
     const rp = await rctx.newPage();
-    await rp.goto(`${BASE}/#img2pdf`, { waitUntil: 'networkidle' });
+    await rp.goto(`${APP}#img2pdf`, { waitUntil: 'networkidle' });
     const rtr = await rp.evaluate(() => [getComputedStyle(document.querySelector('.work-layout')).transitionDuration, getComputedStyle(document.getElementById('img-empty')).transitionDuration]);
     check('움직임 줄이기 설정이면 접고 펼 때 옮겨가는 효과 없음', rtr.every((d) => d === '0s'), rtr.join(' · '));
     await rctx.close();
@@ -3466,7 +3613,7 @@ try {
     const pp = await pctx2.newPage();
     const perr = [];
     watch(pp, perr);
-    await pp.goto(`${BASE}/#edit`, { waitUntil: 'networkidle' });
+    await pp.goto(`${APP}#edit`, { waitUntil: 'networkidle' });
     const ph = [];
     for (const t of TOOLS6) {
       await pp.locator(`#tab-${t}`).tap();
@@ -3490,25 +3637,33 @@ try {
 
     const d = await browser.newContext({ viewport: { width: 1280, height: 820 }, colorScheme: 'light', deviceScaleFactor: 1 });
     const p = await d.newPage();
-    await p.goto(BASE, { waitUntil: 'networkidle' });
+    await p.goto(APP, { waitUntil: 'networkidle' });
     await p.evaluate(() => document.fonts.ready);
     await p.screenshot({ path: path.join(out, 'home.png') });
     await p.screenshot({ path: path.join(out, 'home-7tools.png'), fullPage: true });
     // 도장 만들기(사용법 패널 접고 · 이름 쓴 뒤) · 휴대폰
-    await p.click('.tool-card[data-open="stamp"]');
-    await until(p, () => { const s = window.__pdfWorkshop.stamp(); return s && s.ready && s.cards > 0; }, undefined, { timeout: 15000 });
-    await p.fill('#st-name', '김하늘');
-    await p.waitForTimeout(1500);
-    await p.screenshot({ path: path.join(out, 'stamp-maker.png') });
+    const sp2 = await d.newPage();
+    await sp2.goto(STAMP, { waitUntil: 'networkidle' });
+    await until(sp2, () => { const p = window.__stampPage; const s = p && p.stamp(); return s && s.ready && s.cards > 0; }, undefined, { timeout: 15000 });
+    await sp2.fill('#st-name', '김하늘');
+    await sp2.waitForTimeout(1500);
+    await sp2.screenshot({ path: path.join(out, 'stamp-maker.png') });
+    await sp2.close();
+    const ep = await d.newPage();
+    await ep.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+    await ep.evaluate(() => document.fonts.ready);
+    await ep.screenshot({ path: path.join(out, 'edit-entrance.png') });
+    await ep.close();
     const ms = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2, colorScheme: 'light' });
     const mp = await ms.newPage();
-    await mp.goto(`${BASE}/#stamp`, { waitUntil: 'networkidle' });
-    await until(mp, () => { const s = window.__pdfWorkshop.stamp(); return s && s.ready && s.cards > 0; }, undefined, { timeout: 15000 });
+    await mp.goto(STAMP, { waitUntil: 'networkidle' });
+    await until(mp, () => { const p = window.__stampPage; const s = p && p.stamp(); return s && s.ready && s.cards > 0; }, undefined, { timeout: 15000 });
     await mp.fill('#st-name', '김하늘');
     await mp.waitForTimeout(1500);
     await mp.screenshot({ path: path.join(out, 'stamp-mobile.png') });
+    await mp.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+    await mp.screenshot({ path: path.join(out, 'edit-entrance-mobile.png') });
     await ms.close();
-    await p.click('#logo');
     await p.setInputFiles('#home-input', [sA, sB]);
     await until(p, () => document.querySelectorAll('#edit-grid .page-card canvas').length === 7, undefined, { timeout: 15000 });
     const c = p.locator('#edit-grid .page-card').nth(2);
@@ -3524,7 +3679,7 @@ try {
       const mo = await browser.newContext({ viewport: { width: 390, height: 844 }, colorScheme: scheme, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
       await mo.addInitScript(() => { if (navigator.mediaDevices) navigator.mediaDevices.enumerateDevices = async () => [{ kind: 'videoinput', deviceId: 'cam', label: '', groupId: 'g' }]; });
       const mp = await mo.newPage();
-      await mp.goto(BASE, { waitUntil: 'networkidle' });
+      await mp.goto(APP, { waitUntil: 'networkidle' });
       await mp.evaluate(() => document.fonts.ready);
       if (scheme === 'light') {
         await mp.screenshot({ path: path.join(out, 'mobile-home.png') });
@@ -3558,7 +3713,7 @@ try {
     const sMany = await writePdf('수업자료.pdf', await samplePdf(12, 'Lesson'));
     const wd = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: 'light', deviceScaleFactor: 1 });
     const wp = await wd.newPage();
-    await wp.goto(BASE, { waitUntil: 'networkidle' });
+    await wp.goto(APP, { waitUntil: 'networkidle' });
     await wp.evaluate(() => document.fonts.ready);
     await wp.setInputFiles('#home-input', [sMany]);
     await until(wp, () => document.querySelectorAll('#edit-grid .page-card canvas').length >= 10, undefined, { timeout: 15000 });
@@ -3574,7 +3729,7 @@ try {
     // 1000px: 사용법 서랍
     const nd = await browser.newContext({ viewport: { width: 1000, height: 800 }, colorScheme: 'light', deviceScaleFactor: 1 });
     const np = await nd.newPage();
-    await np.goto(BASE, { waitUntil: 'networkidle' });
+    await np.goto(APP, { waitUntil: 'networkidle' });
     await np.evaluate(() => document.fonts.ready);
     await np.setInputFiles('#home-input', [sMany]);
     await until(np, () => document.querySelectorAll('#edit-grid .page-card canvas').length >= 6, undefined, { timeout: 15000 });
@@ -3586,7 +3741,7 @@ try {
     // 도구별 사용법 패널 · 저장 위치 안내 · 1920px 빈 화면
     const gd = await browser.newContext({ viewport: { width: 1440, height: 1000 }, colorScheme: 'light', deviceScaleFactor: 1 });
     const gp = await gd.newPage();
-    await gp.goto(`${BASE}/#edit`, { waitUntil: 'networkidle' });
+    await gp.goto(`${APP}#edit`, { waitUntil: 'networkidle' });
     await gp.evaluate(() => document.fonts.ready);
     for (const [t, name] of [['img2pdf', 'guide-img2pdf'], ['pdf2img', 'guide-pdf2img'], ['decorate', 'guide-decorate'], ['compress', 'guide-compress'], ['security', 'guide-security']]) {
       await gp.click(`#tab-${t}`);
@@ -3605,7 +3760,7 @@ try {
     await gp.waitForTimeout(3000);
     await gp.screenshot({ path: path.join(out, 'wide-empty.png') });
     // 1920px 여섯 도구 빈 화면(같은 1100px 가운데 규칙)
-    for (const t of ['edit', 'img2pdf', 'pdf2img', 'decorate', 'compress', 'security', 'stamp']) {
+    for (const t of ['edit', 'img2pdf', 'pdf2img', 'decorate', 'compress', 'security']) {
       await gp.click(`#tab-${t}`);
       await gp.evaluate(() => window.scrollTo(0, 0));
       await gp.mouse.move(5, 5);
