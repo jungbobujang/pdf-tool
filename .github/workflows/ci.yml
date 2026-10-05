@@ -1,0 +1,43 @@
+# 검사 — main · ci-* 가지에 올라올 때 GitHub 서버가 돌린다(공개 저장소라 무료).
+# verify(단위 · 실제 파일) + test:ui(화면, Chromium). PDF는 이 검사에서도 서버로 가지 않는다(시험 파일만 브라우저 안에서).
+name: 검사
+
+on:
+  push:
+    branches:
+      - main
+      - 'ci-**'
+      - 'stamp-**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TZ: Asia/Seoul
+      CI: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+      - name: 패키지
+        run: npm ci --no-audit --no-fund
+      - name: 한글 글꼴 · 브라우저
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq fonts-noto-cjk > /dev/null
+          npx playwright install --with-deps chromium
+      - name: verify
+        run: npm run verify
+      - name: test:ui
+        run: npm run test:ui
