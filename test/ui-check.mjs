@@ -478,6 +478,110 @@ try {
     await c.close();
   }
 
+  // ── 2-d. 사진 작업실(/photo): 목적 고르기 → 추천값으로 한 번에 · 위치 정보 지움 · 찍은 날 남김 · [자세히] ──
+  {
+    const P = require('../public/photo/photo-core.js');
+    const { makePhoto } = require('./photo-fixtures.cjs');
+    // 파일 이름은 영문(이 PC의 Chromium은 한글 경로 파일을 고를 때 내용이 비는 일이 있다 — 한글 이름 규칙은 verify가 본다)
+    const pA = path.join(tmp, 'science_1.jpg');
+    const pB = path.join(tmp, 'tall.jpg');
+    const pC = path.join(tmp, 'small.jpg');
+    fs.writeFileSync(pA, makePhoto(2400, 1800, { seed: 1 }));
+    fs.writeFileSync(pB, makePhoto(1500, 2000, { seed: 2, exif: { gps: false } }));
+    fs.writeFileSync(pC, makePhoto(800, 600, { seed: 3 }));
+    const c = await browser.newContext({ viewport: { width: 1280, height: 900 }, acceptDownloads: true, extraHTTPHeaders: { 'X-Real-IP': '198.51.100.91' } });
+    const pg = await c.newPage();
+    const errs = [];
+    watch(pg, errs);
+    const st = () => pg.evaluate(() => window.__photo.state());
+    const unzip = async (dl) => {
+      const zip = await JSZip.loadAsync(fs.readFileSync(await dl.path()));
+      const out = [];
+      for (const name of Object.keys(zip.files).sort()) {
+        const bytes = new Uint8Array(await zip.file(name).async('uint8array'));
+        out.push({ name, size: bytes.length, px: P.imageSize(bytes, 'jpeg'), exif: P.readExif(bytes) });
+      }
+      return out;
+    };
+    try {
+      const gateText = await (await fetch(`${BASE}/photo`)).text();
+      await pg.goto(`${BASE}/photo`);
+      await until(pg, () => !!(window.__photo && window.__photo.ready));
+      const home = await pg.evaluate(() => ({ goals: document.querySelectorAll('.ph-goal').length, soon: document.querySelectorAll('.ph-goal:disabled').length, sw: document.documentElement.scrollWidth }));
+      check('사진 작업실: 통행증 없으면 안내 화면 · 처음 화면 "무엇을 할까요?" 6개(곧 열려요 3)',
+        /스쿨 선생님 전용 도구예요/.test(gateText) && home.goals === 6 && home.soon === 3 && home.sw <= 1280, `목적 ${home.goals} · 곧 ${home.soon}`);
+
+      const [chooser] = await Promise.all([pg.waitForEvent('filechooser'), pg.click('.ph-goal[data-goal="kakao"]')]);
+      await chooser.setFiles([pA, pB, pC]);
+      await until(pg, () => { const s = window.__photo.state(); return s.count === 3 && s.view === 'resize' && !s.busy; }, undefined, { timeout: 30000 });
+      const s1 = await st();
+      const gpsBadges = await pg.locator('.ph-badge.gps').count();
+      check('사진 작업실: [카톡으로 작게] → 사진 3장 · 추천값(긴 변 1280 · 품질 85) · 위치 있는 사진 2장 표시 · 예상이 원본보다 작음',
+        s1.settings.use === 'kakao' && s1.settings.value === 1280 && s1.settings.q === 85 && gpsBadges === 2 && s1.plan.est > 0 && s1.plan.est < s1.plan.src / 3,
+        `${P.sizeText(s1.plan.src)} → 약 ${P.sizeText(s1.plan.est)} · 위치 ${gpsBadges}`);
+
+      let [dl] = await Promise.all([pg.waitForEvent('download', { timeout: 60000 }), pg.click('#ph-run')]);
+      const files = await unzip(dl);
+      const s2 = await st();
+      const okSizes = files.length === 3 && files.every((f) => Math.max(f.px.w, f.px.h) <= 1280) && files.some((f) => f.px.w === 800 && f.px.h === 600);
+      const clean = files.every((f) => !f.exif.gps && !f.exif.device && f.exif.date === '2026:10:05 09:12:33');
+      check('사진 작업실: 이대로 3장 → ZIP 하나 · 긴 변 1280(작은 사진은 그대로) · 위치 · 기종 지움 · 찍은 날 남김 · 이름 {이름}_작게',
+        okSizes && clean && files.map((f) => f.name).join() === 'science_1_작게.jpg,small_작게.jpg,tall_작게.jpg' && dl.suggestedFilename() === '사진_카톡용_3장.zip',
+        `${files.map((f) => `${f.name} ${f.px.w}×${f.px.h} ${P.sizeText(f.size)}`).join(' · ')} · ${dl.suggestedFilename()}`);
+      check('사진 작업실: 결과 줄 · 실제 크기로 예상 바로잡기', s2.lastRun && s2.lastRun.count === 3 && s2.lastRun.out < s2.lastRun.src && s2.fix > 0.3 && s2.fix < 3,
+        `${s2.lastRun && P.sizeText(s2.lastRun.out)} · 보정 ${s2.fix.toFixed(2)}`);
+
+      // [자세히]: 장당 0.12MB 아래 · WEBP 아님 · 이름 {번호}_{찍은 날}
+      await pg.click('#ph-more-btn');
+      await pg.click('#ph-modes button:has-text("장당 MB")');
+      await pg.fill('#ph-value', '0.12');
+      await pg.fill('#ph-name', '{번호}_{찍은 날}');
+      await pg.waitForTimeout(100);
+      const custom = await pg.evaluate(() => document.querySelector('.ph-rec .ph-pill').textContent);
+      [dl] = await Promise.all([pg.waitForEvent('download', { timeout: 60000 }), pg.click('#ph-run')]);
+      const small = await unzip(dl);
+      check('사진 작업실: [자세히] 장당 0.12MB · 이름 {번호}_{찍은 날} → 모두 0.12MB 아래 · 추천 표시가 "직접"으로',
+        custom === '직접' && small.length === 3 && small.every((f) => f.size <= 0.12 * 1024 * 1024) && small.map((f) => f.name).join() === '1_2026-10-05.jpg,2_2026-10-05.jpg,3_2026-10-05.jpg',
+        `${small.map((f) => `${f.name} ${P.sizeText(f.size)}`).join(' · ')} · ${custom}`);
+
+      await pg.click('#ph-compare-btn');
+      await until(pg, () => !document.getElementById('ph-compare').hidden, undefined, { timeout: 20000 });
+      const cap = await pg.textContent('#ph-cmp-b-cap');
+      check('사진 작업실: 원본과 비교(가운데 100%) · 줄인 것의 실제 크기', /줄인 것 \d/.test(cap), cap);
+
+      // 접근성(axe): axe를 끼워 넣으려면 CSP를 비켜 가야 해서 따로 연 창에서(처음 화면 · 작업 화면 + 자세히, 밝게 · 어둡게)
+      const axeBad = [];
+      for (const scheme of ['light', 'dark']) {
+        const ac = await browser.newContext({ viewport: { width: 1280, height: 900 }, bypassCSP: true, colorScheme: scheme, extraHTTPHeaders: { 'X-Real-IP': '198.51.100.92' } });
+        const ap = await ac.newPage();
+        await ap.goto(`${BASE}/photo`);
+        await until(ap, () => !!(window.__photo && window.__photo.ready));
+        await ap.addScriptTag({ path: require.resolve('axe-core/axe.min.js') });
+        const runAxe = () => ap.evaluate(async () => {
+          const res = await window.axe.run(document, { resultTypes: ['violations'] });
+          return res.violations.filter((v) => v.impact === 'critical' || v.impact === 'serious').map((v) => `${v.id}(${v.nodes[0] && v.nodes[0].target.join(' ')})`);
+        });
+        axeBad.push(...(await runAxe()).map((x) => `${scheme} 처음:${x}`));
+        await ap.setInputFiles('#ph-input', [pA, pC]);
+        await until(ap, () => window.__photo.state().count === 2 && !window.__photo.state().busy, undefined, { timeout: 30000 });
+        await ap.click('#ph-more-btn');
+        axeBad.push(...(await runAxe()).map((x) => `${scheme} 작업:${x}`));
+        await ac.close();
+      }
+      check('사진 작업실: 접근성 검사(axe) 처음 · 작업 · 자세히, 밝게 · 어둡게 critical · serious 0개', axeBad.length === 0, axeBad.length ? [...new Set(axeBad)].join(' | ').slice(0, 300) : '0개');
+
+      await pg.setViewportSize({ width: 390, height: 844 });
+      await pg.waitForTimeout(200);
+      const phone = await pg.evaluate(() => ({ sw: document.documentElement.scrollWidth, dock: getComputedStyle(document.getElementById('ph-dock')).display, small: [...document.querySelectorAll('button')].filter((b) => { const r = b.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.height < 36; }).length }));
+      check('사진 작업실: 휴대폰 390px 가로 넘침 없음 · 아래 막대에 [줄이기]', phone.sw <= 390 && phone.dock === 'flex', `scrollWidth ${phone.sw} · 막대 ${phone.dock}`);
+      if (SCREENS) await pg.screenshot({ path: path.join(root, 'docs', 'screens', 'photo-phone.png') });
+      check('사진 작업실: 콘솔 에러 · 실패한 요청 0개', errs.length === 0, errs.length ? errs.join(' | ').slice(0, 300) : '0개');
+    } catch (e) {
+      check('사진 작업실 흐름', false, String((e && e.stack) || e).slice(0, 300));
+    }
+    await c.close();
+  }
+
   // ── 3. 처음 화면에서 PDF + 사진을 함께 넣기 ──
   await page.setInputFiles('#home-input', [fileA, fileB, png]);
   await until(page, () => document.querySelectorAll('#edit-grid .page-card').length === 7);

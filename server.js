@@ -249,6 +249,20 @@ app.get(['/', '/index.html'], (req, res) => {
   res.type('html').send(process.env.NODE_ENV === 'development' ? renderIndex() : INDEX_HTML);
 });
 
+// 사진 작업실(/photo): PDF 작업실과 같은 통행증 · 같은 규칙(CSP). 사진은 브라우저 밖으로 나가지 않는다
+const PHOTO_ASSETS = ['/photo/photo.css', '/photo/photo-core.js', '/photo/photo.js'];
+function renderPhoto() {
+  let html = renderHtml(path.join(PUBLIC, 'photo', 'index.html'));
+  for (const a of PHOTO_ASSETS) html = html.split(`"${a}"`).join(`"${a}?v=${COMMIT}"`);
+  return html;
+}
+const PHOTO_HTML = renderPhoto();
+app.get(['/photo', '/photo/', '/photo/index.html'], (req, res) => {
+  if (!hasPass(req)) return sendGate(res);
+  res.set('Cache-Control', 'no-cache');
+  res.type('html').send(process.env.NODE_ENV === 'development' ? renderPhoto() : PHOTO_HTML);
+});
+
 // 안내 화면의 원본은 채워서만 준다
 app.get('/gate.html', (req, res) => sendGate(res));
 

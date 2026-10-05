@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>사진 작업실</title>
+  <meta name="description" content="사진 크기 줄이기 · 얼굴 가리기 · 자르기 · 모아 붙이기. 학생 사진이 컴퓨터 밖으로 안 나가요.">
+  <meta name="app-version" content="">
+  <meta name="theme-color" content="#0B5E4A">
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="/icons/logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/vendor/pretendard/pretendardvariable.min.css">
+  <link rel="stylesheet" href="/photo/photo.css">
+</head>
+<body>
+  <noscript><p class="ph-noscript">자바스크립트가 꺼져 있어요. 엣지 · 크롬 · 웨일로 열어 주세요.</p></noscript>
+
+  <header class="ph-top">
+    <a class="ph-brand" href="/photo" id="ph-home-link">
+      <span class="ph-logo" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-8 8"/></svg></span>
+      <span class="ph-brand-text"><strong>사진 작업실</strong><span>스쿨 오리지널</span></span>
+    </a>
+    <span class="ph-safe" id="ph-safe">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg>
+      <span>사진은 이 컴퓨터 밖으로 안 나가요</span>
+    </span>
+    <span class="ph-grow"></span>
+    <div class="ph-top-acts">
+      <button type="button" class="ph-btn" id="ph-add">사진 더 넣기</button>
+      <a class="ph-btn ph-link" href="/">PDF 작업실</a>
+    </div>
+  </header>
+
+  <input type="file" id="ph-input" accept="image/*,.heic,.heif" multiple hidden>
+  <input type="file" id="ph-folder" webkitdirectory multiple hidden>
+
+  <!-- 처음 화면: 사진 넣기 + 무엇을 할까요? -->
+  <main class="ph-home" id="ph-home">
+    <section class="ph-drop" id="ph-drop" aria-labelledby="ph-drop-h">
+      <span class="ph-drop-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg></span>
+      <h1 id="ph-drop-h"><span class="ph-wide">사진을 여기에 끌어다 놓으세요</span><span class="ph-narrow">사진을 골라 넣어 주세요</span></h1>
+      <p><span class="ph-wide">여러 장 · 폴더째 · Ctrl+V 붙여 넣기 · </span>아이폰 사진(HEIC)도 그대로</p>
+      <div class="ph-row">
+        <button type="button" class="ph-btn primary big" id="ph-pick">사진 고르기</button>
+        <button type="button" class="ph-btn big ph-wide" id="ph-pick-folder">폴더째 넣기</button>
+      </div>
+      <p class="ph-safe-line">학생 사진이 이 컴퓨터 밖으로 안 나가요 — 올리는 곳이 없어요</p>
+    </section>
+
+    <section class="ph-goals" aria-labelledby="ph-goals-h">
+      <div class="ph-goals-head">
+        <h2 id="ph-goals-h">무엇을 할까요?</h2>
+        <span>고르면 추천 설정이 들어가 있어요. 바꾸고 싶으면 그 화면의 [자세히]</span>
+      </div>
+      <ul class="ph-goal-list" id="ph-goal-list"></ul>
+    </section>
+
+    <section class="ph-last" id="ph-last" hidden>
+      <strong>지난번에 쓴 설정</strong>
+      <span id="ph-last-line"></span>
+      <span class="ph-grow"></span>
+      <button type="button" class="ph-btn" id="ph-last-go">이 설정으로 시작</button>
+      <button type="button" class="ph-btn ghost" id="ph-last-forget">잊기</button>
+    </section>
+    <p class="ph-note" id="ph-memory-note">설정은 이 브라우저에만 기억해요.</p>
+  </main>
+
+  <!-- 작업 화면 -->
+  <div class="ph-work" id="ph-work" hidden>
+    <nav class="ph-rail" aria-label="도구">
+      <button type="button" class="ph-rail-item" data-go="home">처음 화면</button>
+      <button type="button" class="ph-rail-item" data-go="resize" aria-current="page">크기 줄이기</button>
+      <button type="button" class="ph-rail-item" data-go="crop" data-soon="1" aria-disabled="true">자르기 · 돌리기 <span class="ph-soon">곧</span></button>
+      <button type="button" class="ph-rail-item" data-go="face" data-soon="1" aria-disabled="true">얼굴 가리기 <span class="ph-soon">곧</span></button>
+      <button type="button" class="ph-rail-item" data-go="collage" data-soon="1" aria-disabled="true">모아 붙이기 <span class="ph-soon">곧</span></button>
+    </nav>
+
+    <main class="ph-main" id="ph-main">
+      <div class="ph-main-head">
+        <h1 id="ph-count">사진 0장</h1>
+        <div class="ph-row">
+          <button type="button" class="ph-btn" id="ph-all">모두 고르기</button>
+          <button type="button" class="ph-btn" id="ph-remove">고른 것 빼기</button>
+        </div>
+      </div>
+      <ul class="ph-grid" id="ph-grid" aria-label="넣은 사진 (누르면 고르기 · 빼기)"></ul>
+      <p class="ph-note">사진을 누르면 고르기 · 빼기 · Ctrl+V로 붙여 넣기 · 끌어다 놓아도 돼요</p>
+    </main>
+
+    <aside class="ph-panel" aria-labelledby="ph-panel-h">
+      <h2 id="ph-panel-h">크기 줄이기</h2>
+
+      <section class="ph-rec" aria-label="추천 설정">
+        <div class="ph-rec-head"><span class="ph-pill">추천</span><strong id="ph-rec-title"></strong></div>
+        <span class="ph-rec-line" id="ph-rec-line"></span>
+        <div class="ph-rec-total"><span id="ph-rec-count"></span><strong id="ph-rec-sum"></strong></div>
+        <div class="ph-bar" aria-hidden="true"><span id="ph-rec-bar"></span></div>
+        <button type="button" class="ph-btn primary big wide" id="ph-run">이대로 줄이기</button>
+        <span class="ph-rec-sub">한 장이면 바로 저장, 여러 장이면 ZIP 하나 · 원본은 그대로</span>
+        <p class="ph-status" id="ph-status" role="status" aria-live="polite"></p>
+      </section>
+
+      <div class="ph-uses">
+        <span class="ph-label">다른 곳에 쓸 거예요</span>
+        <div class="ph-chips" id="ph-uses" role="group" aria-label="쓸 곳"></div>
+      </div>
+
+      <button type="button" class="ph-more-btn" id="ph-more-btn" aria-expanded="false" aria-controls="ph-more">
+        <span>자세히 설정 <small>· 크기 · 품질 · 형식 · 이름 · 비교</small></span>
+        <span id="ph-more-mark">열기</span>
+      </button>
+      <div class="ph-more" id="ph-more" hidden>
+        <div class="ph-field">
+          <span class="ph-label">무엇으로 맞출까요</span>
+          <div class="ph-seg" id="ph-modes" role="group" aria-label="맞추는 기준"></div>
+          <label class="ph-num" id="ph-value-row"><input type="number" id="ph-value" inputmode="decimal"><span id="ph-value-unit"></span></label>
+        </div>
+        <label class="ph-field" id="ph-q-row">
+          <span class="ph-label-row"><strong>품질</strong><span id="ph-q-text"></span></span>
+          <input type="range" id="ph-q" min="40" max="100" step="1">
+          <span class="ph-hint" id="ph-q-warn">70 아래로 내리면 칠판 글씨 · 활동지 글자가 번져 보여요</span>
+        </label>
+        <fieldset class="ph-field">
+          <legend class="ph-label">형식</legend>
+          <div class="ph-seg" id="ph-fmts" role="group" aria-label="형식"></div>
+          <span class="ph-hint">WEBP는 더 작지만 한글 · 오래된 PC에서 안 열릴 수 있어요</span>
+        </fieldset>
+        <div class="ph-field">
+          <span class="ph-label">사진 다듬기</span>
+          <label class="ph-check"><input type="checkbox" id="ph-sharpen"> 줄인 뒤 살짝 선명하게</label>
+          <label class="ph-check"><input type="checkbox" id="ph-noup"> 작은 사진은 키우지 않기</label>
+          <label class="ph-check"><input type="checkbox" id="ph-keeppng"> 투명한 PNG는 PNG로 남기기</label>
+          <span class="ph-hint">휴대폰 사진 방향은 늘 바로 세워요</span>
+        </div>
+        <div class="ph-field">
+          <span class="ph-label">사진 속 정보</span>
+          <p class="ph-fixed">위치(GPS) · 휴대폰 기종 · 작은 미리보기는 늘 지워요 <span id="ph-gps-count"></span></p>
+          <label class="ph-check"><input type="checkbox" id="ph-keepdate"> 찍은 날짜는 남기기 <small>(JPG로 저장할 때)</small></label>
+        </div>
+        <div class="ph-field">
+          <label class="ph-label" for="ph-name">파일 이름</label>
+          <input type="text" id="ph-name" autocomplete="off" spellcheck="false">
+          <div class="ph-row tight">
+            <button type="button" class="ph-token" data-token="{이름}">+ {이름}</button>
+            <button type="button" class="ph-token" data-token="{번호}">+ {번호}</button>
+            <button type="button" class="ph-token" data-token="{찍은 날}">+ {찍은 날}</button>
+          </div>
+          <span class="ph-hint" id="ph-name-ex"></span>
+        </div>
+        <div class="ph-field">
+          <span class="ph-label-row"><strong>원본과 비교</strong><span>100% 확대 · 가운데</span></span>
+          <button type="button" class="ph-btn" id="ph-compare-btn">고른 첫 사진으로 비교해 보기</button>
+          <div class="ph-compare" id="ph-compare" hidden>
+            <figure><canvas id="ph-cmp-a" width="240" height="240"></canvas><figcaption id="ph-cmp-a-cap">원본</figcaption></figure>
+            <figure><canvas id="ph-cmp-b" width="240" height="240"></canvas><figcaption id="ph-cmp-b-cap">줄인 것</figcaption></figure>
+          </div>
+        </div>
+        <div class="ph-row">
+          <button type="button" class="ph-btn" id="ph-remember">이 설정 기억하기</button>
+          <button type="button" class="ph-btn ghost" id="ph-reset">추천값으로</button>
+        </div>
+      </div>
+    </aside>
+
+    <div class="ph-dock" id="ph-dock">
+      <span id="ph-dock-sum"></span>
+      <button type="button" class="ph-btn primary" id="ph-dock-run">줄이기</button>
+    </div>
+  </div>
+
+  <div class="ph-toast" id="ph-toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="/photo/photo-core.js"></script>
+  <script src="/photo/photo.js"></script>
+</body>
+</html>

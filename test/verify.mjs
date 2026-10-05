@@ -942,6 +942,47 @@ M._resolveFilename = function (req, ...a) { if (/^(@playwright\\/test|playwright
     `${tagA === gate.ownerTag('sub-a') ? '같음' : '다름✗'} · ${tagA !== tagB ? '사람마다 다름' : '같음✗'}`);
 }
 
+// ── 사진 작업실 (public/photo/photo-core.js — 화면 없이 계산만) ──
+{
+  const P = require('../public/photo/photo-core.js');
+  const { makePhoto } = require('./photo-fixtures.cjs');
+  const kakao = P.defaultSettings('kakao');
+  const f1 = P.fitSize(4032, 3024, kakao);
+  const f2 = P.fitSize(3024, 4032, kakao);
+  const f3 = P.fitSize(800, 600, kakao);
+  const f4 = P.fitSize(800, 600, { ...kakao, noUpscale: false });
+  const f5 = P.fitSize(4032, 3024, { ...kakao, mode: 'width', value: 1000 });
+  const f6 = P.fitSize(4032, 3024, P.defaultSettings('jpg'));
+  check('사진 작업실: 긴 변 · 가로 맞추기 · 작은 사진은 키우지 않음 · 크기 그대로',
+    f1.w === 1280 && f1.h === 960 && f2.w === 960 && f2.h === 1280 && f3.w === 800 && f4.w === 1280 && f5.w === 1000 && f5.h === 750 && f6.w === 4032,
+    [f1, f2, f3, f4, f5, f6].map((f) => `${f.w}×${f.h}`).join(' · '));
+  const budgets = P.splitBudget(10 * 1024 * 1024, [12e6, 12e6, 0.48e6]);
+  const e85 = P.estimateBytes(1280, 960, 85);
+  const e70 = P.estimateBytes(1280, 960, 70);
+  check('사진 작업실: 합쳐 10MB는 화소에 비례해 나눔 · 품질이 낮으면 예상도 작음',
+    budgets.reduce((a, b) => a + b, 0) <= 10 * 1024 * 1024 + 1 && budgets[0] > budgets[2] * 20 && e70 < e85 && e85 > 150000 && e85 < 400000,
+    `${budgets.map((b) => P.sizeText(b)).join(' · ')} · q85 ${P.sizeText(e85)} q70 ${P.sizeText(e70)}`);
+  const n1 = P.fileName('{이름}_작게', { name: 'IMG_2041.HEIC', ext: 'jpg' });
+  const n2 = P.fileName('{번호}_{찍은 날}', { name: 'a.jpg', index: 2, count: 12, date: '2026-10-05', ext: 'webp' });
+  const n3 = P.fileName('a/b:c*?', { name: 'x.jpg', ext: 'jpg' });
+  const n4 = P.uniqueNames(['a.jpg', 'A.jpg', 'a.jpg']);
+  check('사진 작업실: 파일 이름 규칙 {이름} · {번호}(0 채움) · {찍은 날} · 못 쓰는 글자 · 겹치면 (2)',
+    n1 === 'IMG_2041_작게.jpg' && n2 === '03_2026-10-05.webp' && n3 === 'a_b_c__.jpg' && n4.join() === 'a.jpg,A (2).jpg,a (3).jpg',
+    [n1, n2, n3, n4.join(' ')].join(' | '));
+  const raw = new Uint8Array(makePhoto(64, 48, { exif: { gps: true } }));
+  const info = P.readExif(raw);
+  const plain = new Uint8Array(makePhoto(64, 48, { exif: false }));
+  const dated = P.withExifDate(plain, info.date);
+  const back = P.readExif(dated);
+  check('사진 작업실: 사진 정보 읽기(위치 · 기종 · 찍은 날) · 저장할 때는 찍은 날만 다시 넣음',
+    info.gps && info.device && info.date === '2026:10:05 09:12:33' && P.imageSize(raw, 'jpeg').w === 64 &&
+    back.date === info.date && !back.gps && !back.device && P.imageSize(dated, 'jpeg').h === 48 && P.detectKind(dated) === 'jpeg' && P.dateText(info.date) === '2026-10-05',
+    `원본 위치 ${info.gps} · 기종 ${info.device} → 저장본 위치 ${back.gps} · 기종 ${back.device} · 날짜 ${back.date}`);
+  check('사진 작업실: 종류 알아보기(HEIC는 이름 · 머리 둘 다)',
+    P.detectKind(new Uint8Array([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63])) === 'heic' && P.detectKind(new Uint8Array(4), 'IMG_1.HEIC') === 'heic' &&
+    P.detectKind(new Uint8Array([0x89, 0x50, 0x4e, 0x47])) === 'png' && P.detectKind(new Uint8Array(4), 'a.txt') === '');
+}
+
 // ── 결과 표 ─────────────────────────────────────────
 const width = (s) => [...s].reduce((n, ch) => n + (/[ᄀ-ᇿ㄰-㆏가-힣]/.test(ch) ? 2 : 1), 0);
 const padR = (s, n) => s + ' '.repeat(Math.max(0, n - width(s)));
