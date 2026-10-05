@@ -753,6 +753,99 @@ const { colorSamplesPdf } = await import('./node-codec.mjs');
   check('링크 · 주석 세기(Popup 제외, 없는 쪽은 0)', a.links === 2 && a.notes === 1 && b.links === 0 && b.notes === 0, `1쪽 링크 ${a.links} · 주석 ${a.notes} / 2쪽 ${b.links} · ${b.notes}`);
 }
 
+// ── 도장 만들기 (public/stamp/stamp-core.js — 화면 없이 계산만) ──
+{
+  const S = require('../public/stamp/stamp-core.js');
+  const fs = require('node:fs');
+  const zlibPng = (w, h) => {
+    // 투명 w×h PNG (IHDR · IDAT · IEND)
+    const crc = (b) => S.crc32(b);
+    const chunk = (type, data) => {
+      const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+      const td = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+      const c = Buffer.alloc(4); c.writeUInt32BE(crc(td));
+      return Buffer.concat([len, td, c]);
+    };
+    const ihdr = Buffer.alloc(13);
+    ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 6;
+    const raw = Buffer.alloc((w * 4 + 1) * h);
+    return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+  };
+  await step('도장: PNG에 dpi 적기(pHYs) · 다시 적으면 바뀜 · CRC', async () => {
+    const png = zlibPng(4, 4);
+    const a = S.pngWithDpi(png, 600);
+    const b = S.pngWithDpi(a, 300);
+    const has = (u) => Buffer.from(u).includes(Buffer.from('pHYs'));
+    const crcOk = (() => { const i = Buffer.from(a).indexOf('pHYs'); const len = Buffer.from(a).readUInt32BE(i - 4); return Buffer.from(a).readUInt32BE(i + 4 + len) === S.crc32(a.subarray(i, i + 4 + len)); })();
+    const count = (u) => Buffer.from(u).toString('latin1').split('pHYs').length - 1;
+    check('도장: PNG에 dpi 적기(pHYs) · 다시 적으면 바뀜 · CRC', S.pngDpi(png) === null && S.pngDpi(a) === 600 && S.pngDpi(b) === 300 && has(a) && count(b) === 1 && crcOk && S.crc32(Buffer.from('123456789')) === 0xcbf43926,
+      `없음 → ${S.pngDpi(a)} → ${S.pngDpi(b)}dpi · pHYs ${count(b)}개 · CRC ${crcOk ? '맞음' : '틀림'}`);
+  });
+  await step('도장: 새길 글자(4자까지 · 인 붙이기 · 한자 · 네모 세 글자)', async () => {
+    const st = { ...S.defaultState(new Date(2026, 9, 5)), name: '김하늘별이' };
+    const g1 = S.glyphs(st).join('');
+    const g2 = S.glyphs({ ...st, name: '김하늘', seal: true }).join('');
+    const g3 = S.glyphs({ ...st, name: '김하늘', mode: 'hanja' }).join('');
+    const g4 = S.glyphs({ ...st, name: '김하늘', mode: 'hanja', picks: { '1하': '夏', '2늘': null } }).join('');
+    const sq = S.cellGlyphs({ ...st, name: '김하늘' }, 'square').gl.join('');
+    const sqLong = S.cellGlyphs({ ...st, name: '김하늘', sq3: 'long' }, 'square');
+    const circ = S.cellGlyphs({ ...st, name: '김하늘' }, 'circle').gl.join('');
+    const ok = g1 === '김하늘별' && g2 === '김하늘인' && g3 === '金河늘' && g4 === '金夏늘' && sq === '김하늘인' && sqLong.long && sqLong.gl.length === 3 && circ === '김하늘' && S.syllables({ name: 'Kim 김!' }).join('') === '김';
+    check('도장: 새길 글자(4자까지 · 인 붙이기 · 한자 · 네모 세 글자)', ok, `${g1} · ${g2} · ${g3} · ${g4} · 네모 ${sq}`);
+  });
+  await step('도장: 모양 계산(칸이 테두리 안 · 글자 상자가 칸 안 · 같은 크기)', async () => {
+    const measure = () => ({ w: 90, h: 92, cx: 45, cy: -36 });
+    const bad = [];
+    for (const shape of ['circle', 'oval', 'square', 'round']) {
+      for (const name of ['김', '김하', '김하늘', '남궁하늘']) {
+        for (const border of ['single', 'double']) {
+          for (const style of ['yang', 'eum']) {
+            const st = { ...S.defaultState(new Date()), name };
+            const d = S.design(st, { shape, style, font: 'serif', border, key: 'k' }, measure);
+            const texts = d.items.filter((it) => it.t === 'text');
+            const n = S.cellGlyphs(st, shape).gl.length;
+            if (texts.length !== n) bad.push(`${shape}/${name}/${border}: 글자 ${texts.length}≠${n}`);
+            for (const t of texts) {
+              const x0 = t.tx; const x1 = t.tx + 90 * t.sx; // 글자 상자: 왼쪽 0 ~ 오른쪽 90, 위 82 ~ 아래 10(기준선)
+              const y0 = t.ty + (-36 - 46) * t.sy; const y1 = t.ty + (-36 + 46) * t.sy;
+              if (x0 < 4 || x1 > d.W - 4 || y0 < 4 || y1 > 196) bad.push(`${shape}/${name}: 글자가 테두리 밖`);
+            }
+            const sizes = new Set(texts.map((t) => t.sx.toFixed(3)));
+            if (sizes.size > 1) bad.push(`${shape}/${name}: 글자 크기 ${sizes.size}가지`);
+            if (style === 'eum' && !texts.every((t) => t.paper)) bad.push(`${shape}: 음각 글자가 파이지 않음`);
+          }
+        }
+      }
+    }
+    const date = S.design({ ...S.defaultState(new Date()), kind: 'date', dTop: '교무부', dBottom: '박정보' }, { shape: 'circle', style: 'yang', font: 'gothic', border: 'single' }, measure);
+    const dt = date.items.filter((it) => it.t === 'text').map((t) => t.s);
+    check('도장: 모양 계산(칸이 테두리 안 · 글자 상자가 칸 안 · 같은 크기)', bad.length === 0 && dt.length === 3 && dt[0] === '교무부' && /^\d{4}\.\d{2}\.\d{2}$/.test(dt[1]) && date.items.filter((it) => it.t === 'line').length === 2,
+      bad.length ? bad.slice(0, 4).join(' · ') : `4모양 × 1~4자 × 한 줄 · 두 줄 × 양각 · 음각 모두 안쪽 · 날짜 도장 ${dt.join(' / ')}`);
+  });
+  await step('도장: 저장 크기 · 보관값 되살리기(모르는 값은 버림) · 파일 이름', async () => {
+    const st = S.defaultState(new Date());
+    const px = S.pixelSize({ ...st, size: 15, dpi: 600 }, 200);
+    const pxOval = S.pixelSize({ ...st, size: 15, dpi: 300 }, 150);
+    const back = S.restoreState({ ...S.pickState({ ...st, name: '김하늘', font: 'gugi', size: 18 }), font: 'evil', size: 999, ink: 'custom', inkHex: 'red;x', picks: { '0김': '金', bad: 'x' }, extra: 1 });
+    const ok = px.w === 354 && px.h === 354 && pxOval.w === 133 && pxOval.h === 177 && back.name === '김하늘' && back.font === 'serif' && back.size === 60 && back.inkHex === '#a0522d' &&
+      back.picks['0김'] === '金' && !('bad' in back.picks) && !('extra' in back) && S.fileSafe('김/하:늘*') === '김하늘' && S.fileSafe('') === '도장';
+    check('도장: 저장 크기 · 보관값 되살리기(모르는 값은 버림) · 파일 이름', ok, `15mm 600dpi ${px.w}px · 타원 300dpi ${pxOval.w}×${pxOval.h} · 되살림 ${back.font}/${back.size}mm`);
+  });
+  await step('도장: 글꼴 18개 목록 · 파일 · 글자 범위(한글 전부 · 한자 글꼴)', async () => {
+    const data = JSON.parse(fs.readFileSync(new URL('../public/stamp/fonts.json', import.meta.url), 'utf8'));
+    const has = S.coverage(data);
+    const faces = S.fontFaces(data, '/vendor/stamp-fonts');
+    const missingFiles = faces.filter((f) => !fs.existsSync(new URL(`../public${f.url}`, import.meta.url)));
+    const ids = S.FONTS.map((f) => f.id);
+    const hanjaFonts = S.FONTS.filter((f) => f.hanja).map((f) => f.id);
+    const ok = ids.every((id) => data.fonts[id]) && Object.keys(data.fonts).length === 18 && missingFiles.length === 0 &&
+      ['serif', 'gothic', 'nanum'].every((id) => has(id, '김하늘똠쌰뷁')) && hanjaFonts.every((id) => has(id, '金河')) && !has('gugi', '金河') &&
+      faces.every((f) => !f.range || /^U\+[0-9a-f]/.test(f.range));
+    const v = (await import('node:child_process')).spawnSync(process.execPath, ['scripts/vendor-stamp-fonts.mjs', '--check'], { cwd: new URL('..', import.meta.url), encoding: 'utf8' });
+    check('도장: 글꼴 18개 목록 · 파일 · 글자 범위(한글 전부 · 한자 글꼴)', ok && v.status === 0, `${ids.length}개 · 조각 ${faces.length}개 · 없는 파일 ${missingFiles.length} · ${(v.stdout || v.stderr).trim()}`);
+  });
+}
+
 // ── 만들어 둔 페이지가 원본과 맞는지 (사용한 라이브러리 · 새 소식) ──
 {
   const { spawnSync } = await import('node:child_process');

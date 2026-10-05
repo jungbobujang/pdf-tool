@@ -75,14 +75,31 @@ try {
   process.exit(0);
 }
 
+// 도장 만들기 글꼴: 저장소에 넣은 woff2(scripts/vendor-stamp-fonts.mjs)와 라이선스 원문
+let fonts = [];
+try {
+  const data = JSON.parse(fs.readFileSync(path.join(root, 'public', 'stamp', 'fonts.json'), 'utf8'));
+  fonts = Object.values(data.fonts).map((f) => ({
+    name: f.pkg,
+    version: f.version,
+    license: f.license || 'OFL-1.1',
+    url: `https://fontsource.org/fonts/${f.dir}`,
+    text: (() => { try { return fs.readFileSync(path.join(root, 'public', 'vendor', 'stamp-fonts', f.dir, 'LICENSE.txt'), 'utf8').trim(); } catch { return ''; } })(),
+    use: `도장 만들기 글꼴 — ${f.family} ${f.weight}`,
+    dev: false,
+    font: true,
+    licenseUrl: `/vendor/stamp-fonts/${f.dir}/LICENSE.txt`,
+  }));
+} catch { /* 도장 글꼴이 아직 없으면 이 칸 없이 */ }
+
 if (process.argv.includes('--check')) {
   const html = fs.existsSync(OUT) ? fs.readFileSync(OUT, 'utf8') : '';
-  const missing = list.filter((l) => !html.includes(`data-lib="${esc(l.name)}@${esc(l.version)}"`)).map((l) => `${l.name}@${l.version}`);
+  const missing = [...list, ...fonts].filter((l) => !html.includes(`data-lib="${esc(l.name)}@${esc(l.version)}"`)).map((l) => `${l.name}@${l.version}`);
   if (missing.length) {
     console.error(`사용한 라이브러리 페이지가 package.json과 달라요: ${missing.join(', ')} → node scripts/gen-licenses.mjs`);
     process.exit(1);
   }
-  console.log(`사용한 라이브러리 페이지 OK (${list.length}개)`);
+  console.log(`사용한 라이브러리 페이지 OK (${list.length}개 + 도장 글꼴 ${fonts.length}개)`);
   process.exit(0);
 }
 
@@ -92,7 +109,7 @@ const item = (l) => `      <li class="lib" data-lib="${esc(l.name)}@${esc(l.vers
           <span class="lib-license">${esc(l.license)}</span>
         </div>
         ${l.use ? `<p class="lib-use">${esc(l.use)}</p>` : ''}
-        <p class="lib-links">${l.url ? `<a href="${esc(l.url)}" rel="noopener noreferrer" target="_blank">저장소</a>` : ''}${l.url && /github\.com/.test(l.url) ? ` · <a href="${esc(l.url)}/blob/HEAD/${esc(path.basename(licenseFile(path.join(root, 'node_modules', ...l.name.split('/'))) || 'LICENSE'))}" rel="noopener noreferrer" target="_blank">라이선스 원문(저장소)</a>` : ''}</p>
+        <p class="lib-links">${l.url ? `<a href="${esc(l.url)}" rel="noopener noreferrer" target="_blank">${l.font ? '글꼴 소개' : '저장소'}</a>` : ''}${l.url && /github\.com/.test(l.url) ? ` · <a href="${esc(l.url)}/blob/HEAD/${esc(path.basename(licenseFile(path.join(root, 'node_modules', ...l.name.split('/'))) || 'LICENSE'))}" rel="noopener noreferrer" target="_blank">라이선스 원문(저장소)</a>` : ''}${l.licenseUrl ? ` · <a href="${esc(l.licenseUrl)}">라이선스 원문</a>` : ''}</p>
         ${l.text ? `<details><summary>라이선스 전문 보기</summary><pre>${esc(l.text)}</pre></details>` : ''}
       </li>`;
 
@@ -132,7 +149,14 @@ const html = `<!doctype html>
 ${list.filter((l) => !l.dev).map(item).join('\n')}
       </ul>
     </section>
-    <section class="doc-card" aria-labelledby="l2">
+    ${fonts.length ? `<section class="doc-card" aria-labelledby="l3">
+      <h2 id="l3">도장 만들기 글꼴 (${fonts.length}개)</h2>
+      <p class="lib-use">모두 SIL Open Font License 1.1이에요. Fontsource 패키지에서 쓰는 굵기 하나만 이 사이트에 넣어 두고, 바깥 글꼴 서버(구글 글꼴 등)는 쓰지 않아요.</p>
+      <ul class="lib-list">
+${fonts.map(item).join('\n')}
+      </ul>
+    </section>
+    ` : ''}<section class="doc-card" aria-labelledby="l2">
       <h2 id="l2">개발할 때만 쓰는 것 (${list.filter((l) => l.dev).length}개)</h2>
       <ul class="lib-list">
 ${list.filter((l) => l.dev).map(item).join('\n')}
@@ -159,4 +183,4 @@ ${list.filter((l) => l.dev).map(item).join('\n')}
 `;
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
 fs.writeFileSync(OUT, html);
-console.log(`사용한 라이브러리 페이지: ${outArg ? OUT : path.relative(root, OUT)} (${list.length}개)`);
+console.log(`사용한 라이브러리 페이지: ${outArg ? OUT : path.relative(root, OUT)} (${list.length}개 + 도장 글꼴 ${fonts.length}개)`);

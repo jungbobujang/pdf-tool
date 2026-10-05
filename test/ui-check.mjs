@@ -182,7 +182,7 @@ try {
     };
   });
   check('처음 화면: 제목이 보임', home.tw > 200 && home.th > 20 && home.work, `"${home.title}" ${home.tw}×${home.th}, 작업 화면 숨김`);
-  check('처음 화면: 도구 카드 6개가 보임', home.cards.length === 6 && home.cards.every((c) => c.w > 100 && c.h > 100 && c.bottom <= home.vh),
+  check('처음 화면: 도구 카드 7개가 보임', home.cards.length === 7 && home.cards.every((c) => c.w > 100 && c.h > 100 && c.bottom <= home.vh),
     home.cards.map((c) => `${c.t}(${c.w}×${c.h})`).join(', '));
   check('Pretendard 글꼴 적용', home.font, home.font ? '"Pretendard Variable" 로드됨' : '대체 글꼴 사용 중');
 
@@ -209,7 +209,7 @@ try {
     `처음 화면 "${homeVer.text}", 사이드바 "${sideVer.text}", ?v=${ver.commit} ${busted ? '적용' : '없음'}`);
 
   // ── 2. 카드 → 작업 화면, 로고 → 처음 화면 ──
-  const tools = ['edit', 'img2pdf', 'pdf2img', 'decorate', 'compress', 'security'];
+  const tools = ['edit', 'img2pdf', 'pdf2img', 'decorate', 'compress', 'security', 'stamp'];
   const nav = [];
   for (const t of tools) {
     await page.click(`.tool-card[data-open="${t}"]`);
@@ -238,9 +238,110 @@ try {
     const r = e.getBoundingClientRect();
     return r.width > 100 && r.height > 30;
   }));
-  check('사이드바 도구 6개 · 화살표 키 이동', tabRects.length === 6 && tabRects.every(Boolean) && kb.sel === 'pdf2img' && kb.focus === 'tab-pdf2img',
+  check('사이드바 도구 7개 · 화살표 키 이동', tabRects.length === 7 && tabRects.every(Boolean) && kb.sel === 'pdf2img' && kb.focus === 'tab-pdf2img',
     `↓↓ → ${kb.sel}`);
   await page.click('#logo');
+
+  // ── 2-b. 도장 만들기: 예시 → 이름 · 한자 · 단축키 · PNG(실제 크기 dpi) · 복사 · 보관 · 날짜 도장 · PDF에 찍기 ──
+  {
+    const StampCore = require('../public/stamp/stamp-core.js');
+    const sctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, acceptDownloads: true, colorScheme: 'light', permissions: ['clipboard-read', 'clipboard-write'] });
+    const sp = await sctx.newPage();
+    const serr = [];
+    watch(sp, serr);
+    const toasts = () => sp.evaluate(() => document.getElementById('toasts').textContent);
+    const stState = () => sp.evaluate(() => window.__pdfWorkshop.stamp());
+    try {
+      await sp.goto(BASE, { waitUntil: 'networkidle' });
+      await sp.click('.tool-card[data-open="stamp"]');
+      await until(sp, () => { const s = window.__pdfWorkshop.stamp(); return s && s.ready && s.cards > 0; }, undefined, { timeout: 15000 });
+      const s0 = await stState();
+      await sp.click('[data-st-act="png"]');
+      check('도장 만들기: 빈 이름은 예시로 보이고 저장은 막힘(이름을 먼저)', s0.sample === true && s0.cards === 12 && /이름을 먼저/.test(await toasts()),
+        `예시 ${s0.sample} · 추천 ${s0.cards}개`);
+
+      await sp.fill('#st-name', '김하늘');
+      await sp.click('#st-mode-hanja');
+      await until(sp, () => /金河늘/.test(document.getElementById('st-big').getAttribute('aria-label')));
+      const chips = await sp.locator('#st-hanja .st-chip').count();
+      await sp.click('#st-mode-hangul');
+      await sp.locator('#st-big').click();
+      await sp.keyboard.press('2');
+      const oval = (await stState()).shape;
+      await sp.keyboard.press('1');
+      check('도장 만들기: 한자 고르기(金河늘) · 단축키 2 → 타원', chips >= 4 && oval === 'oval', `한자 칩 ${chips}개 · 2 → ${oval}`);
+
+      const [dl] = await Promise.all([sp.waitForEvent('download'), sp.click('[data-st-act="png"]')]);
+      const png = fs.readFileSync(await dl.path());
+      const pw2 = png.readUInt32BE(16);
+      const ph2 = png.readUInt32BE(20);
+      const ink = await sp.evaluate(async (b64) => {
+        const bmp = await createImageBitmap(new Blob([Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))]));
+        const c = document.createElement('canvas');
+        c.width = bmp.width; c.height = bmp.height;
+        const x = c.getContext('2d');
+        x.drawImage(bmp, 0, 0);
+        const d = x.getImageData(0, 0, c.width, c.height).data;
+        let n = 0;
+        for (let i = 3; i < d.length; i += 4) if (d[i] > 128) n++;
+        return { corner: d[3], ink: n / (d.length / 4) };
+      }, png.toString('base64'));
+      check('도장 만들기: PNG 15mm · 600dpi = 354px, 안에 600dpi 기록 · 투명 바탕 · 파일 이름',
+        pw2 === 354 && ph2 === 354 && StampCore.pngDpi(png) === 600 && ink.corner === 0 && ink.ink > 0.05 && ink.ink < 0.6 && dl.suggestedFilename() === '도장_김하늘_15mm.png',
+        `${pw2}×${ph2} · ${StampCore.pngDpi(png)}dpi · 잉크 ${(ink.ink * 100).toFixed(0)}% · ${dl.suggestedFilename()}`);
+
+      await sp.click('[data-st-act="copy"]');
+      let clip = [];
+      for (let i = 0; i < 30 && !clip.includes('image/png'); i++) {
+        await sp.waitForTimeout(100);
+        clip = await sp.evaluate(async () => { try { return (await navigator.clipboard.read({ unsanitized: ['text/html'] })).flatMap((x) => x.types); } catch (e) { return [String(e)]; } });
+      }
+      check('도장 만들기: 복사하면 클립보드에 그림(PNG) + 한글 · 워드용 HTML', clip.includes('image/png') && clip.includes('text/html'), clip.join(', '));
+
+      await sp.click('[data-st-act="keep"]');
+      await until(sp, () => document.querySelectorAll('#st-shelf li').length === 1);
+      await sp.click('[data-st-act="keep"]');
+      await sp.waitForTimeout(200);
+      const again = /이미 내 도장에/.test(await toasts());
+      await sp.fill('#st-name', '박');
+      await sp.click('#st-shelf .st-mine');
+      await sp.waitForTimeout(200);
+      const back = await sp.inputValue('#st-name');
+      check('도장 만들기: 내 도장 보관(같은 것은 한 번만) · 누르면 그대로 되살림', again && back === '김하늘', `다시 보관 막힘 ${again} · 되살린 이름 ${back}`);
+
+      await sp.click('#st-k-date');
+      await sp.fill('#st-d-top', '교무부');
+      await sp.fill('#st-d-bottom', '박정보');
+      await until(sp, () => /교무부 \d{4}\.\d{2}\.\d{2} 박정보/.test(document.getElementById('st-big').getAttribute('aria-label')));
+      const dateShapes = await sp.locator('#st-t-shape button').allTextContents();
+      if (SCREENS) await sp.screenshot({ path: path.join(root, 'docs', 'screens', 'stamp-date.png') });
+      check('도장 만들기: 날짜 확인 도장(부서 · 날짜 · 이름) · 모양은 원형 · 둥근 네모만', dateShapes.join() === '원형,둥근 네모', dateShapes.join(' · '));
+      await sp.click('#st-k-name');
+      await sp.click('#st-v-fonts');
+      await until(sp, () => window.__pdfWorkshop.stamp().cards === 17);
+      if (SCREENS) { await sp.waitForTimeout(800); await sp.screenshot({ path: path.join(root, 'docs', 'screens', 'stamp-fonts.png') }); }
+      await sp.click('#st-v-pick');
+
+      await sp.click('[data-st-act="pdf"]');
+      await until(sp, () => document.querySelector('.tab[aria-selected="true"]').dataset.tab === 'decorate');
+      await sp.setInputFiles('#decor-input', [fileA]);
+      await until(sp, () => document.querySelectorAll('.pv-stamp img[src^="blob:"]').length === 1, undefined, { timeout: 15000 });
+      await sp.waitForTimeout(300);
+      const pv = await sp.evaluate(() => {
+        const s = document.querySelector('.pv-stamp').getBoundingClientRect();
+        const stage = document.querySelector('#decor-preview canvas').getBoundingClientRect();
+        return { ratio: s.width / stage.width, chips: document.querySelectorAll('#decor-options .stamp-chip.on').length, num: document.querySelector('#decor-options .acc[data-item="number"] .switch-input').checked };
+      });
+      const pageW = (await PDFLib.PDFDocument.load(fs.readFileSync(fileA))).getPage(0).getWidth();
+      const want = 15 / ((pageW * 25.4) / 72);
+      check('도장 만들기: [PDF에 찍기] → 꾸미기에 그 도장이 실제 크기로 · 쪽번호는 꺼 둠', pv.chips === 1 && Math.abs(pv.ratio - want) < 0.01 && pv.num === false,
+        `쪽 폭 대비 ${(pv.ratio * 100).toFixed(1)}%(기대 ${(want * 100).toFixed(1)}%) · 고른 도장 ${pv.chips}개 · 쪽번호 ${pv.num ? '켜짐' : '꺼짐'}`);
+      check('도장 만들기: 콘솔 에러 · 실패한 요청 0개', serr.length === 0, serr.length ? serr.join(' | ').slice(0, 300) : '0개');
+    } catch (e) {
+      check('도장 만들기 흐름', false, String((e && e.stack) || e).slice(0, 300));
+    }
+    await sctx.close();
+  }
 
   // ── 3. 처음 화면에서 PDF + 사진을 함께 넣기 ──
   await page.setInputFiles('#home-input', [fileA, fileB, png]);
@@ -499,7 +600,7 @@ try {
     desc: getComputedStyle(document.querySelector('.tool-desc')).display,
     n: document.querySelectorAll('.tool-card').length,
   }));
-  check('400px 처음 화면: 가로 스크롤 없음, 작은 카드 2칸 × 3줄(설명 숨김)', mh.sw <= 400 && mh.title > 0 && mh.cols === 2 && mh.n === 6 && mh.desc === 'none', `scrollWidth ${mh.sw}, 카드 ${mh.n}개 · 열 ${mh.cols}개, 설명 ${mh.desc}`);
+  check('400px 처음 화면: 가로 스크롤 없음, 작은 카드 2칸 × 4줄(설명 숨김)', mh.sw <= 400 && mh.title > 0 && mh.cols === 2 && mh.n === 7 && mh.desc === 'none', `scrollWidth ${mh.sw}, 카드 ${mh.n}개 · 열 ${mh.cols}개, 설명 ${mh.desc}`);
   await m.setInputFiles('#home-input', [fileA, fileB]);
   await until(m, () => document.querySelectorAll('#edit-grid .page-card canvas').length >= 4, undefined, { timeout: 15000 });
   const sw = {};
@@ -560,7 +661,7 @@ try {
       await q.goto(BASE, { waitUntil: 'networkidle' });
       const standaloneOn = pc.standalone ? await q.evaluate(() => matchMedia('(display-mode: standalone)').matches) : false;
 
-      // 탭 막대: 처음 화면에서도 보이고 6개가 한 줄
+      // 탭 막대: 처음 화면에서도 보이고 7개가 한 줄
       const hb = await q.evaluate(() => {
         const nav = document.querySelector('.side-nav');
         const r = nav.getBoundingClientRect();
@@ -570,8 +671,8 @@ try {
         });
         return { top: Math.round(r.top), bottom: Math.round(r.bottom), h: Math.round(r.height), vh: innerHeight, pos: getComputedStyle(nav).position, role: nav.getAttribute('role'), orient: nav.getAttribute('aria-orientation'), tabs, rows: new Set(tabs.map((t) => t.top)).size };
       });
-      check(`${pc.label} 처음 화면: 아래쪽 탭 막대 6개 한 줄(아이콘 + 짧은 이름, aria-label은 전체 이름)`,
-        hb.pos === 'fixed' && hb.tabs.length === 6 && hb.rows === 1 && hb.bottom === hb.vh && hb.tabs.every((t) => t.w >= 44 && t.bottom <= hb.vh - pc.safe && t.vis === 'visible') &&
+      check(`${pc.label} 처음 화면: 아래쪽 탭 막대 7개 한 줄(아이콘 + 짧은 이름, aria-label은 전체 이름)`,
+        hb.pos === 'fixed' && hb.tabs.length === 7 && hb.rows === 1 && hb.bottom === hb.vh && hb.tabs.every((t) => t.w >= 44 && t.bottom <= hb.vh - pc.safe && t.vis === 'visible') &&
         hb.role === 'tablist' && hb.orient === 'horizontal' && hb.tabs[1].label === '사진 → PDF',
         `${hb.tabs.map((t) => t.short).join(' / ')} · 막대 높이 ${hb.h}px · ${hb.orient}${how ? ` · ${how}` : ''}${pc.standalone ? (standaloneOn ? ' · display-mode: standalone 적용' : ' · display-mode: standalone 흉내 미지원(이 화면 규칙은 display-mode와 무관, 같은 CSS)') : ''}`);
       if (pc.safe) {
@@ -594,9 +695,9 @@ try {
         const s = document.querySelector('.sidebar');
         return { h: Math.round(s.getBoundingClientRect().height), scroll: s.scrollWidth - s.clientWidth, over: getComputedStyle(s).overflowX, navBelow: s.querySelector('.side-nav').getBoundingClientRect().top > 100 };
       });
-      check(`${pc.label}: 탭 6개를 누르면 도구가 바뀜 · 위쪽은 로고 + 도구 이름 48px(가로 스크롤 메뉴 없음)`, switched.every((x) => x.ok) && top.h === 48 && top.scroll <= 0 && top.over !== 'auto' && top.navBelow,
+      check(`${pc.label}: 탭 7개를 누르면 도구가 바뀜 · 위쪽은 로고 + 도구 이름 48px(가로 스크롤 메뉴 없음)`, switched.every((x) => x.ok) && top.h === 48 && top.scroll <= 0 && top.over !== 'auto' && top.navBelow,
         `${switched.map((x) => `${x.title}${x.ok ? '' : '✗'}`).join(' → ')} · 위쪽 ${top.h}px`);
-      check(`${pc.label}: 도구 6곳 가로 스크롤 없음`, switched.every((x) => x.sw <= W), switched.map((x) => `${x.t}:${x.sw}`).join(' '));
+      check(`${pc.label}: 도구 7곳 가로 스크롤 없음`, switched.every((x) => x.sw <= W), switched.map((x) => `${x.t}:${x.sw}`).join(' '));
 
       // 화살표 키로 탭 이동
       await q.focus('#tab-edit');
@@ -727,7 +828,7 @@ try {
       check(`${pc.label}: 화면 키보드가 열리면(visualViewport 축소) 탭 막대 숨김 → 닫으면 다시 보임`, kbd.open.cls && kbd.open.disp === 'none' && !kbd.closed.cls && kbd.closed.disp === 'grid',
         `열림: ${kbd.open.disp} → 닫힘: ${kbd.closed.disp}`);
 
-      // 접근성(axe): 처음 화면 + 도구 6곳
+      // 접근성(axe): 처음 화면 + 도구 7곳
       if (!pc.safe) {
         await q.goto(BASE, { waitUntil: 'networkidle' });
         await q.addScriptTag({ path: axePathM });
@@ -742,7 +843,7 @@ try {
           await q.waitForTimeout(150);
           bad.push(...(await runAxe()).map((x) => `${t}:${x}`));
         }
-        check(`${pc.label}: 접근성 검사(axe) 처음 화면 + 도구 6곳 critical · serious 0개`, bad.length === 0, bad.length ? [...new Set(bad)].join(' | ').slice(0, 300) : '0개');
+        check(`${pc.label}: 접근성 검사(axe) 처음 화면 + 도구 7곳 critical · serious 0개`, bad.length === 0, bad.length ? [...new Set(bad)].join(' | ').slice(0, 300) : '0개');
       }
       check(`${pc.label}: 콘솔 에러 0개`, qerr.length === 0, qerr.length ? qerr.join(' | ').slice(0, 200) : '0개');
       await pctx.close();
@@ -1805,7 +1906,7 @@ try {
     await sp.goto(`${BASE}/#edit`, { waitUntil: 'networkidle' });
     await until(sp, () => !document.getElementById('view-work').hidden);
     const sws = [];
-    for (const t of TOOLS) {
+    for (const t of [...TOOLS, 'stamp']) {
       await gotoTool(sp, t);
       const s1 = await sp.evaluate(() => document.documentElement.scrollWidth);
       await sp.click(`#panel-${t} .guide-open`);
@@ -1814,7 +1915,7 @@ try {
       await sp.keyboard.press('Escape');
       sws.push({ t, s1, ...s2 });
     }
-    check('400px: 도구 6곳 가로 스크롤 없음 (사용법 서랍 열어도)', sws.every((x) => x.s1 <= 400 && x.sw <= 400 && x.gw <= 400) && serr.length === 0,
+    check('400px: 도구 7곳 가로 스크롤 없음 (사용법 서랍 열어도)', sws.every((x) => x.s1 <= 400 && x.sw <= 400 && x.gw <= 400) && serr.length === 0,
       sws.map((x) => `${x.t} ${x.s1}/${x.sw}`).join(' · '));
     await sctx.close();
 
@@ -1832,15 +1933,16 @@ try {
     const axeAll = [];
     axeAll.push({ where: 'home', v: await axeRun() });
     await ap.click('.tool-card[data-open="edit"]');
-    for (const t of TOOLS) {
+    for (const t of [...TOOLS, 'stamp']) {
       await gotoTool(ap, t);
+      if (t === 'stamp') await until(ap, () => { const s = window.__pdfWorkshop.stamp(); return s && s.ready && s.cards > 0; }, undefined, { timeout: 15000 });
       await ap.waitForTimeout(200);
       axeAll.push({ where: t, v: await axeRun() });
     }
     const crit = axeAll.flatMap((x) => x.v.filter((v) => v.impact === 'critical').map((v) => `${x.where}:${v.id}(${v.where})`));
     const serious = [...new Set(axeAll.flatMap((x) => x.v.filter((v) => v.impact === 'serious').map((v) => `${x.where}:${v.id}(${v.where})`)))];
     const ver = JSON.parse(fs.readFileSync(path.join(path.dirname(axePath), 'package.json'), 'utf8')).version;
-    check(`자동 접근성 검사(axe-core ${ver}): 처음 화면 + 도구 6곳 심각(critical) · 중대(serious) 0개`, crit.length === 0 && serious.length === 0,
+    check(`자동 접근성 검사(axe-core ${ver}): 처음 화면 + 도구 7곳 심각(critical) · 중대(serious) 0개`, crit.length === 0 && serious.length === 0,
       crit.length ? crit.join(' | ').slice(0, 300) : `critical 0개 · serious ${serious.length ? serious.join(',') : '0개'}`);
     await actx.close();
   }
@@ -2762,7 +2864,8 @@ try {
               const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
               return 0.2126 * f(+m[1]) + 0.7152 * f(+m[2]) + 0.0722 * f(+m[3]);
             };
-            const skip = '.paper, .thumb, canvas, img, .viewer-canvas, .demo-stage, .sign-pad, .preview, .cv-pane, .stamp-preview, .cmp-thumb, .pv-stage, .print-note, .old-browser-note, .img-card .thumb, .decor-preview, .lib pre';
+            // 도장 만들기의 바둑판(투명 바탕) · 서식 종이 · 도장 카드도 일부러 종이색
+            const skip = '.paper, .thumb, canvas, img, .viewer-canvas, .demo-stage, .sign-pad, .preview, .cv-pane, .stamp-preview, .cmp-thumb, .pv-stage, .print-note, .old-browser-note, .img-card .thumb, .decor-preview, .lib pre, .st-stage, .st-slip, .st-card, .st-mine';
             const out = [];
             for (const el of document.querySelectorAll('body *')) {
               if (el.closest(skip)) continue;
@@ -2781,9 +2884,10 @@ try {
       await a.goto(BASE, { waitUntil: 'networkidle' });
       await a.evaluate(() => document.fonts.ready);
       await run('home');
-      for (const t of ['img2pdf', 'pdf2img', 'decorate', 'compress', 'security']) {
+      for (const t of ['img2pdf', 'pdf2img', 'decorate', 'compress', 'security', 'stamp']) {
         await a.evaluate((x) => { location.hash = x; }, t);
         await until(a, (x) => !document.getElementById(`panel-${x}`).hidden, t);
+        if (t === 'stamp') await until(a, () => { const s = window.__pdfWorkshop.stamp(); return s && s.ready && s.cards > 0; }, undefined, { timeout: 15000 });
         await a.mouse.move(2, 2);
         await run(t);
       }
@@ -3147,7 +3251,22 @@ try {
     await p.goto(BASE, { waitUntil: 'networkidle' });
     await p.evaluate(() => document.fonts.ready);
     await p.screenshot({ path: path.join(out, 'home.png') });
-    await p.screenshot({ path: path.join(out, 'home-6tools.png'), fullPage: true });
+    await p.screenshot({ path: path.join(out, 'home-7tools.png'), fullPage: true });
+    // 도장 만들기(사용법 패널 접고 · 이름 쓴 뒤) · 휴대폰
+    await p.click('.tool-card[data-open="stamp"]');
+    await until(p, () => { const s = window.__pdfWorkshop.stamp(); return s && s.ready && s.cards > 0; }, undefined, { timeout: 15000 });
+    await p.fill('#st-name', '김하늘');
+    await p.waitForTimeout(1500);
+    await p.screenshot({ path: path.join(out, 'stamp-maker.png') });
+    const ms = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2, colorScheme: 'light' });
+    const mp = await ms.newPage();
+    await mp.goto(`${BASE}/#stamp`, { waitUntil: 'networkidle' });
+    await until(mp, () => { const s = window.__pdfWorkshop.stamp(); return s && s.ready && s.cards > 0; }, undefined, { timeout: 15000 });
+    await mp.fill('#st-name', '김하늘');
+    await mp.waitForTimeout(1500);
+    await mp.screenshot({ path: path.join(out, 'stamp-mobile.png') });
+    await ms.close();
+    await p.click('#logo');
     await p.setInputFiles('#home-input', [sA, sB]);
     await until(p, () => document.querySelectorAll('#edit-grid .page-card canvas').length === 7, undefined, { timeout: 15000 });
     const c = p.locator('#edit-grid .page-card').nth(2);
@@ -3244,7 +3363,7 @@ try {
     await gp.waitForTimeout(3000);
     await gp.screenshot({ path: path.join(out, 'wide-empty.png') });
     // 1920px 여섯 도구 빈 화면(같은 1100px 가운데 규칙)
-    for (const t of ['edit', 'img2pdf', 'pdf2img', 'decorate', 'compress', 'security']) {
+    for (const t of ['edit', 'img2pdf', 'pdf2img', 'decorate', 'compress', 'security', 'stamp']) {
       await gp.click(`#tab-${t}`);
       await gp.evaluate(() => window.scrollTo(0, 0));
       await gp.mouse.move(5, 5);

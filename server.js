@@ -135,6 +135,9 @@ app.get('/vendor/fonts/Pretendard-Bold.otf', (req, res) => {
   res.sendFile(nm('pretendard', 'dist', 'public', 'static', 'Pretendard-Bold.otf'));
 });
 app.use('/vendor/pretendard/woff2', express.static(nm('pretendard', 'dist', 'web', 'variable', 'woff2'), { maxAge: '7d' }));
+// 도장 만들기 글꼴(Fontsource, SIL OFL 1.1 · scripts/vendor-stamp-fonts.mjs가 저장소에 넣음).
+// 글자 조각으로 나뉘어 있어 브라우저는 화면에 쓰는 글자가 든 조각만 받는다. 파일 이름에 판이 없어 7일만 캐시.
+app.use('/vendor/stamp-fonts', express.static(path.join(PUBLIC, 'vendor', 'stamp-fonts'), { maxAge: '7d', index: false, fallthrough: false }));
 
 // 아이폰 HEIC → JPEG 변환기 (heic-to, libheif 1.22.2 · LGPL-3.0). HEIC 사진이 들어올 때만 불러온다.
 // CSP 빌드(eval · new Function 없음)를 ES 모듈로 제공한다.

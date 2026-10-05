@@ -622,6 +622,7 @@
   let activeView = 'home';
   let guideSync = () => {}; // 사용법 패널 애니메이션 켜고 끄기 (Guide가 채운다)
   let editChanged = () => {}; // 편집 상태가 바뀔 때 (최근 작업 이어하기가 채운다)
+  let stampOpened = () => {}; // 도장 만들기를 처음 열 때 화면 코드를 불러온다 (StampLoader가 채운다)
 
   /** 처음 화면(home) ↔ 작업 화면(work) */
   function showView(name) {
@@ -669,6 +670,7 @@
     if (activeView === 'work') setHash(name);
     try { localStorage.setItem('pdfws.tab', name); } catch { /* 무시 */ }
     guideSync();
+    if (name === 'stamp') stampOpened();
   }
   // 휴대폰에서는 탭 막대가 처음 화면에도 보이므로 누르면 작업 화면으로 넘어간다.
   tabs.forEach((t, i) => {
@@ -3149,6 +3151,15 @@
   const COLOR_TEXT = { red: '빨강', gray: '회색', blue: '파랑' };
   const TARGET_TEXT = { last: '마지막 쪽', all: '모든 쪽', selected: '고른 쪽' };
   const defaultPlace = (k) => ({ x: Math.max(0.02, 0.7 - k * 0.06), y: Math.max(0.02, 0.8 - k * 0.06), w: 0.2 });
+  /** 도장 만들기에서 만든 도장(it.mm = 실제 폭 mm)은 처음부터 실제 크기로 놓는다. pageW: 쪽 폭(pt, 모르면 A4) */
+  const defaultPlaceFor = (it, k, pageW = 595.28) => {
+    const p = defaultPlace(k);
+    if (it && it.mm > 0 && pageW > 0) {
+      p.w = Math.min(0.9, Math.max(0.01, it.mm / ((pageW * 25.4) / 72)));
+      p.x = Math.max(0.02, Math.min(p.x, 0.86 - p.w));
+    }
+    return p;
+  };
 
   function seg(name, legend, options, value) {
     return h('fieldset', { class: 'seg' }, h('legend', null, legend),
@@ -3493,7 +3504,7 @@
         opts.stamp.ids.forEach((id, idx) => {
           const it = Stamps.byId(id);
           if (!it) return;
-          const place = opts.stamp.places[id] || (opts.stamp.places[id] = defaultPlace(idx));
+          const place = opts.stamp.places[id] || (opts.stamp.places[id] = defaultPlaceFor(it, idx, visW));
           const aspect = it.h / it.w;
           const el = h('div', { class: 'pv-stamp', 'data-id': id, tabindex: '0', title: '끌어서 옮기기 · 모서리로 크기 바꾸기', 'aria-label': `${it.name} 위치` },
             h('img', { alt: '', draggable: 'false' }), h('span', { class: 'pv-handle', 'aria-hidden': 'true' }));
@@ -3642,7 +3653,7 @@
       const stamps = [];
       o.stamp.ids.forEach((id, idx) => {
         const it = Stamps.byId(id);
-        if (it) stamps.push({ it, place: (o.stamp.places && o.stamp.places[id]) || defaultPlace(idx) });
+        if (it) stamps.push({ it, place: (o.stamp.places && o.stamp.places[id]) || defaultPlaceFor(it, idx) });
       });
       const list = [];
       for (const s of stamps) list.push({ bytes: await Stamps.pngOf(s.it), place: s.place });
@@ -5129,8 +5140,18 @@
       decorBatch.clear();
       editor.setOpts(startOpts());
     }
+    /** 도장 만들기에서 넘어온 도장: 서명 · 도장을 켜고 그 도장을 고른다(PDF를 아직 안 넣었으면 쪽번호는 끈다) */
+    function useStamp(id) {
+      const o = editor.getOpts();
+      if (!file) o.number.on = false;
+      o.stamp.on = true;
+      if (!o.stamp.ids.includes(id)) o.stamp.ids.push(id);
+      editor.setOpts(o);
+      update();
+      return !!file;
+    }
     return {
-      load, reset, batch: decorBatch,
+      load, reset, batch: decorBatch, useStamp,
       shortcutSave: (withOpts) => (decorBatch.active ? decorBatch.run() : withOpts ? openDialog() : saveNow()),
     };
   })();
@@ -6064,7 +6085,7 @@
   // ═══════════════════════════════════════════════════════════
   const Title = (() => {
     const BASE_TITLE = 'PDF 작업실';
-    const LABEL = { edit: '편집 중', img2pdf: '사진 → PDF', pdf2img: 'PDF → 사진', decorate: '꾸미기', compress: '용량 줄이기', security: '보안' };
+    const LABEL = { edit: '편집 중', img2pdf: '사진 → PDF', pdf2img: 'PDF → 사진', decorate: '꾸미기', compress: '용량 줄이기', security: '보안', stamp: '도장 만들기' };
     function fileCount(tool) {
       const n = (sel) => document.querySelectorAll(sel).length;
       if (tool === 'edit') return { n: n('#edit-chips > li.chip'), unit: '파일' };
@@ -6402,6 +6423,46 @@
     state: () => ({ controlled: !!(navigator.serviceWorker && navigator.serviceWorker.controller), updateShown: false, offline: Net.isOffline() }),
   }))();
 
+  // ═══════════════════════════════════════════════════════════
+  // 도장 만들기: 처음 열 때 stamp/stamp-core.js · stamp/stamp.js를 불러온다(다른 도구만 쓰는 사람은 받지 않는다)
+  // ═══════════════════════════════════════════════════════════
+  const StampLoader = (() => {
+    let started = null;
+    const script = (src) => new Promise((resolve, reject) => {
+      const el = document.createElement('script');
+      el.src = `${src}?v=${encodeURIComponent(VER)}`;
+      el.onload = resolve;
+      el.onerror = () => reject(new Error(`${src}를 받지 못했어요`));
+      document.head.append(el);
+    });
+    function ensure() {
+      if (started) return started;
+      started = script('stamp/stamp-core.js')
+        .then(() => script('stamp/stamp.js'))
+        .then(() => self.StampTool.mount({
+          ver: VER,
+          toast,
+          download,
+          Stamps,
+          isActive: () => activeView === 'work' && activeTab === 'stamp' && !isBusy(),
+          useInDecor: (id) => {
+            const hasFile = Decor.useStamp(id);
+            openTool('decorate');
+            toast('도장을 꾸미기로 가져왔어요.', hasFile ? '미리보기에서 도장을 끌어 서명 칸에 놓고 저장하세요.' : 'PDF를 넣으면 도장이 보여요. 끌어서 서명 칸에 놓으세요.', 'ok');
+          },
+        }))
+        .catch((e) => {
+          started = null;
+          console.warn(e);
+          $('st-loading').textContent = '도장 도구를 불러오지 못했어요. 인터넷 연결을 확인하고 새로 고침해 주세요.';
+        });
+      return started;
+    }
+    stampOpened = ensure;
+    if (activeTab === 'stamp' && activeView === 'work') ensure();
+    return { ensure };
+  })();
+
   // 저장 단축키: Ctrl+S = 바로 저장, Ctrl+Shift+S = 설정하고 저장… (브라우저의 "페이지 저장"은 막는다)
   document.addEventListener('keydown', (e) => {
     if (!(e.ctrlKey || e.metaKey) || e.altKey || e.key.toLowerCase() !== 's') return;
@@ -6414,6 +6475,7 @@
       decorate: () => Decor.shortcutSave(withOpts),
       compress: () => Shrink.shortcutSave(withOpts),
       img2pdf: () => $('img-save').click(),
+      stamp: () => self.StampTool && self.StampTool.save(),
     }[activeTab];
     if (run) run();
     else toast('이 도구는 아래 버튼으로 저장해요.', '', 'info');
@@ -6439,5 +6501,5 @@
     if (t && (t !== activeTab || activeView !== 'work')) openTool(t);
   });
 
-  window.__pdfWorkshop = { version: 5, ready: true, guide: Guide.state, compress: Shrink.state, worker: Squeeze.inWorker, lastStage: () => errCtx.stage, pwa: Pwa.state, hasWork, resume: Resume.state, resumeStored: Resume.stored, resumeLimit: Resume.setLimitForTest, resumeFlush: Resume.flush, viewer: Edit.viewerState, find: Edit.findState, news: News.state, feedback: Feedback.state, title: Title.compute };
+  window.__pdfWorkshop = { version: 5, ready: true, guide: Guide.state, compress: Shrink.state, worker: Squeeze.inWorker, lastStage: () => errCtx.stage, pwa: Pwa.state, hasWork, resume: Resume.state, resumeStored: Resume.stored, resumeLimit: Resume.setLimitForTest, resumeFlush: Resume.flush, viewer: Edit.viewerState, find: Edit.findState, news: News.state, feedback: Feedback.state, title: Title.compute, stamp: () => (self.StampTool ? self.StampTool.state() : null), stampLoad: () => StampLoader.ensure() };
 })();
