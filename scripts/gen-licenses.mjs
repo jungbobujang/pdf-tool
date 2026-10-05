@@ -91,6 +91,22 @@ try {
     licenseUrl: `/vendor/stamp-fonts/${f.dir}/LICENSE.txt`,
   }));
 } catch { /* 도장 글꼴이 아직 없으면 이 칸 없이 */ }
+// 도장 만들기 [한자 더 보기] 자료: libhangul 한자 사전(BSD-3)에서 만든 public/stamp/hanja.json
+try {
+  const hanja = JSON.parse(fs.readFileSync(path.join(root, 'public', 'stamp', 'hanja.json'), 'utf8'));
+  const [url, commit] = String(hanja.source || '').split('@');
+  fonts.push({
+    name: 'libhangul 한자 사전',
+    version: commit || '',
+    license: 'BSD-3-Clause',
+    url,
+    text: fs.readFileSync(path.join(root, 'public', 'stamp', 'hanja-LICENSE.txt'), 'utf8').trim(),
+    use: '도장 만들기 [한자 더 보기] — 음절마다 한자와 뜻(많이 쓰는 순)',
+    dev: false,
+    font: true,
+    licenseUrl: '/stamp/hanja-LICENSE.txt',
+  });
+} catch { /* 한자 자료가 아직 없으면 이 줄 없이 */ }
 
 if (process.argv.includes('--check')) {
   const html = fs.existsSync(OUT) ? fs.readFileSync(OUT, 'utf8') : '';
@@ -99,7 +115,7 @@ if (process.argv.includes('--check')) {
     console.error(`사용한 라이브러리 페이지가 package.json과 달라요: ${missing.join(', ')} → node scripts/gen-licenses.mjs`);
     process.exit(1);
   }
-  console.log(`사용한 라이브러리 페이지 OK (${list.length}개 + 도장 글꼴 ${fonts.length}개)`);
+  console.log(`사용한 라이브러리 페이지 OK (${list.length}개 + 도장 글꼴 · 자료 ${fonts.length}개)`);
   process.exit(0);
 }
 
@@ -150,8 +166,8 @@ ${list.filter((l) => !l.dev).map(item).join('\n')}
       </ul>
     </section>
     ${fonts.length ? `<section class="doc-card" aria-labelledby="l3">
-      <h2 id="l3">도장 만들기 글꼴 (${fonts.length}개)</h2>
-      <p class="lib-use">모두 SIL Open Font License 1.1이에요. Fontsource 패키지에서 쓰는 굵기 하나만 이 사이트에 넣어 두고, 바깥 글꼴 서버(구글 글꼴 등)는 쓰지 않아요.</p>
+      <h2 id="l3">도장 만들기 글꼴 · 한자 자료 (${fonts.length}개)</h2>
+      <p class="lib-use">글꼴은 모두 SIL Open Font License 1.1이에요. Fontsource 패키지에서 쓰는 굵기 하나만 이 사이트에 넣어 두고, 바깥 글꼴 서버(구글 글꼴 등)는 쓰지 않아요. 한자 자료는 libhangul 한자 사전(BSD-3)에서 만들었어요.</p>
       <ul class="lib-list">
 ${fonts.map(item).join('\n')}
       </ul>
@@ -183,4 +199,4 @@ ${list.filter((l) => l.dev).map(item).join('\n')}
 `;
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
 fs.writeFileSync(OUT, html);
-console.log(`사용한 라이브러리 페이지: ${outArg ? OUT : path.relative(root, OUT)} (${list.length}개 + 도장 글꼴 ${fonts.length}개)`);
+console.log(`사용한 라이브러리 페이지: ${outArg ? OUT : path.relative(root, OUT)} (${list.length}개 + 도장 글꼴 · 자료 ${fonts.length}개)`);

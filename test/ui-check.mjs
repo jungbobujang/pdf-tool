@@ -264,6 +264,16 @@ try {
       await sp.click('#st-mode-hanja');
       await until(sp, () => /金河늘/.test(document.getElementById('st-big').getAttribute('aria-label')));
       const chips = await sp.locator('#st-hanja .st-chip').count();
+      // [한자 더 보기]: '하'(둘째 글자) → 뜻으로 찾기 "놀" → 霞(놀 하) → 金霞늘
+      await until(sp, () => !!document.querySelector('#st-hanja .st-more-btn[aria-controls="st-more-1"]'));
+      await sp.click('#st-hanja .st-more-btn[aria-controls="st-more-1"]');
+      await sp.fill('#st-more-q-1', '놀');
+      await until(sp, () => [...document.querySelectorAll('#st-more-1 .st-chip b')].some((b) => b.textContent === '霞'));
+      const moreN = await sp.locator('#st-more-1 .st-chip').count();
+      await sp.locator('#st-more-1 .st-chip', { hasText: '霞' }).click();
+      await until(sp, () => /金霞늘/.test(document.getElementById('st-big').getAttribute('aria-label')));
+      const moreOpenAfter = await sp.locator('#st-more-1').isVisible();
+      check('도장 만들기: [한자 더 보기] 뜻으로 찾기("놀" → 霞) → 새긴 글자 金霞늘, 고른 뒤에도 펼친 채', moreN >= 1 && moreOpenAfter, `찾은 한자 ${moreN}개 · 펼침 ${moreOpenAfter}`);
       await sp.click('#st-mode-hangul');
       await sp.locator('#st-big').click();
       await sp.keyboard.press('2');
@@ -2414,7 +2424,8 @@ try {
     check('/privacy: 수집 없음 · 마지막 갱신일 · 책임 한계 한 줄', pp.status === 200 && pp.updated && pp.limit, pp.h1);
     // + 도장 만들기 글꼴(public/stamp/fonts.json, 저장소에 넣은 Fontsource 글꼴)
     const stampFonts = Object.values(JSON.parse(fs.readFileSync(path.join(root, 'public', 'stamp', 'fonts.json'), 'utf8')).fonts).map((f) => `${f.pkg}@${f.version}`);
-    check('/licenses: package.json 의존성 모두(이름@버전) + 도장 글꼴', pl.status === 200 && deps.every((d) => pl.libs.some((l) => l.startsWith(`${d}@`))) && stampFonts.every((f) => pl.libs.includes(f)) && pl.libs.length === deps.length + stampFonts.length,
+    stampFonts.push(`libhangul 한자 사전@${JSON.parse(fs.readFileSync(path.join(root, 'public', 'stamp', 'hanja.json'), 'utf8')).source.split('@')[1]}`);
+    check('/licenses: package.json 의존성 모두(이름@버전) + 도장 글꼴 · 한자 자료', pl.status === 200 && deps.every((d) => pl.libs.some((l) => l.startsWith(`${d}@`))) && stampFonts.every((f) => pl.libs.includes(f)) && pl.libs.length === deps.length + stampFonts.length,
       `${pl.libs.length}개(라이브러리 ${deps.length} + 글꼴 ${stampFonts.length}): ${pl.libs.join(', ').slice(0, 160)}`);
     check('안내 페이지 3곳 콘솔 에러 0 · 가로 넘침 없음 · 푸터 버전', perr.length === 0 && pages.every((x) => x.sw <= 1280 && /^v /.test(x.ver || '')),
       perr.length ? perr.join(' | ').slice(0, 200) : pages.map((x) => `${x.u} ${x.ver}`).join(' · '));

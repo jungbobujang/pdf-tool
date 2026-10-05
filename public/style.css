@@ -2709,3 +2709,8 @@ label.btn[role="button"]:focus-visible, label.drop-mini[role="button"]:focus-vis
   .st-keys-btn { display: none; }
 }
 .st-tools > .st-seg, .st-tools > .st-inks, .st-tools > .st-row { justify-self: start; }
+/* [한자 더 보기]: libhangul 한자 사전(많이 쓰는 순) · 뜻으로 찾기 */
+.st-syl-body { display: grid; gap: 8px; min-width: 0; }
+.st-more { display: grid; gap: 8px; padding: 10px; border: 1px dashed var(--line); border-radius: 10px; background: color-mix(in srgb, var(--accent-soft) 35%, var(--panel)); }
+.st-more-find { gap: 4px; }
+.st-app .st-more-btn { border-style: dashed; color: var(--accent); font-weight: 700; font-size: 13.5px; }

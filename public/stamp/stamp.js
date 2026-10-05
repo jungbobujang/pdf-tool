@@ -32,6 +32,21 @@
   let mcache = {};
   const mctx = document.createElement('canvas').getContext('2d');
   let toastTimer = 0;
+  // [한자 더 보기]: 자료(public/stamp/hanja.json, 약 110KB)는 한자로 바꿀 때만 받는다
+  let hanjaData = null;
+  let hanjaLoad = null;
+  const moreOpen = {};
+  const moreQuery = {};
+  const moreAll = {};
+  const MORE_FIRST = 24;
+  function loadHanja() {
+    if (hanjaLoad) return hanjaLoad;
+    hanjaLoad = fetch(`stamp/hanja.json?v=${encodeURIComponent(api.ver)}`, { credentials: 'same-origin' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json) => { hanjaData = json; if (st.mode === 'hanja') renderHanja(); })
+      .catch(() => { hanjaLoad = null; });
+    return hanjaLoad;
+  }
 
   const say = (title, fix = '', kind = 'info') => api.toast(title, fix, kind);
   const dpr = () => Math.min(2, window.devicePixelRatio || 1);
@@ -312,7 +327,8 @@
       });
       const keep = el('button', { type: 'button', class: 'st-chip st-chip-hangul', 'aria-pressed': String(pick === null) }, el('b', { text: c }), el('small', { text: cand.length ? '한글 그대로' : '목록에 없어요' }));
       keep.addEventListener('click', () => { st.picks[i + c] = null; update(); });
-      const own = pick && !cand.some((h) => h[0] === pick) ? pick : '';
+      const allMore = C.moreHanja(hanjaData, c, cand.map((h) => h[0]));
+      const own = pick && !cand.some((h) => h[0] === pick) && !allMore.some((h) => h[0] === pick) ? pick : '';
       const di = el('input', { type: 'text', maxlength: '2', class: own ? 'on' : null, value: own, 'aria-label': `${c} 한자 직접 넣기`, autocomplete: 'off' });
       di.addEventListener('change', () => {
         const v = Array.from(di.value.trim())[0] || '';
@@ -321,9 +337,42 @@
         st.picks[i + c] = v;
         update();
       });
+      const key = i + c;
+      // 고른 한자가 [더 보기] 안에 있으면 처음부터 펼쳐 둔다
+      if (pick && allMore.some((h) => h[0] === pick) && moreOpen[key] === undefined) moreOpen[key] = true;
+      const q = el('input', { type: 'text', id: `st-more-q-${i}`, value: moreQuery[key] || '', autocomplete: 'off', spellcheck: 'false' });
+      const moreList = el('div', { class: 'st-more-list' });
+      const moreArea = el('div', { class: 'st-more', id: `st-more-${i}` },
+        el('label', { class: 'st-field st-more-find' }, el('span', { text: `'${c}' 한자를 뜻으로 찾기 (예: 물, 빛날, 클)` }), q), moreList);
+      const moreBtn = allMore.length ? el('button', { type: 'button', class: 'st-more-btn', 'aria-expanded': String(!!moreOpen[key]), 'aria-controls': `st-more-${i}` },
+        el('span', { text: moreOpen[key] ? '한자 접기' : `한자 더 보기 (${allMore.length})` })) : null;
+      if (moreBtn) {
+        moreBtn.addEventListener('click', () => { moreOpen[key] = !moreOpen[key]; renderHanja(); if (moreOpen[key]) { const box2 = $(`st-more-q-${i}`); if (box2) box2.focus(); } });
+      }
+      const paintMore = () => {
+        moreArea.hidden = !moreOpen[key];
+        if (moreArea.hidden) return;
+        const found = C.moreHanja(hanjaData, c, cand.map((h) => h[0]), moreQuery[key] || '');
+        const shown = moreAll[key] ? found : found.slice(0, MORE_FIRST);
+        const list = shown.map(([hj, mean]) => {
+          const b = el('button', { type: 'button', class: 'st-chip', 'aria-pressed': String(pick === hj), 'aria-label': `${hj} (${mean || '뜻 없음'})` }, el('b', { text: hj }), el('small', { text: mean || ' ' }));
+          b.addEventListener('click', () => { st.picks[key] = hj; update(); });
+          return b;
+        });
+        const rest = found.length - shown.length;
+        const restBtn = rest > 0 ? el('button', { type: 'button', class: 'st-more-btn', text: `${rest}개 더` }) : null;
+        if (restBtn) restBtn.addEventListener('click', () => { moreAll[key] = true; paintMore(); });
+        moreList.replaceChildren(found.length ? el('div', { class: 'st-chips' }, ...list, restBtn)
+          : el('p', { class: 'st-note', text: '찾는 뜻의 한자가 없어요. 다른 말로 찾거나 위 [직접] 칸에 넣어요.' }));
+      };
+      q.addEventListener('input', () => { moreQuery[key] = q.value; moreAll[key] = false; paintMore(); });
+      paintMore();
       rows.push(el('div', { class: 'st-syl' }, el('span', { class: 'st-s', text: c }),
-        el('div', { class: 'st-chips' }, ...chips, keep, el('label', { class: 'st-own' }, di, el('span', { text: '직접' })))));
+        el('div', { class: 'st-syl-body' },
+          el('div', { class: 'st-chips' }, ...chips, keep, el('label', { class: 'st-own' }, di, el('span', { text: '직접' })), moreBtn),
+          moreArea)));
     });
+    if (!hanjaData) loadHanja();
     box.replaceChildren(...rows);
   }
   function renderAll() { renderBig(); renderGrid(); }

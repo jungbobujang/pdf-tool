@@ -831,6 +831,16 @@ const { colorSamplesPdf } = await import('./node-codec.mjs');
       back.picks['0김'] === '金' && !('bad' in back.picks) && !('extra' in back) && S.fileSafe('김/하:늘*') === '김하늘' && S.fileSafe('') === '도장';
     check('도장: 저장 크기 · 보관값 되살리기(모르는 값은 버림) · 파일 이름', ok, `15mm 600dpi ${px.w}px · 타원 300dpi ${pxOval.w}×${pxOval.h} · 되살림 ${back.font}/${back.size}mm`);
   });
+  await step('도장: [한자 더 보기] 자료(libhangul, KS X 1001) · 뜻으로 찾기 · 이미 보인 것 빼기', async () => {
+    const data = JSON.parse(fs.readFileSync(new URL('../public/stamp/hanja.json', import.meta.url), 'utf8'));
+    const ha = S.moreHanja(data, '하');
+    const skip = S.moreHanja(data, '하', ['河', '夏']);
+    const byMeaning = S.moreHanja(data, '희', [], '빛날').map(([c]) => c);
+    const v = (await import('node:child_process')).spawnSync(process.execPath, ['scripts/build-stamp-hanja.mjs', '--check'], { cwd: new URL('..', import.meta.url), encoding: 'utf8' });
+    const ok = S.moreHanja(data, '김')[0][0] === '金' && ha.some(([c]) => c === '河') && !skip.some(([c]) => c === '河' || c === '夏') && skip.length === ha.length - 2 &&
+      byMeaning.includes('熙') && S.moreHanja(data, '하', [], '河').length === 1 && S.moreHanja(data, '늘').length === 0 && S.moreHanja(null, '하').length === 0 && v.status === 0;
+    check('도장: [한자 더 보기] 자료(libhangul, KS X 1001) · 뜻으로 찾기 · 이미 보인 것 빼기', ok, `하 ${ha.length}자 · "빛날" → ${byMeaning.join('')} · ${(v.stdout || v.stderr).trim()}`);
+  });
   await step('도장: 글꼴 18개 목록 · 파일 · 글자 범위(한글 전부 · 한자 글꼴)', async () => {
     const data = JSON.parse(fs.readFileSync(new URL('../public/stamp/fonts.json', import.meta.url), 'utf8'));
     const has = S.coverage(data);

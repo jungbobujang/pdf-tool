@@ -526,6 +526,16 @@
     const h = Math.max(32, Math.round((st.size / 25.4) * st.dpi));
     return { w: Math.round((W / 200) * h), h, wMm: (st.size * W) / 200, hMm: st.size };
   }
+  /**
+   * [한자 더 보기]: 이 음절의 한자(public/stamp/hanja.json — libhangul, 많이 쓰는 순)에서
+   * 위에 이미 보인 것(skip)을 빼고, 뜻으로 찾기(query — 띄어쓰기 무시, 한자 그대로도 됨)
+   */
+  function moreHanja(data, syllable, skip = [], query = '') {
+    const list = (data && data.syllables && data.syllables[syllable]) || [];
+    const q = String(query || '').replace(/\s+/g, '');
+    return list.filter(([c, m]) => !skip.includes(c) && (!q || c === q || String(m || '').replace(/\s+/g, '').includes(q)));
+  }
+
   /** 파일 이름에 쓸 수 없는 글자 빼기 */
   const fileSafe = (s) => String(s || '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 40) || '도장';
 
@@ -535,6 +545,6 @@
     defaultState, pickState, restoreState, dotDate,
     cellsFor, design, render, inkTexture,
     parseRanges, fontFaces, coverage,
-    crc32, pngWithDpi, pngDpi, pixelSize, fileSafe,
+    crc32, pngWithDpi, pngDpi, pixelSize, fileSafe, moreHanja,
   };
 });
