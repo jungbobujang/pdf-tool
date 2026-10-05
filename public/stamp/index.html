@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>도장 만들기 · EDIT</title>
+  <meta name="description" content="이름만 쓰면 도장. 복사해서 한글 · 워드에 바로, PDF 서명 칸에도. 이름은 이 컴퓨터 밖으로 나가지 않아요.">
+  <meta name="app-version" content="">
+  <meta name="theme-color" content="#141B2E">
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="/icons/logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/vendor/pretendard/pretendardvariable.min.css">
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/stamp/stamp-page.css">
+  <!-- EDIT 공통: 스쿨 입장권 정리 · 이 브라우저를 쓰는 사람 · 서명과 도장 보관(PDF 작업실과 같이 씀) -->
+  <script src="/edit/common.js"></script>
+  <script src="/stamp/stamp-core.js" defer></script>
+  <script src="/stamp/stamp.js" defer></script>
+  <script src="/stamp/stamp-page.js" defer></script>
+</head>
+<body class="stamp-page">
+  <noscript><p class="sp-noscript">자바스크립트가 꺼져 있어요. 엣지 · 크롬 · 웨일로 열어 주세요.</p></noscript>
+  <header class="sp-top">
+    <a class="sp-brand" href="/stamp" id="sp-home">
+      <span class="sp-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9.5 3.5h5v3.2a2 2 0 0 1-.8 1.6l-.2.2v3h4a2 2 0 0 1 2 2v2.5h-15v-2.5a2 2 0 0 1 2-2h4v-3l-.2-.2a2 2 0 0 1-.8-1.6V3.5Z"/><path d="M5 19.5h14"/></svg></span>
+      <span class="sp-brand-text"><strong>도장 만들기</strong><span>EDIT · 스쿨 오리지널</span></span>
+    </a>
+    <span class="sp-safe"><span class="sp-dot" aria-hidden="true"></span><span>이름은 이 컴퓨터 밖으로 나가지 않아요</span></span>
+    <span class="sp-grow"></span>
+    <nav class="sp-nav" aria-label="EDIT 도구">
+      <a class="sp-link" href="/pdf" id="sp-pdf">PDF 작업실</a>
+      <a class="sp-link" href="/" id="sp-edit" title="EDIT — PDF 작업실 · 사진 작업실 · 도장 만들기">EDIT 도구</a>
+    </nav>
+  </header>
+
+  <main class="sp-main" id="sp-main">
+      <section class="panel panel-stamp" id="panel-stamp" aria-labelledby="sp-title">
+        <header class="tool-head with-guide">
+          <div>
+            <h1 id="sp-title">도장 만들기</h1>
+            <p>이름을 쓰면 반듯한 도장이 한꺼번에 나와요. 골라서 다듬고, 서류에 바로 붙이거나 PDF에 찍어요.</p>
+          </div>
+        </header>
+        <details class="sp-guide" id="sp-guide">
+          <summary><span>사용법 · 자주 막히는 곳</span></summary>
+          <div class="sp-guide-body">
+
+            <ol class="guide-steps"><li><b aria-hidden="true">1</b><span>이름 쓰기(한자는 [한자]를 누르고 글자마다 고르기)</span></li><li><b aria-hidden="true">2</b><span>오른쪽 모음에서 마음에 드는 것을 눌러 고르고 크기 · 색 다듬기</span></li><li><b aria-hidden="true">3</b><span>[복사해서 붙이기] → 한글 · 워드 서명란에서 Ctrl+V, 또는 [PDF에 찍기]</span></li></ol>
+            <div class="faq"><h3 class="guide-h">자주 막히는 곳</h3><dl>
+              <div class="faq-item"><dt>한글에 붙였더니 크기가 달라요</dt><dd>[그림만 복사]로 다시 붙이고, 그림 속성에서 높이를 고른 mm로 맞춰 주세요.</dd></div>
+              <div class="faq-item"><dt>받은 PDF 서명 칸에 찍고 싶어요</dt><dd>[PDF에 찍기] → PDF를 넣고 도장을 끌어 서명 칸에 놓아요. 모든 쪽 같은 자리에도 한 번에 돼요.</dd></div>
+              <div class="faq-item"><dt>이름이 밖으로 나가나요?</dt><dd>아니요. 도장은 이 화면 안에서 그려요. 글꼴 조각만 이 사이트에서 받아요.</dd></div>
+              <div class="faq-item"><dt>인감 대신 써도 되나요?</dt><dd>아니요. 막도장 수준이라 회신서 · 확인서 · 접수 확인용이에요.</dd></div>
+            </dl></div>
+          </div>
+        </details>
+        <p class="st-loading" id="st-loading" role="status">도장 도구를 여는 중…</p>
+        <div class="st-app" id="st-app" hidden>
+          <div class="st-kindrow">
+            <div class="st-kind" role="group" aria-label="도장 종류">
+              <button type="button" id="st-k-name" aria-pressed="true">이름 도장</button>
+              <button type="button" id="st-k-date" aria-pressed="false">날짜 확인 도장</button>
+            </div>
+            <p class="st-note" id="st-kind-note">회신서 · 동의서 · 확인서 서명란에 찍는 도장</p>
+            <button type="button" class="btn sm st-keys-btn" id="st-keys-btn" aria-expanded="false" aria-controls="st-keys">단축키</button>
+          </div>
+          <section class="st-keys" id="st-keys" hidden aria-labelledby="st-keys-h">
+            <h2 id="st-keys-h">단축키</h2>
+            <ul class="st-keylist">
+              <li><kbd>1</kbd>~<kbd>4</kbd> 모양 바꾸기</li>
+              <li><kbd>B</kbd> 테두리 한 줄 ↔ 두 줄</li>
+              <li><kbd>E</kbd> 양각 ↔ 음각</li>
+              <li><kbd>[</kbd> <kbd>]</kbd> 글꼴 앞 · 뒤로</li>
+              <li><kbd>-</kbd> <kbd>+</kbd> 크기 0.5mm씩</li>
+              <li><kbd>R</kbd> 다시 찍기(찍은 느낌일 때)</li>
+              <li><kbd>K</kbd> 내 도장에 보관</li>
+              <li><kbd>Ctrl</kbd>+<kbd>C</kbd> 그림 복사</li>
+              <li><kbd>Ctrl</kbd>+<kbd>S</kbd> PNG 저장</li>
+            </ul>
+          </section>
+          <div class="st-cols">
+            <section class="st-box st-bench" aria-labelledby="st-bench-h">
+              <h2 class="sr-only" id="st-bench-h">작업대</h2>
+              <div id="st-name-fields" class="st-fields">
+                <div class="st-row st-between">
+                  <label class="st-label" for="st-name">새길 이름</label>
+                  <div class="st-seg" role="group" aria-label="글자">
+                    <button type="button" id="st-mode-hangul" aria-pressed="true">한글</button>
+                    <button type="button" id="st-mode-hanja" aria-pressed="false">한자</button>
+                  </div>
+                </div>
+                <input type="text" class="st-name" id="st-name" maxlength="8" autocomplete="off" spellcheck="false" placeholder="예: 김하늘" aria-describedby="st-name-warn">
+                <p id="st-name-warn" class="st-warn" role="status" hidden></p>
+                <div id="st-hanja" class="st-hanja" hidden></div>
+                <div class="st-row">
+                  <button type="button" class="st-tog" id="st-seal" aria-pressed="false">끝에 '인' 붙이기</button>
+                  <div class="st-seg" role="group" aria-label="세 글자 네모 도장" id="st-sq3" hidden>
+                    <button type="button" id="st-sq3-in" aria-pressed="true">'인' 붙여 네 칸</button>
+                    <button type="button" id="st-sq3-long" aria-pressed="false">성 길게</button>
+                  </div>
+                </div>
+              </div>
+              <div id="st-date-fields" class="st-fields" hidden>
+                <div class="st-two">
+                  <label class="st-field"><span>위 줄(부서 · 학교)</span><input type="text" id="st-d-top" maxlength="10" autocomplete="off" placeholder="예: 교무부"></label>
+                  <label class="st-field"><span>아래 줄(이름 · 직위)</span><input type="text" id="st-d-bottom" maxlength="8" autocomplete="off" placeholder="예: 김하늘"></label>
+                </div>
+                <div class="st-row st-date-row">
+                  <label class="st-field st-grow"><span>날짜</span><input type="text" id="st-d-date" maxlength="10" autocomplete="off"></label>
+                  <button type="button" class="btn" id="st-d-today">오늘</button>
+                </div>
+              </div>
+
+              <div class="st-stagewrap">
+                <div class="st-stage"><canvas id="st-big" width="280" height="280" role="img" aria-label="고른 도장 크게 보기"></canvas></div>
+                <div class="st-slip" role="group" aria-label="서식 위 실제 크기 미리 보기">
+                  <p class="st-slip-h" id="st-slip-head">가정통신문 회신</p>
+                  <p id="st-slip-body">위 내용을 확인하였으며 참여에 동의합니다.</p>
+                  <p id="st-slip-date"></p>
+                  <p class="st-sign"><span id="st-slip-who">보호자</span> <span id="st-slip-name"></span> <span class="st-in">(인)<canvas id="st-slip-stamp" width="60" height="60" aria-hidden="true"></canvas></span></p>
+                  <p class="st-size" id="st-slip-size"></p>
+                </div>
+              </div>
+              <p class="st-sample" id="st-sample" hidden>예시 이름으로 보여 드려요. 이름을 쓰면 바로 바뀌어요.</p>
+              <p class="st-warn" id="st-glyph-warn" role="status" hidden></p>
+
+              <div class="st-tools" role="group" aria-label="다듬기">
+                <span class="st-tl" id="st-l-shape">모양</span><div class="st-seg" role="group" aria-labelledby="st-l-shape" id="st-t-shape"></div>
+                <span class="st-tl" id="st-l-border">테두리</span><div class="st-seg" role="group" aria-labelledby="st-l-border" id="st-t-border"></div>
+                <span class="st-tl" id="st-l-bw">선 굵기</span><div class="st-seg" role="group" aria-labelledby="st-l-bw" id="st-t-bw"></div>
+                <span class="st-tl" id="st-l-style">새김</span><div class="st-seg" role="group" aria-labelledby="st-l-style" id="st-t-style"></div>
+                <span class="st-tl" id="st-l-weight">글씨 굵기</span><div class="st-seg" role="group" aria-labelledby="st-l-weight" id="st-t-weight"></div>
+                <span class="st-tl" id="st-l-space">간격</span><div class="st-seg" role="group" aria-labelledby="st-l-space" id="st-t-space"></div>
+                <span class="st-tl" id="st-l-ink">색</span><div class="st-inks" role="group" aria-labelledby="st-l-ink" id="st-t-ink"></div>
+                <span class="st-tl" id="st-l-size">크기(mm)</span><div class="st-seg" role="group" aria-labelledby="st-l-size" id="st-t-size"></div>
+                <span class="st-tl" id="st-l-dpi">저장 선명도</span><div class="st-seg" role="group" aria-labelledby="st-l-dpi" id="st-t-dpi"></div>
+                <span class="st-tl" id="st-l-finish">마무리</span><div class="st-row"><div class="st-seg" role="group" aria-labelledby="st-l-finish" id="st-t-finish"></div><button type="button" class="btn sm" id="st-restamp" hidden>다시 찍기</button></div>
+              </div>
+              <div id="st-stamp-opts" class="st-sliders" hidden>
+                <div class="st-slider"><label for="st-rough">인주 결</label><input type="range" id="st-rough" min="0" max="100" value="40"><output id="st-rough-out" for="st-rough">40</output></div>
+                <div class="st-slider"><label for="st-tilt">기울기</label><input type="range" id="st-tilt" min="0" max="3" value="1"><output id="st-tilt-out" for="st-tilt">1°</output></div>
+              </div>
+              <p class="st-note" id="st-big-label"></p>
+
+              <div class="st-acts">
+                <button type="button" class="btn primary st-wide" data-st-act="pdf"><span>PDF에 찍기</span><small>PDF 작업실 꾸미기로 넘어가 서명 칸에 놓기</small></button>
+                <button type="button" class="btn" data-st-act="copy"><span>복사해서 붙이기</span><small id="st-copy-small">한글 · 워드에서 Ctrl+V</small></button>
+                <button type="button" class="btn" data-st-act="png"><span>PNG 저장</span><small id="st-png-small">투명 배경</small></button>
+                <button type="button" class="btn st-wide" data-st-act="keep"><span>내 도장에 보관</span><small data-keep-where="keep">이 브라우저에만 · PDF 작업실 꾸미기에서도 바로 골라요</small></button>
+              </div>
+              <p class="st-note" id="st-copy-alt" hidden>한글에서 붙인 크기나 바탕이 이상하면 <button type="button" class="btn sm" id="st-copy-plain">그림만 복사</button>로 한 번 더 해 보세요.</p>
+              <section class="st-shelf" aria-labelledby="st-shelf-h">
+                <h2 class="st-label" id="st-shelf-h">내 도장</h2>
+                <ul class="st-shelf-list" id="st-shelf"></ul>
+                <p class="st-note" id="st-shelf-empty">아직 없어요. 마음에 드는 도장을 [내 도장에 보관]하면 여기에 모이고, PDF 작업실 꾸미기의 서명 · 도장에도 나와요.</p>
+                <div class="stamp-notes" data-stamp-notes hidden></div>
+              </section>
+            </section>
+
+            <section class="st-box st-tray" aria-labelledby="st-tray-h">
+              <h2 class="sr-only" id="st-tray-h">도장 고르기</h2>
+              <div class="st-tray-head">
+                <div class="st-seg" role="group" aria-label="보기">
+                  <button type="button" id="st-v-pick" aria-pressed="true">추천 모음</button>
+                  <button type="button" id="st-v-fonts" aria-pressed="false">글꼴 모아 보기</button>
+                  <button type="button" id="st-v-shapes" aria-pressed="false">모양 모아 보기</button>
+                </div>
+                <span class="st-count" id="st-count"></span>
+              </div>
+              <p class="st-note" id="st-tray-note"></p>
+              <div class="st-grid" id="st-grid"></div>
+            </section>
+          </div>
+          <p class="st-foot">글꼴: 모두 SIL 오픈 폰트 라이선스(무료 · 상업 이용 가능). 막도장 수준이라 인감 효력은 없어요 — 회신서 · 확인서용.</p>
+        </div>
+      </section>
+  </main>
+
+  <dialog class="dialog confirm-dialog" id="sp-confirm" aria-labelledby="sp-confirm-h">
+    <form method="dialog">
+      <h2 id="sp-confirm-h"></h2>
+      <p id="sp-confirm-body"></p>
+      <div class="btn-row end">
+        <button type="submit" class="btn" value="no" id="sp-confirm-no">그만두기</button>
+        <button type="submit" class="btn primary" value="yes" id="sp-confirm-yes">지우기</button>
+      </div>
+    </form>
+  </dialog>
+  <div id="toasts" class="toasts" aria-live="assertive" popover="manual"></div>
+</body>
+</html>

@@ -180,6 +180,22 @@ button, label[for] { cursor: pointer; }
   font-size: 13px;
   color: var(--on-navy-muted);
 }
+/* EDIT 도구(입구)로 — PDF 작업실 · 사진 작업실 · 도장 만들기를 오가는 길 */
+.edit-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, .28);
+  color: #FFFFFF;
+  font-size: 14px;
+  font-weight: 700;
+  text-decoration: none;
+  letter-spacing: .02em;
+}
+.edit-link:hover { border-color: #FFFFFF; background: rgba(255, 255, 255, .08); }
+.edit-link:focus-visible { outline: 3px solid #8FA6FF; outline-offset: 2px; }
 .safe-dot {
   width: 9px;
   height: 9px;
@@ -251,6 +267,8 @@ button, label[for] { cursor: pointer; }
   box-shadow: var(--shadow-sm);
   transition: transform .18s, box-shadow .18s, border-color .18s;
 }
+a.tool-card { text-decoration: none; }
+.tool-card-out .tool-open { color: var(--muted); }
 .tool-card:hover {
   transform: translateY(-3px);
   border-color: var(--tc);

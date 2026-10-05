@@ -1,0 +1,66 @@
+/* 도장 만들기(/stamp) 한 장 — 도장 화면 자체는 style.css의 .panel-stamp · .st-* 를 그대로 쓴다.
+   여기는 그 둘레(위 줄 · 사용법 접기 · 여백)만. 휴대폰 폭을 먼저 */
+body.stamp-page {
+  min-height: 100vh;
+  min-height: 100dvh;
+  -webkit-text-size-adjust: 100%;
+}
+.sp-noscript { margin: 16px; padding: 12px; border-radius: 12px; background: var(--panel); }
+
+.sp-top {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px;
+  max-width: 1240px; margin: 0 auto;
+  padding: max(10px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 6px max(16px, env(safe-area-inset-left));
+}
+.sp-brand { display: inline-flex; align-items: center; gap: 10px; min-height: 44px; color: inherit; text-decoration: none; }
+.sp-mark {
+  display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;
+  width: 36px; height: 36px; border-radius: 10px;
+  background: linear-gradient(135deg, #E0574B, #9E2A20); color: #FFFFFF;
+}
+.sp-mark svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.sp-brand-text { display: flex; flex-direction: column; line-height: 1.15; }
+.sp-brand-text strong { font-size: 17px; letter-spacing: -0.02em; }
+.sp-brand-text span { font-size: 12px; color: var(--muted); }
+.sp-safe {
+  order: 3; flex: 1 1 100%;
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12.5px; color: var(--muted);
+}
+.sp-dot { width: 8px; height: 8px; border-radius: 50%; background: #0FA07C; flex: 0 0 auto; }
+.sp-grow { flex: 1 1 auto; }
+.sp-nav { display: flex; gap: 6px; }
+.sp-link {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: 44px; padding: 6px 12px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+  font-size: 14px; font-weight: 700; text-decoration: none; white-space: nowrap;
+}
+.sp-link:hover { border-color: var(--accent); color: var(--accent); }
+.sp-link:focus-visible, .sp-brand:focus-visible, .sp-guide summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+.sp-main {
+  max-width: 1240px; margin: 0 auto;
+  padding: 4px max(16px, env(safe-area-inset-right)) max(32px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+}
+.stamp-page .panel-stamp { max-width: none; }
+
+/* 사용법: 처음엔 접어 두고(휴대폰에서 위쪽을 채우지 않게), 펼치면 단계 + 자주 막히는 곳 */
+.sp-guide { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+.sp-guide summary {
+  display: flex; align-items: center; min-height: 44px; padding: 8px 14px;
+  font-size: 14px; font-weight: 700; cursor: pointer; list-style: none;
+}
+.sp-guide summary::-webkit-details-marker { display: none; }
+.sp-guide summary::before { content: "+"; display: inline-block; width: 1.2em; font-weight: 800; color: var(--accent); }
+.sp-guide[open] summary::before { content: "−"; }
+.sp-guide-body { display: grid; gap: 12px; padding: 0 14px 14px; }
+
+@media (min-width: 760px) {
+  .sp-safe { order: 0; flex: 0 1 auto; padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); }
+}
+.stamp-page .toast-x { font-size: 18px; line-height: 1; }
+/* 터치 화면: 작은 단추(단축키 · 그림만 복사 · 내 것으로 · 지우기)도 손가락 크기로 */
+@media (pointer: coarse), (hover: none) {
+  .stamp-page .btn.sm { min-height: 44px; padding: 8px 14px; font-size: 14px; }
+}

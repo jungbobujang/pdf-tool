@@ -41,7 +41,7 @@
   const MORE_FIRST = 24;
   function loadHanja() {
     if (hanjaLoad) return hanjaLoad;
-    hanjaLoad = fetch(`stamp/hanja.json?v=${encodeURIComponent(api.ver)}`, { credentials: 'same-origin' })
+    hanjaLoad = fetch(`/stamp/hanja.json?v=${encodeURIComponent(api.ver)}`, { credentials: 'same-origin' })
       .then((r) => (r.ok ? r.json() : null))
       .then((json) => { hanjaData = json; if (st.mode === 'hanja') renderHanja(); })
       .catch(() => { hanjaLoad = null; });
@@ -100,7 +100,7 @@
 
   // ── 글꼴 ──────────────────────────────────────────────────────
   async function loadFontData() {
-    const r = await fetch(`stamp/fonts.json?v=${encodeURIComponent(api.ver)}`, { credentials: 'same-origin' });
+    const r = await fetch(`/stamp/fonts.json?v=${encodeURIComponent(api.ver)}`, { credentials: 'same-origin' });
     if (!r.ok) throw new Error(`글꼴 목록 ${r.status}`);
     fontData = await r.json();
     has = C.coverage(fontData);
@@ -492,8 +492,8 @@
     const it = await api.Stamps.add({ kind: 'made', bytes: img.bytes, w: img.w, h: img.h, mm: img.wMm, name: `${img.label} ${mmText()}`, config: C.pickState(st), configKey: key, clearWhite: false });
     if (!quiet) {
       say('내 도장에 보관했어요.', api.Stamps.shared && api.Stamps.shared()
-        ? '빌려 쓰는 PC라 이 창에만 둬요. 창을 닫으면 지워져요. 꾸미기의 서명 · 도장에서는 바로 골라요.'
-        : '이 브라우저에만 남아요. 꾸미기의 서명 · 도장에서도 바로 골라요.', 'ok');
+        ? '빌려 쓰는 PC라 이 창에만 둬요. 창을 닫으면 지워져요. PDF 작업실 꾸미기의 서명 · 도장에서도 바로 골라요.'
+        : '이 브라우저에만 남아요. PDF 작업실 꾸미기의 서명 · 도장에서도 바로 골라요.', 'ok');
     }
     return it;
   }
