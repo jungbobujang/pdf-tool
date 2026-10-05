@@ -64,3 +64,7 @@ body.stamp-page {
 @media (pointer: coarse), (hover: none) {
   .stamp-page .btn.sm { min-height: 44px; padding: 8px 14px; font-size: 14px; }
 }
+/* 휴대폰: 위 줄에 이미 "도장 만들기"가 있으니 큰 제목은 읽어 주기만(위쪽을 채우지 않게) */
+@media (max-width: 759px) {
+  .stamp-page #sp-title { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+}

@@ -2600,7 +2600,7 @@ label.btn[role="button"]:focus-visible, label.drop-mini[role="button"]:focus-vis
 /* ═══ 도장 만들기 ════════════════════════════════════════════
    왼쪽 작업대(새길 글자 · 크게 · 서식 위 실제 크기 · 다듬기 · 만들기) + 오른쪽 고르는 판.
    패널 폭에 따라(사용법 패널이 열려도) 한 줄 · 두 줄로: 화면 폭이 아니라 패널 폭(container)으로 정한다. */
-[data-open="stamp"], [data-tab="stamp"] { --tc: #D2383D; }
+[data-open="stamp"], [data-tab="stamp"], [data-edit="stamp"] { --tc: #D2383D; }
 .panel-stamp {
   max-width: 1240px;
   container-type: inline-size;
