@@ -19,16 +19,16 @@ concurrency:
 
 jobs:
   gate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04 # 판 고정: ubuntu-latest는 2026-10-19부터 Ubuntu 26(글꼴 · 브라우저 설치가 달라질 수 있음)
     timeout-minutes: 45
     env:
       TZ: Asia/Seoul
       CI: 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # 옛 워커 청소 검사가 옛 커밋(622bfcd)을 git archive로 꺼낸다
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22.x
           cache: npm
