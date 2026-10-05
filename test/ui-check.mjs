@@ -2412,8 +2412,10 @@ try {
     check('/check: 세 단계 + 움직이는 예시 2개 재생 + CSP 규칙 목록(서버 헤더와 같음)', pc.status === 200 && pc.playing.length === 2 && pc.playing.some(Boolean) && pc.csp === 11 && pc.limit,
       `${pc.h1} · 예시 재생 ${pc.playing.join('/')} · CSP ${pc.csp}줄`);
     check('/privacy: 수집 없음 · 마지막 갱신일 · 책임 한계 한 줄', pp.status === 200 && pp.updated && pp.limit, pp.h1);
-    check('/licenses: package.json 의존성 모두(이름@버전)', pl.status === 200 && deps.every((d) => pl.libs.some((l) => l.startsWith(`${d}@`))) && pl.libs.length === deps.length,
-      `${pl.libs.length}개: ${pl.libs.join(', ').slice(0, 160)}`);
+    // + 도장 만들기 글꼴(public/stamp/fonts.json, 저장소에 넣은 Fontsource 글꼴)
+    const stampFonts = Object.values(JSON.parse(fs.readFileSync(path.join(root, 'public', 'stamp', 'fonts.json'), 'utf8')).fonts).map((f) => `${f.pkg}@${f.version}`);
+    check('/licenses: package.json 의존성 모두(이름@버전) + 도장 글꼴', pl.status === 200 && deps.every((d) => pl.libs.some((l) => l.startsWith(`${d}@`))) && stampFonts.every((f) => pl.libs.includes(f)) && pl.libs.length === deps.length + stampFonts.length,
+      `${pl.libs.length}개(라이브러리 ${deps.length} + 글꼴 ${stampFonts.length}): ${pl.libs.join(', ').slice(0, 160)}`);
     check('안내 페이지 3곳 콘솔 에러 0 · 가로 넘침 없음 · 푸터 버전', perr.length === 0 && pages.every((x) => x.sw <= 1280 && /^v /.test(x.ver || '')),
       perr.length ? perr.join(' | ').slice(0, 200) : pages.map((x) => `${x.u} ${x.ver}`).join(' · '));
 
