@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  // 스쿨 도구함에서 통행증이 이미 있는 채로 열리면(#t=입장권&tool=이름) 서버가 안내 화면 없이 앱을 준다.
+  // Xschool 도구함에서 통행증이 이미 있는 채로 열리면(#t=입장권&tool=이름) 서버가 안내 화면 없이 앱을 준다.
   // 입장권을 주소에서 지우고 통행증을 지금 사람 것으로 새로 받는 일은 EDIT 공통(edit/common.js)이 먼저 했다.
   // 도구 이름은 #이름 으로 바뀌어 있어 아래 toolFromHash가 연다.
 
@@ -626,7 +626,7 @@
   function toolFromHash() {
     let raw = '';
     try { raw = decodeURIComponent(location.hash.slice(1)).toLowerCase(); } catch { return null; }
-    // EDIT: 도장 만들기 · 사진 작업실은 자기 주소에 있다(예전 /#stamp · 스쿨의 &tool=stamp)
+    // EDIT: 도장 만들기 · 사진 작업실은 자기 주소에 있다(예전 /#stamp · Xschool의 &tool=stamp)
     if (raw === 'stamp' || raw === 'photo') { location.replace(`/${raw}`); return null; }
     const t = TOOL_ALIAS[raw] || raw;
     return tabs.some((x) => x.dataset.tab === t) ? t : null;
@@ -2820,7 +2820,7 @@
       const parts = [];
       if (shared) {
         parts.push(h('p', { class: 'hint-box warn stamp-shared' }, '빌려 쓰는 PC예요. 여기서 만든 서명 · 도장은 이 창에만 두고, 창을 닫으면 지워져요. ',
-          h('small', null, '내 PC라면 스쿨 → 내 정보에서 "이 PC는 내 교실 PC예요"를 체크하고 도구함에서 다시 열어 주세요.')));
+          h('small', null, '내 PC라면 Xschool → 내 정보에서 "이 PC는 내 교실 PC예요"를 체크하고 도구함에서 다시 열어 주세요.')));
       }
       if (n) {
         parts.push(h('div', { class: 'hint-box stamp-legacy' },
@@ -6404,7 +6404,7 @@
   }
 
   // ═══════════════════════════════════════════════════════════
-  // 오프라인 · 바탕화면 설치는 끝났다(2026-09-30): 이제 스쿨 도구함의 [열기]로만 연다.
+  // 오프라인 · 바탕화면 설치는 끝났다(2026-09-30): 이제 Xschool 도구함의 [열기]로만 연다.
   // 서비스 워커를 등록하지 않는다. 예전에 깔린 것은 /sw.js(끄기 워커)가 스스로 치운다.
   // ═══════════════════════════════════════════════════════════
   const Pwa = (() => ({

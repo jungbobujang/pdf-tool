@@ -992,7 +992,7 @@ M._resolveFilename = function (req, ...a) { if (/^(@playwright\\/test|playwright
   const same = E.TOOLS.every((t) => R.TOOL_PATH[t.id] === t.path) && Object.keys(R.TOOL_PATH).length === E.TOOLS.length;
   check('EDIT: 서버(lib/edit-tools.js)와 화면(edit/route.js)의 도구 주소가 같다', same, E.TOOLS.map((t) => `${t.id}→${t.path}`).join(' · '));
   const g = (u) => { const x = E.gateFor(u); return `${x.name}/${x.go}`; };
-  check('EDIT: 안내 화면 이름과 [스쿨에서 열기] 도구(주소마다)',
+  check('EDIT: 안내 화면 이름과 [Xschool에서 열기] 도구(주소마다)',
     g('/') === 'EDIT/pdf' && g('/pdf') === 'PDF 작업실/pdf' && g('/check') === 'EDIT/pdf' && g('/stamp') === '도장 만들기/stamp' && g('/stamp/') === '도장 만들기/stamp' && g('/photo') === '사진 작업실/photo' && g('/photograph') === 'EDIT/pdf',
     ['/', '/pdf', '/stamp', '/photo', '/photograph'].map((u) => `${u} ${g(u)}`).join(' · '));
   const d = (p, t, f) => R.destFor(p, t, f);
@@ -1004,6 +1004,26 @@ M._resolveFilename = function (req, ...a) { if (/^(@playwright\\/test|playwright
   const bad = cases.filter(([a, want]) => d(...a) !== want);
   check('EDIT: 입장권 · 예전 주소(/#이름)를 도구 주소로(PDF 안 도구는 /pdf#이름, 이름 없으면 /pdf, 입구에 그냥 오면 그대로)', bad.length === 0,
     bad.length ? bad.map(([a, want]) => `${a.join(',')} → ${d(...a)}(기대 ${want})`).join(' | ') : `${cases.length}가지`);
+}
+
+// ── 집 이름: Xschool(옛 가칭은 화면 · 안내 어디에도 남기지 않는다) ──
+{
+  const { readdirSync, readFileSync: readText, statSync } = await import('node:fs');
+  const { join: joinPath } = await import('node:path');
+  const OLD = String.fromCharCode(0xc2a4, 0xcfe8); // 옛 가칭(이 파일이 걸리지 않게 글자로 만든다)
+  const left = [];
+  const walkDir = (dir) => {
+    for (const name of readdirSync(dir)) {
+      const full = joinPath(dir, name);
+      if (statSync(full).isDirectory()) { if (name !== 'vendor') walkDir(full); continue; }
+      if (!/\.(html|js|json|css)$/.test(name)) continue;
+      const text = readText(full, 'utf8');
+      if (new RegExp(`(?<!${String.fromCharCode(0xb514)})${OLD}`).test(text)) left.push(full);
+    }
+  };
+  walkDir('public');
+  for (const f of ['server.js', 'lib/gate.js', 'lib/edit-tools.js']) if (new RegExp(OLD).test(readText(f, 'utf8'))) left.push(f);
+  check('집 이름: 화면 · 안내 · 서버 문장에 옛 가칭이 없다(Xschool)', left.length === 0, left.join(', ') || '없음');
 }
 
 // ── 결과 표 ─────────────────────────────────────────

@@ -4,7 +4,7 @@
   'use strict';
   const C = self.PhotoCore;
 
-  // 스쿨 도구함에서 통행증이 이미 있는 채로 열리면(#t=입장권) 입장권을 주소에서 지우고 지금 사람 것으로 새로 받는다.
+  // Xschool 도구함에서 통행증이 이미 있는 채로 열리면(#t=입장권) 입장권을 주소에서 지우고 지금 사람 것으로 새로 받는다.
   // (PDF 작업실 app.js와 같은 방법 · 실패해도 지금 통행증으로 계속)
   const ENTERING = (() => {
     const hash = String(location.hash || '');
@@ -45,7 +45,7 @@
     return s;
   }
 
-  // 빌려 쓰는 PC(스쿨에서 "내 교실 PC"로 정하지 않은 PC)면 설정을 기억하지 않는다
+  // 빌려 쓰는 PC(Xschool에서 "내 교실 PC"로 정하지 않은 PC)면 설정을 기억하지 않는다
   function cookie(name) {
     try {
       const hit = String(document.cookie || '').split(';').map((x) => x.trim()).find((x) => x.startsWith(`${name}=`));

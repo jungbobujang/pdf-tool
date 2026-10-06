@@ -43,10 +43,10 @@
   }
   var ticket = '';
   try { ticket = decodeURIComponent(match[1]); } catch (e) { ticket = match[1]; }
-  // 스쿨 도구함이 하위 도구를 고르면 #t=입장권&tool=compress. 이름 모양만 여기서 거르고, 열 수 있는 도구인지는 앱이 본다
+  // Xschool 도구함이 하위 도구를 고르면 #t=입장권&tool=compress. 이름 모양만 여기서 거르고, 열 수 있는 도구인지는 앱이 본다
   var toolMatch = hash.match(/&tool=([a-z0-9-]{1,20})(?:&|$)/);
   var tool = toolMatch ? toolMatch[1] : '';
-  // 스쿨에서 "내 교실 PC"로 정하지 않은 PC면 &pc=shared: 통행증을 창을 닫으면 사라지게, 서명 · 도장은 이 창에만
+  // Xschool에서 "내 교실 PC"로 정하지 않은 PC면 &pc=shared: 통행증을 창을 닫으면 사라지게, 서명 · 도장은 이 창에만
   var pc = /&pc=shared(?:&|$)/.test(hash) ? 'shared' : 'mine';
   // 입장권은 주소창 · 방문 기록에 남기지 않는다
   history.replaceState(null, '', location.pathname + location.search);
@@ -71,8 +71,8 @@
       try { history.replaceState(null, '', dest); location.reload(); } catch (e) { location.replace(dest); }
       return;
     }
-    showError((r.body && r.body.message) || '열지 못했어요. 아래 [스쿨에서 열기]를 다시 눌러 주세요.');
+    showError((r.body && r.body.message) || '열지 못했어요. 아래 [Xschool에서 열기]를 다시 눌러 주세요.');
   }).catch(function () {
-    showError('서버에 연결하지 못했어요. 인터넷 연결을 확인하고 아래 [스쿨에서 열기]를 다시 눌러 주세요.');
+    showError('서버에 연결하지 못했어요. 인터넷 연결을 확인하고 아래 [Xschool에서 열기]를 다시 눌러 주세요.');
   });
 })();
