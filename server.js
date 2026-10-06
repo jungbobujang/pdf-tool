@@ -1,7 +1,7 @@
 'use strict';
 
 // 정적 파일만 제공하는 서버. 업로드를 받는 경로는 없다(PDF는 브라우저 밖으로 나가지 않는다).
-// 스쿨 입장권(도구 연결 규칙 v1): 스쿨 도구함의 [열기]로 온 선생님만 화면을 받는다(lib/gate.js).
+// Xschool 입장권(도구 연결 규칙 v1): Xschool 도구함의 [열기]로 온 선생님만 화면을 받는다(lib/gate.js).
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -180,9 +180,9 @@ app.get('/version', (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// 스쿨 입장권 · 통행증
+// Xschool 입장권 · 통행증
 // ─────────────────────────────────────────────────────────────
-// 스쿨 주소(공개 키를 받는 곳 · 안내 화면의 [스쿨에서 열기] = 스쿨 주소 + /go/pdf)
+// Xschool 주소(공개 키를 받는 곳 · 안내 화면의 [Xschool에서 열기] = Xschool 주소 + /go/pdf)
 const SCHOOL_URL = (process.env.SCHOOL_URL || 'https://school-production-082b.up.railway.app').replace(/\/+$/, '');
 // 통행증 서명 비밀: 서버가 시작할 때마다 새로 만든다(그래서 재배포하면 다시 [열기]가 필요하다).
 // PASS_SECRET(64자리 16진수)은 여러 서버를 띄우는 점검에서만 쓴다.
@@ -192,7 +192,7 @@ const jtis = gate.createJtiStore();
 const enterLimit = gate.createRateLimit(20, 60 * 1000);
 const hasPass = (req) => !!gate.readPass(PASS_SECRET, gate.cookieOf(req));
 
-// 안내 화면: 통행증이 없을 때 모든 페이지 대신 준다. 이름과 [스쿨에서 열기]는 그 주소의 도구(EDIT)로
+// 안내 화면: 통행증이 없을 때 모든 페이지 대신 준다. 이름과 [Xschool에서 열기]는 그 주소의 도구(EDIT)로
 const GATE_HTML = (info) => renderHtml(path.join(PUBLIC, 'gate.html'))
   .replace(/__SCHOOL_URL__/g, SCHOOL_URL)
   .replace(/__TOOL_NAME__/g, info.name)
@@ -207,15 +207,15 @@ function sendGate(res, req) {
 }
 
 const ENTER_TEXT = {
-  school_unreachable: '스쿨에 잠깐 연결이 안 돼요. 잠시 뒤 아래 [스쿨에서 열기]를 다시 눌러 주세요.',
-  too_many: '너무 자주 시도했어요. 1분 뒤에 아래 [스쿨에서 열기]를 다시 눌러 주세요.',
+  school_unreachable: 'Xschool에 잠깐 연결이 안 돼요. 잠시 뒤 아래 [Xschool에서 열기]를 다시 눌러 주세요.',
+  too_many: '너무 자주 시도했어요. 1분 뒤에 아래 [Xschool에서 열기]를 다시 눌러 주세요.',
 };
 app.post('/api/enter', express.json({ limit: '4kb' }), async (req, res) => {
   res.set('Cache-Control', 'no-store');
   const fail = (status, reason, message) => {
     // 로그에는 결과와 까닭의 종류만. 입장권 · 가명 번호 · 쿠키 값은 남기지 않는다
     console.log(`enter fail reason=${reason}`);
-    res.status(status).json({ error: reason, message: `${message} 아래 [스쿨에서 열기]를 다시 눌러 주세요.` });
+    res.status(status).json({ error: reason, message: `${message} 아래 [Xschool에서 열기]를 다시 눌러 주세요.` });
   };
   if (!enterLimit(gate.clientIp(req))) {
     console.log('enter fail reason=too_many');
@@ -228,7 +228,7 @@ app.post('/api/enter', express.json({ limit: '4kb' }), async (req, res) => {
   }
   const result = gate.checkTicket(req.body && req.body.t, key, { jtis });
   if (!result.ok) return fail(result.reason === 'format' ? 400 : 403, result.reason, gate.REASONS[result.reason] || gate.REASONS.format);
-  // 빌려 쓰는 PC면(스쿨이 #…&pc=shared) 통행증을 창을 닫으면 사라지는 쿠키로, 화면은 서명 · 도장을 이 창에만 둔다
+  // 빌려 쓰는 PC면(Xschool이 #…&pc=shared) 통행증을 창을 닫으면 사라지는 쿠키로, 화면은 서명 · 도장을 이 창에만 둔다
   const shared = !!(req.body && req.body.pc === 'shared');
   res.set('Set-Cookie', gate.enterCookies(gate.makePass(PASS_SECRET, result.body), result.body.sub, { shared }));
   console.log(`enter ok${shared ? ' pc=shared' : ''}`);

@@ -88,7 +88,7 @@
       const parts = [];
       if (shared) {
         parts.push(h('p', { class: 'hint-box warn stamp-shared' }, '빌려 쓰는 PC예요. 여기서 만든 도장은 이 창에만 두고, 창을 닫으면 지워져요. ',
-          h('small', null, '내 PC라면 스쿨 → 내 정보에서 "이 PC는 내 교실 PC예요"를 체크하고 도구함에서 다시 열어 주세요.')));
+          h('small', null, '내 PC라면 Xschool → 내 정보에서 "이 PC는 내 교실 PC예요"를 체크하고 도구함에서 다시 열어 주세요.')));
       }
       if (n) {
         parts.push(h('div', { class: 'hint-box stamp-legacy' },

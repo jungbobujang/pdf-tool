@@ -92,14 +92,14 @@ function watch(pg, list) {
   pg.on('dialog', (d) => (d.type() === 'beforeunload' ? d.accept() : d.dismiss()).catch(() => {}));
 }
 
-// ── 스쿨 입장권: 점검용 Ed25519 키 쌍과 가짜 스쿨(공개 키만 주는 작은 서버) ──
+// ── Xschool 입장권: 점검용 Ed25519 키 쌍과 가짜 Xschool(공개 키만 주는 작은 서버) ──
 const nodeCrypto = require('node:crypto');
 const http = require('node:http');
 const TK = nodeCrypto.generateKeyPairSync('ed25519');
 const TK_PUB = TK.publicKey.export({ format: 'jwk' }).x;
 const TK_KID = nodeCrypto.createHash('sha256').update(Buffer.from(TK_PUB, 'base64url')).digest('base64url').slice(0, 8);
 const OTHER = nodeCrypto.generateKeyPairSync('ed25519');
-/** 스쿨이 주는 것과 같은 모양의 입장권. 바꿔 보고 싶은 칸만 넘긴다 */
+/** Xschool이 주는 것과 같은 모양의 입장권. 바꿔 보고 싶은 칸만 넘긴다 */
 function makeTicket({ aud = 'pdf', iat, exp, jti, kid = TK_KID, key = TK.privateKey, sub = 'sub-test-0001', sch = 'sch-test-0001' } = {}) {
   const now = Math.floor(Date.now() / 1000);
   const i = iat === undefined ? now : iat;
@@ -417,7 +417,7 @@ try {
       await seedLegacy(p0, 'stold1');
       await p0.close();
 
-      // 선생님 A: 내 교실 PC(스쿨이 pc를 붙이지 않음)
+      // 선생님 A: 내 교실 PC(Xschool이 pc를 붙이지 않음)
       const pA = await c.newPage();
       watch(pA, errs);
       let entered = pA.waitForResponse((r) => r.url().endsWith('/api/enter'), { timeout: 15000 });
@@ -429,7 +429,7 @@ try {
       const passA = await cookie('pdf_pass');
       const whoA = ((await cookie('pdf_who')) || {}).value || '';
       await until(pA, () => !!document.querySelector('#panel-stamp [data-stamp-notes] [data-legacy="claim"]'));
-      check('공용 PC: 예전 스쿨 주소(/#t=…&tool=stamp) → /stamp · 내 PC로 들어오면 통행증 8시간 · 예전 보관(주인 모름)은 숨기고 [내 것으로] · [지우기]',
+      check('공용 PC: 예전 Xschool 주소(/#t=…&tool=stamp) → /stamp · 내 PC로 들어오면 통행증 8시간 · 예전 보관(주인 모름)은 숨기고 [내 것으로] · [지우기]',
         urlA === STAMP && sA.owner === 'set' && !sA.shared && sA.count === 0 && sA.legacy === 1 && passA && passA.expires > 0 && /^[0-9a-f]{16}$/.test(whoA),
         `표 ${sA.owner ? '있음' : '없음✗'} · 빌려 씀 ${sA.shared} · 내 것 ${sA.count} · 숨김 ${sA.legacy} · 통행증 ${passA && passA.expires > 0 ? '8시간' : '세션✗'}`);
       await pA.click('#panel-stamp [data-legacy="claim"]');
@@ -529,10 +529,10 @@ try {
     const noPass = { redirect: 'manual' };
     const gates = await Promise.all([['/', 'EDIT', 'pdf'], ['/pdf', 'PDF 작업실', 'pdf'], ['/stamp', '도장 만들기', 'stamp'], ['/photo', '사진 작업실', 'photo']].map(async ([u, name, go]) => {
       const r = await got(u, noPass);
-      const ok = r.status === 200 && /스쿨 선생님 전용 도구예요/.test(r.text) && r.text.includes(`<p class="gate-name">${name}</p>`) && r.text.includes(`/go/${go}"`) && !/__TOOL_NAME__|__GO__/.test(r.text);
+      const ok = r.status === 200 && /Xschool 선생님 전용 도구예요/.test(r.text) && r.text.includes(`<p class="gate-name">${name}</p>`) && r.text.includes(`/go/${go}"`) && !/__TOOL_NAME__|__GO__/.test(r.text);
       return { u, ok };
     }));
-    check('통행증 없이: 도구 주소마다 그 도구 이름의 안내 화면 · [스쿨에서 열기]는 스쿨 /go/그 도구', gates.every((g) => g.ok), gates.map((g) => `${g.u} ${g.ok ? 'OK' : '✗'}`).join(' · '));
+    check('통행증 없이: 도구 주소마다 그 도구 이름의 안내 화면 · [Xschool에서 열기]는 Xschool /go/그 도구', gates.every((g) => g.ok), gates.map((g) => `${g.u} ${g.ok ? 'OK' : '✗'}`).join(' · '));
 
     // 예전 주소(/#이름)와 새 주소의 입장권(/pdf#t=…&tool=compress, 통행증 없음)
     const c = await browser.newContext({ viewport: { width: 1280, height: 800 }, extraHTTPHeaders: { 'X-Real-IP': '198.51.100.71' } });
@@ -639,7 +639,7 @@ try {
       await until(pg, () => !!(window.__photo && window.__photo.ready));
       const home = await pg.evaluate(() => ({ goals: document.querySelectorAll('.ph-goal').length, soon: document.querySelectorAll('.ph-goal:disabled').length, sw: document.documentElement.scrollWidth }));
       check('사진 작업실: 통행증 없으면 안내 화면 · 처음 화면 "무엇을 할까요?" 6개(곧 열려요 3)',
-        /스쿨 선생님 전용 도구예요/.test(gateText) && home.goals === 6 && home.soon === 3 && home.sw <= 1280, `목적 ${home.goals} · 곧 ${home.soon}`);
+        /Xschool 선생님 전용 도구예요/.test(gateText) && home.goals === 6 && home.soon === 3 && home.sw <= 1280, `목적 ${home.goals} · 곧 ${home.soon}`);
 
       const [chooser] = await Promise.all([pg.waitForEvent('filechooser'), pg.click('.ph-goal[data-goal="kakao"]')]);
       await chooser.setFiles([pA, pB, pC]);
@@ -2323,7 +2323,7 @@ try {
     await actx.close();
   }
 
-  // ── 11-c. 전송 차단(CSP) · 스쿨 입장권 · 바탕화면 설치와 오프라인 끝 ──
+  // ── 11-c. 전송 차단(CSP) · Xschool 입장권 · 바탕화면 설치와 오프라인 끝 ──
   {
     const octx = await browser.newContext({ viewport: { width: 1280, height: 900 }, acceptDownloads: true, colorScheme: 'light' });
     const o = await octx.newPage();
@@ -2375,8 +2375,8 @@ try {
       await o.screenshot({ path: path.join(root, 'docs', 'screens', 'offline.png') });
     }
     await octx.setOffline(false);
-    check('연 화면은 인터넷이 끊겨도: 합치기 · 저장 7쪽 + "인터넷 연결이 없어요 … 새로고침하면 다시 스쿨에서" 배지',
-      off.badge && off.sw && /인터넷 연결이 없어요/.test(off.text || '') && /스쿨에서/.test(off.text || '') && odoc.getPageCount() === 7,
+    check('연 화면은 인터넷이 끊겨도: 합치기 · 저장 7쪽 + "인터넷 연결이 없어요 … 새로고침하면 다시 Xschool에서" 배지',
+      off.badge && off.sw && /인터넷 연결이 없어요/.test(off.text || '') && /Xschool에서/.test(off.text || '') && odoc.getPageCount() === 7,
       `배지 "${(off.text || '').slice(0, 30)}…" · ${odl.suggestedFilename()} ${odoc.getPageCount()}쪽`);
     check('CSP 위반 · 콘솔 에러 0개 (인터넷 끊김 흐름 포함)', csp.length === 0 && oerr.filter((e) => !/net::ERR_INTERNET_DISCONNECTED|Failed to fetch|\/version|heic-to/.test(e)).length === 0,
       csp.length ? csp.join(' | ').slice(0, 200) : `0개${oerr.length ? `(끊긴 동안 /version 실패 ${oerr.length}건은 정상)` : ''}`);
@@ -2386,9 +2386,9 @@ try {
     const noPass = await fetch(`${BASE}/`);
     const noPassHtml = await noPass.text();
     const ver = await fetch(`${BASE}/version`);
-    const pagesNoPass = await Promise.all(['/check', '/privacy', '/licenses', '/index.html'].map(async (u) => /스쿨 선생님 전용 도구예요/.test(await (await fetch(BASE + u)).text())));
+    const pagesNoPass = await Promise.all(['/check', '/privacy', '/licenses', '/index.html'].map(async (u) => /Xschool 선생님 전용 도구예요/.test(await (await fetch(BASE + u)).text())));
     check('통행증 없이 / · /check · /privacy · /licenses → 안내 화면, /version은 공개',
-      noPass.status === 200 && /스쿨 선생님 전용 도구예요/.test(noPassHtml) && !/id="home-title"/.test(noPassHtml) && pagesNoPass.every(Boolean) && ver.status === 200 && (await ver.json()).commit,
+      noPass.status === 200 && /Xschool 선생님 전용 도구예요/.test(noPassHtml) && !/id="home-title"/.test(noPassHtml) && pagesNoPass.every(Boolean) && ver.status === 200 && (await ver.json()).commit,
       `/ ${noPass.status} · 안내 페이지 ${pagesNoPass.filter(Boolean).length}/4 · /version ${ver.status}`);
     const withPass = await fetch(`${BASE}/`, { headers: { Cookie: `pdf_pass=${PASS}` } });
     const wpHtml = await withPass.text();
@@ -2413,7 +2413,7 @@ try {
     for (const [label, t, status, reason] of cases) {
       const r = await enter(t);
       const b = await r.json();
-      got.push({ label, ok: r.status === status && b.error === reason && !r.headers.get('set-cookie') && /\[스쿨에서 열기\]를 다시 눌러 주세요/.test(b.message || ''), st: r.status });
+      got.push({ label, ok: r.status === status && b.error === reason && !r.headers.get('set-cookie') && /\[Xschool에서 열기\]를 다시 눌러 주세요/.test(b.message || ''), st: r.status });
     }
     const first = await enter(reused);
     const second = await enter(reused);
@@ -2425,7 +2425,7 @@ try {
     const forged = `${PASS.split('.')[0]}.${Buffer.alloc(32, 7).toString('base64url')}`;
     const tampered = `${Buffer.from(JSON.stringify({ sub: 'x', sch: 'y', exp: now + 99999 })).toString('base64url')}.${PASS.split('.')[1]}`;
     const oldPass = passFor(now - 10);
-    const cookieCases = await Promise.all([forged, tampered, oldPass].map(async (c) => /스쿨 선생님 전용 도구예요/.test(await (await fetch(`${BASE}/`, { headers: { Cookie: `pdf_pass=${c}` } })).text())));
+    const cookieCases = await Promise.all([forged, tampered, oldPass].map(async (c) => /Xschool 선생님 전용 도구예요/.test(await (await fetch(`${BASE}/`, { headers: { Cookie: `pdf_pass=${c}` } })).text())));
     check('통행증 위조(서명 · 내용 바꿈) · 만료 → 안내 화면', cookieCases.every(Boolean), cookieCases.map((x) => (x ? '안내' : '열림✗')).join(' · '));
 
     // 1분 20회: 같은 X-Real-IP로 21번
@@ -2434,7 +2434,7 @@ try {
     const other = await enter('x', { 'X-Real-IP': '198.51.100.24' });
     check('들어오기는 IP(X-Real-IP)당 1분 20회, 21번째는 429 (다른 IP는 그대로)', rl.slice(0, 20).every((c) => c === 400) && rl[20] === 429 && other.status === 400, `${rl.slice(18).join(',')} · 다른 IP ${other.status}`);
 
-    // 스쿨 공개 키를 한 번도 못 받으면 503과 문장
+    // Xschool 공개 키를 한 번도 못 받으면 503과 문장
     {
       const DPORT = 4000 + Math.floor(Math.random() * 2000) + 3000;
       const ds = spawn(process.execPath, ['server.js'], { cwd: root, env: { ...process.env, PORT: String(DPORT), SCHOOL_URL: 'http://127.0.0.1:9' }, stdio: 'pipe' });
@@ -2442,7 +2442,7 @@ try {
       const r = await fetch(`http://localhost:${DPORT}/api/enter`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ t: makeTicket() }) });
       const b = await r.json();
       await new Promise((res) => { ds.once('exit', res); ds.kill(); });
-      check('스쿨 공개 키를 못 받으면 503 "스쿨에 잠깐 연결이 안 돼요…"', r.status === 503 && b.error === 'school_unreachable' && /스쿨에 잠깐 연결이 안 돼요/.test(b.message), `${r.status} ${b.error}`);
+      check('Xschool 공개 키를 못 받으면 503 "Xschool에 잠깐 연결이 안 돼요…"', r.status === 503 && b.error === 'school_unreachable' && /Xschool에 잠깐 연결이 안 돼요/.test(b.message), `${r.status} ${b.error}`);
     }
 
     // 로그: 결과와 까닭의 종류만
@@ -2470,7 +2470,7 @@ try {
       await until(f, () => !document.getElementById('gate-error').hidden, undefined, { timeout: 10000 });
       const failText = await f.textContent('#gate-error');
       const failUrl = f.url();
-      check('안내 화면: #t=입장권 → 통행증 받고 #을 지운 주소로 다시 열려 PDF 화면 · 실패하면 까닭 문장 + [스쿨에서 열기]',
+      check('안내 화면: #t=입장권 → 통행증 받고 #을 지운 주소로 다시 열려 PDF 화면 · 실패하면 까닭 문장 + [Xschool에서 열기]',
         !/#t=/.test(inUrl) && /만료/.test(failText) && !/#t=/.test(failUrl) && await f.isVisible('#gate-school') && gerr.length === 0,
         `열림 ${inUrl.replace(BASE, '')} · 실패 "${failText.slice(0, 30)}…"`);
       await gctx.close();
@@ -2608,12 +2608,12 @@ try {
       check('안내 화면: 390×844 · 820×1180 · 1180×820(터치) · 1280×720 · 다크에서 가로 스크롤 없음 · 단추 44px · 글자 12px', probs.length === 0, probs.join(' | ') || '5개 모두 통과');
     }
 
-    // ── 스쿨에서 열기: 안내 · 실패 3가지 · 아이콘 안내의 단추가 모두 스쿨 /go/pdf ──
+    // ── Xschool에서 열기: 안내 · 실패 3가지 · 아이콘 안내의 단추가 모두 Xschool /go/pdf ──
     {
       const GO = `${process.env.SCHOOL_URL}/go/pdf`;
-      const SENTENCE = '스쿨 선생님 전용 도구예요. [스쿨에서 열기]를 누르면 로그인 뒤 바로 이 화면으로 돌아와요.';
+      const SENTENCE = 'Xschool 선생님 전용 도구예요. [Xschool에서 열기]를 누르면 로그인 뒤 바로 이 화면으로 돌아와요.';
       const button = async (pg) => ({ href: await pg.getAttribute('#gate-school', 'href'), text: (await pg.textContent('#gate-school')).trim(), shown: await pg.isVisible('#gate-school') });
-      const okButton = (b) => b.href === GO && b.text === '스쿨에서 열기' && b.shown;
+      const okButton = (b) => b.href === GO && b.text === 'Xschool에서 열기' && b.shown;
       const found = [];
       // 1) 주소만 알고 온 경우: 세 기기 + 다크
       for (const sz of [{ w: 390, h: 844, touch: true }, { w: 820, h: 1180, touch: true }, { w: 1280, h: 720 }, { w: 1280, h: 720, dark: true }]) {
@@ -2625,7 +2625,7 @@ try {
         found.push({ label: `안내 ${sz.w}${sz.dark ? ' 다크' : ''}`, ok: okButton(b) && text === SENTENCE, detail: b.href });
         await c.close();
       }
-      // 2) 실패 3가지: 만료 · 이미 씀 · 스쿨 연결 안 됨 -- 까닭 문장 + 같은 단추, #t는 주소에 남지 않음
+      // 2) 실패 3가지: 만료 · 이미 씀 · Xschool 연결 안 됨 -- 까닭 문장 + 같은 단추, #t는 주소에 남지 않음
       const failCase = async (label, base, ticket, pattern) => {
         const c = await rawContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
         const pg = await c.newPage();
@@ -2633,7 +2633,7 @@ try {
         await until(pg, () => !document.getElementById('gate-error').hidden, undefined, { timeout: 10000 });
         const text = await pg.textContent('#gate-error');
         const b = await button(pg);
-        found.push({ label, ok: pattern.test(text) && /\[스쿨에서 열기\]를 다시 눌러 주세요/.test(text) && okButton(b) && !/#t=/.test(pg.url()), detail: text.slice(0, 40) });
+        found.push({ label, ok: pattern.test(text) && /\[Xschool에서 열기\]를 다시 눌러 주세요/.test(text) && okButton(b) && !/#t=/.test(pg.url()), detail: text.slice(0, 40) });
         await c.close();
       };
       await failCase('만료', BASE, makeTicket({ iat: now - 400, exp: now - 200 }), /만료/);
@@ -2650,7 +2650,7 @@ try {
         await until(pg, () => !document.getElementById('gate-error').hidden, undefined, { timeout: 15000 });
         const text = await pg.textContent('#gate-error');
         const href = await pg.getAttribute('#gate-school', 'href');
-        found.push({ label: '스쿨 연결 안 됨', ok: /스쿨에 잠깐 연결이 안 돼요/.test(text) && /\[스쿨에서 열기\]를 다시 눌러 주세요/.test(text) && href === 'http://127.0.0.1:9/go/pdf' && !/#t=/.test(pg.url()), detail: text.slice(0, 40) });
+        found.push({ label: 'Xschool 연결 안 됨', ok: /Xschool에 잠깐 연결이 안 돼요/.test(text) && /\[Xschool에서 열기\]를 다시 눌러 주세요/.test(text) && href === 'http://127.0.0.1:9/go/pdf' && !/#t=/.test(pg.url()), detail: text.slice(0, 40) });
         await c.close();
         await new Promise((res) => { ds.once('exit', res); ds.kill(); });
       }
@@ -2664,10 +2664,10 @@ try {
         const pg = await c.newPage();
         await pg.goto(APP, { waitUntil: 'networkidle' });
         const note = await pg.isVisible('#gate-icon') ? await pg.textContent('#gate-icon') : '';
-        found.push({ label: '아이콘 안내', ok: /\[스쿨에서 열기\]를 누르면 로그인 뒤 바로 이 화면으로 돌아와요/.test(note) && okButton(await button(pg)), detail: note.slice(0, 30) });
+        found.push({ label: '아이콘 안내', ok: /\[Xschool에서 열기\]를 누르면 로그인 뒤 바로 이 화면으로 돌아와요/.test(note) && okButton(await button(pg)), detail: note.slice(0, 30) });
         await c.close();
       }
-      check('스쿨에서 열기: 안내(390 · 820 · 1280 · 다크) · 실패 3가지(만료 · 이미 씀 · 스쿨 연결 안 됨) · 아이콘 안내의 단추가 모두 SCHOOL_URL/go/pdf, #t는 주소에 남지 않음',
+      check('Xschool에서 열기: 안내(390 · 820 · 1280 · 다크) · 실패 3가지(만료 · 이미 씀 · Xschool 연결 안 됨) · 아이콘 안내의 단추가 모두 SCHOOL_URL/go/pdf, #t는 주소에 남지 않음',
         found.every((x) => x.ok), found.filter((x) => !x.ok).map((x) => `${x.label}: ${x.detail}`).join(' | ') || `${found.length}곳 통과`);
     }
 
@@ -2752,8 +2752,8 @@ try {
       check('옛 워커 청소: 622bfcd로 워커 · 캐시를 심은 뒤 새 버전 → 워커 등록 0 · pdfws- 캐시 0 · 안내 화면',
         result.planted && result.state && result.state.gate && result.state.regs === 0 && result.state.caches === 0,
         result.state ? `심음 ${result.planted} → 등록 ${result.state.regs} · 캐시 ${result.state.caches} · 안내 ${result.state.gate}` : `옛 버전을 풀지 못함`);
-      check('바탕화면 아이콘(standalone)으로 연 창: "바탕화면 아이콘으로는 바로 열 수 없어요 … [스쿨에서 열기] … 지워도 돼요"',
-        /바탕화면 아이콘으로는 바로 열 수 없어요/.test(result.iconText || '') && /\[스쿨에서 열기\]/.test(result.iconText || '') && /지워도 돼요/.test(result.iconText || ''), (result.iconText || '').slice(0, 40));
+      check('바탕화면 아이콘(standalone)으로 연 창: "바탕화면 아이콘으로는 바로 열 수 없어요 … [Xschool에서 열기] … 지워도 돼요"',
+        /바탕화면 아이콘으로는 바로 열 수 없어요/.test(result.iconText || '') && /\[Xschool에서 열기\]/.test(result.iconText || '') && /지워도 돼요/.test(result.iconText || ''), (result.iconText || '').slice(0, 40));
     }
   }
 
